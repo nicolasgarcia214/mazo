@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -203,13 +203,20 @@ impl Ledger {
             out.push_str(&serde_json::to_string(e).expect("event serialises"));
             out.push('\n');
         }
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        f.write_all(out.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
-        f.sync_data().map_err(|e| format!("{}: {e}", path.display()))
+        let err = |e: std::io::Error| format!("{}: {e}", path.display());
+        let mut f = OpenOptions::new().create(true).read(true).append(true).open(&path).map_err(err)?;
+        // A crash mid-append leaves a torn last line. Appending to it would make
+        // the first new event unreadable too, so the new lines start on their own.
+        if f.metadata().map_err(err)?.len() > 0 {
+            let mut last = [0u8];
+            f.seek(SeekFrom::End(-1)).map_err(err)?;
+            f.read_exact(&mut last).map_err(err)?;
+            if last[0] != b'\n' {
+                out.insert(0, '\n');
+            }
+        }
+        f.write_all(out.as_bytes()).map_err(err)?;
+        f.sync_data().map_err(err)
     }
 
     /// Replaces the ledger with `lines` (reparse only): write, fsync, rename.

@@ -1,11 +1,11 @@
 //! The scan driver (SPEC §6.2, F1): for each home, read new lines of every
 //! transcript in scan order, classify, and append under the append rule.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::Result;
-use crate::adapters::{self, ParseCtx, SkillRoots};
+use crate::adapters::{self, Adapter, ParseCtx, SkillRoots};
 use crate::classify::{Classifier, Roots};
 use crate::config::Config;
 use crate::inventory::Inventory;
@@ -41,6 +41,18 @@ pub fn roots(cfg: &Config, inv: &Inventory) -> SkillRoots {
 
 /// Incremental scan, or a full reparse (SPEC §6.2 Reparse) when `reparse` is set.
 pub fn scan(cfg: &Config, inv: &Inventory, data: &Path, reparse: bool) -> Result<ScanReport> {
+    scan_with(cfg, inv, data, reparse, &adapters::for_agent)
+}
+
+/// [`scan`] with the adapter for each agent supplied by the caller, so a test
+/// can stand in a changed parser rule for `scan --reparse` (SPEC §10.4).
+pub fn scan_with<'a>(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &Path,
+    reparse: bool,
+    adapter_for: &dyn Fn(Agent) -> &'a dyn Adapter,
+) -> Result<ScanReport> {
     let mut ledger = Ledger::open_locked(data)?;
     let mut cursors: Cursors = if reparse { Cursors::new() } else { ledger::read_json(&data.join("cursors.json"))? };
     let mut coverage = ledger::load_coverage(data)?;
@@ -51,12 +63,22 @@ pub fn scan(cfg: &Config, inv: &Inventory, data: &Path, reparse: bool) -> Result
 
     let mut report = ScanReport::default();
     let mut lines: Vec<Event> = Vec::new();
-    let mut parsed_files: BTreeSet<String> = BTreeSet::new();
-    let mut fresh = Ledger::empty_like(&ledger);
     let now = jiff::Timestamp::now().to_string();
+    let files: Vec<Vec<PathBuf>> = cfg.homes.iter().map(|h| adapter_for(h.agent).files(h)).collect();
 
-    for home in &cfg.homes {
-        let adapter = adapters::for_agent(home.agent);
+    // Reparse builds a new ledger that starts with every typed event and every
+    // event whose transcript this run does not parse, then appends the parse to
+    // it under the append rule, as a fresh scan would.
+    let mut fresh = Ledger::empty_like(&ledger);
+    if reparse {
+        let listed: HashSet<String> = files.iter().flatten().map(|p| p.to_string_lossy().into_owned()).collect();
+        for e in ledger.events().iter().filter(|e| e.channel == Channel::Typed || !listed.contains(e.src_file())) {
+            fresh.admit(e.clone());
+        }
+    }
+
+    for (home, files) in cfg.homes.iter().zip(files) {
+        let adapter = adapter_for(home.agent);
         let ctx = ParseCtx { home, roots: &roots };
         let classifier = Classifier { inv, home, homes: &cfg.homes };
         let mut roots_cache = Roots::default();
@@ -64,23 +86,27 @@ pub fn scan(cfg: &Config, inv: &Inventory, data: &Path, reparse: bool) -> Result
         let first_scan = !coverage.contains_key(&home.name);
         let mut earliest: Option<String> = None;
 
-        for path in adapter.files(home) {
+        for path in files {
             let key = path.to_string_lossy().into_owned();
             let chunk = match tail::read(&path, cursors.get(&key), &filter) {
                 Ok(c) => c,
                 Err(e) => {
                     hr.io_errors.push(format!("{key}: {e}"));
+                    if reparse {
+                        // An unreadable transcript is not parsed: its events are kept.
+                        for event in ledger.events().iter().filter(|ev| ev.src_file() == key) {
+                            fresh.admit(event.clone());
+                        }
+                    }
                     continue;
                 }
             };
             hr.files += 1;
-            parsed_files.insert(key.clone());
-            if first_scan {
-                if let Some(ts) = first_timestamp(&path) {
-                    if earliest.as_ref().is_none_or(|e| ts < *e) {
-                        earliest = Some(ts);
-                    }
-                }
+            if first_scan
+                && let Some(ts) = first_timestamp(&path)
+                && earliest.as_ref().is_none_or(|e| ts < *e)
+            {
+                earliest = Some(ts);
             }
             if chunk.lines.is_empty() {
                 cursors.insert(key, chunk.cursor);
@@ -108,11 +134,12 @@ pub fn scan(cfg: &Config, inv: &Inventory, data: &Path, reparse: bool) -> Result
             cursors.insert(key, chunk.cursor);
         }
 
-        if home.agent == Agent::Claude && first_scan && !reparse {
+        if home.agent == Agent::Claude && first_scan {
             for raw in adapters::claude::backfill(home, &inv.known) {
                 let history = home.path.join("history.jsonl");
                 let event = classifier.event(&mut roots_cache, raw, &history);
-                if let Some(line) = ledger.admit(event) {
+                let target = if reparse { &mut fresh } else { &mut ledger };
+                if let Some(line) = target.admit(event) {
                     lines.push(line);
                     hr.new_events += 1;
                 }
@@ -127,16 +154,7 @@ pub fn scan(cfg: &Config, inv: &Inventory, data: &Path, reparse: bool) -> Result
     }
 
     if reparse {
-        // Typed events and events whose transcript was not parsed are kept verbatim;
-        // everything else is what the current parser emits.
-        let mut kept: Vec<Event> = ledger
-            .events()
-            .iter()
-            .filter(|e| e.channel == Channel::Typed || !parsed_files.contains(e.src_file()))
-            .cloned()
-            .collect();
-        kept.extend(fresh.events().iter().cloned());
-        ledger.replace(kept)?;
+        ledger.replace(fresh.events().to_vec())?;
     } else {
         ledger.append(&lines)?;
     }
@@ -149,16 +167,16 @@ fn has_canary(chunk: &tail::Chunk) -> bool {
     chunk.lines.iter().any(|(_, l)| CANARY.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
 }
 
-/// The first `"timestamp"` among the first lines of a transcript, for coverage.
+/// The earliest `"timestamp"` among the first lines of a transcript, for
+/// coverage. Records are written in time order except for a Skill result and
+/// its meta record, whose timestamps are a few milliseconds apart.
 fn first_timestamp(path: &Path) -> Option<String> {
     use std::io::{BufRead, BufReader};
     let file = std::fs::File::open(path).ok()?;
-    for line in BufReader::new(file).lines().take(20) {
-        let line = line.ok()?;
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-        if let Some(ts) = v.get("timestamp").and_then(|t| t.as_str()) {
-            return Some(ts.to_string());
-        }
-    }
-    None
+    BufReader::new(file)
+        .lines()
+        .take(20)
+        .map_while(std::result::Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok()?.get("timestamp")?.as_str().map(str::to_string))
+        .min()
 }
