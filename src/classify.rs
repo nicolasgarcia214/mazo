@@ -102,6 +102,8 @@ impl Classifier<'_> {
             Key::Plain(s) => s.clone(),
             Key::Codex { hash, index } => format!("cx:{session}:{hash}:{index}"),
         };
+        // A Skill result keeps its name-based origin even after the meta record adds a
+        // path, so a merged event equals a split-then-upgraded one (SPEC §6.2).
         let origin = if raw.name_origin {
             self.name_origin(&raw.skill, raw.channel)
         } else {

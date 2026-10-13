@@ -101,7 +101,15 @@ fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<S
 pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
     let mut plan = Plan::default();
     let targets = targets(cfg, inv, homes, &mut plan.conflicts);
+    // Two homes can share a directory, directly or through a symlink
+    // (PI_CODING_AGENT_DIR pointing at another home): plan each physical one once.
+    let mut planned: Vec<PathBuf> = Vec::new();
     for t in &targets {
+        let physical = physical(&t.dir);
+        if planned.contains(&physical) {
+            continue;
+        }
+        planned.push(physical);
         if let Err(bad) = check_dir(&t.dir) {
             plan.conflicts.push(format!("ERROR: {} is not a directory", bad.display()));
             continue;
@@ -121,13 +129,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
                 Ok(_) => State::Obstructed,
             };
             match state {
-                State::Missing => {
-                    // Two homes can share a directory (PI_CODING_AGENT_DIR pointing at another home).
-                    let link = Action::Link { source: src.clone(), path: path.clone() };
-                    if !plan.actions.contains(&link) {
-                        plan.actions.push(link);
-                    }
-                }
+                State::Missing => plan.actions.push(Action::Link { source: src.clone(), path: path.clone() }),
                 State::WrongLink | State::Obstructed => {
                     plan.conflicts.push(format!(
                         "ERROR: {} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
@@ -163,6 +165,21 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
         }
     }
     plan
+}
+
+/// The directory with its nearest existing ancestor resolved through symlinks.
+fn physical(dir: &Path) -> PathBuf {
+    let mut existing = dir.to_path_buf();
+    let mut rest = Vec::new();
+    while fs::symlink_metadata(&existing).is_err() {
+        match (existing.file_name().map(|n| n.to_owned()), existing.pop()) {
+            (Some(n), true) => rest.push(n),
+            _ => break,
+        }
+    }
+    let mut p = fs::canonicalize(&existing).unwrap_or(existing);
+    p.extend(rest.iter().rev());
+    p
 }
 
 /// The directory, or its first existing ancestor, must be a directory

@@ -231,3 +231,29 @@ fn show_of_an_unknown_skill_is_a_usage_error() {
     assert!(r.stderr().contains("unknown skill: no-such-skill"), "{}", r.stderr());
     assert!(!fx.data.join("skima/events.jsonl").exists(), "no scan before the usage error");
 }
+
+#[test]
+fn a_shared_directory_prunes_once() {
+    let mut fx = fixture();
+    let codex = fx.home.join(".codex");
+    fx.set_env("PI_CODING_AGENT_DIR", Some(&codex));
+    fx.skima(&["sync"]).assert_ok();
+    let gone = codex.join("skills/gone-skill");
+    std::os::unix::fs::symlink(fx.source.join("gone-skill"), &gone).unwrap();
+    let r = fx.skima(&["sync"]);
+    r.assert_ok();
+    assert!(!gone.is_symlink());
+    assert_eq!(r.stdout().lines().filter(|l| l.starts_with("pruned")).count(), 1, "{}", r.stdout());
+}
+
+#[test]
+fn a_directory_shared_through_a_symlink_is_synced_once() {
+    let mut fx = fixture();
+    fx.skima(&["sync"]).assert_ok(); // creates ~/.codex
+    let alias = fx.home.join("codex-alias");
+    std::os::unix::fs::symlink(fx.home.join(".codex"), &alias).unwrap();
+    fx.set_env("PI_CODING_AGENT_DIR", Some(&alias));
+    let r = fx.skima(&["sync"]);
+    r.assert_ok();
+    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), "");
+}

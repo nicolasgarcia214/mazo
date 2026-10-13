@@ -25,6 +25,8 @@ pub fn reads(cmd: &str) -> Reads {
     let Some(segments) = lex(cmd) else { return Reads::Unknown };
     let mut files: Vec<String> = Vec::new();
     let mut base: Option<String> = None;
+    // After `cd $X` relative paths are unknowable; absolute ones still read.
+    let mut base_unknown = false;
     let mut not_load = false;
     for pipeline in &segments {
         let stages: Vec<Vec<String>> = pipeline.iter().map(|s| strip(s)).collect();
@@ -38,6 +40,10 @@ pub fn reads(cmd: &str) -> Reads {
                     base = Some(join(base.as_deref(), &expand_home(dir)));
                     continue;
                 }
+                Some([_]) => {
+                    base_unknown = true;
+                    continue;
+                }
                 _ => return Reads::Unknown,
             }
         }
@@ -47,7 +53,7 @@ pub fn reads(cmd: &str) -> Reads {
                     not_load = true;
                     continue;
                 }
-                if paths.iter().any(|p| !plain(p)) {
+                if paths.iter().any(|p| !plain(p) || (base_unknown && !p.starts_with(['/', '~']))) {
                     return Reads::Unknown;
                 }
                 for p in paths {
@@ -340,6 +346,7 @@ mod tests {
         assert_eq!(reads("for f in a b; do cat $f; done"), Reads::Unknown);
         assert_eq!(reads("ls /s && cat /s/a/SKILL.md"), Reads::Unknown);
         assert_eq!(reads("cd $D && cat SKILL.md"), Reads::Unknown);
+        assert_eq!(reads("cat /s/a/x.md; cd $D/scope; cat /s/a/SKILL.md"), load(&["/s/a/x.md", "/s/a/SKILL.md"]));
         let home = std::env::var("HOME").unwrap();
         assert_eq!(reads("cd ~/s && cat a/SKILL.md"), load(&[&format!("{home}/s/a/SKILL.md")]));
     }

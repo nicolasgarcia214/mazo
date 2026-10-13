@@ -401,11 +401,14 @@ struct ShownEvent<'e> {
     expired: bool,
 }
 
+/// A name `show` accepts: any known name (canonical names are known).
+pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
+    if inv.known.contains(skill) { Ok(()) } else { Err(format!("unknown skill: {skill}")) }
+}
+
 /// Rendered `skima show <skill>` output; Err for an unknown skill.
 pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
-    if !input.inv.skills.contains(skill) && !input.inv.known.contains(skill) {
-        return Err(format!("unknown skill: {skill}"));
-    }
+    check_skill(input.inv, skill)?;
     let view = View::new(input);
     let f = Filter::default();
     let start = view.start(since);
