@@ -1,0 +1,83 @@
+# skima
+
+skima counts how your coding agents use your skills and keeps every agent home
+linked to one skills directory. It reads the session logs that Claude Code,
+Codex and Pi already write, stores each skill load in its own ledger, and
+replaces `skills/install.sh` for linking. SPEC.md is the design;
+`how-skima-works.html` explains it in plain English.
+
+## Install
+
+```
+cargo install --locked --path ~/projects/skima
+```
+
+skima reads `~/dotfiles/skills/skima.toml`, or the file named by
+`$SKIMA_CONFIG`:
+
+```toml
+source = "."                      # the skills directory, relative to this file
+loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
+
+[[home]]
+name  = "claude"
+agent = "claude"
+path  = "~/.claude"
+
+[[home]]
+name  = "pi"
+agent = "pi"
+path  = "~/.pi/agent"
+links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
+```
+
+The ledger lives in `${XDG_DATA_HOME:-~/.local/share}/skima/`. Back it up: once
+Claude deletes a session log, the ledger holds the only record of its loads.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `skima scan` | Reads new log lines into the ledger. `--report` adds per-channel counts, unparsed commands and the parser canary; `--reparse` re-derives every event from the logs on disk. |
+| `skima usage` | One row per skill: sessions, loads per channel, agents, last use, a 30-day sparkline, the latest grade. |
+| `skima unused` | Skills with no strong load in the window, with `held`, `cluster`, `new` and `weak-only` notes. |
+| `skima show <skill>` | A skill's daily histogram and recent events, each with the log line it came from. |
+| `skima status` | Drift and policy for every home. Writes nothing. |
+| `skima sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
+
+`usage`, `unused` and `show` scan first, so their numbers are current. Every
+report prints how far back each home's logs go: "unused since 2026-09-10" is not
+"never used".
+
+## How accurate the counts are
+
+Measured on 2026-10-13 against this machine's logs (SPEC §10.2, §10.3):
+
+- **Strong loads** (`slash`, `tool`, `typed`) matched two independent counting
+  scripts, written from the spec without reading skima's code, id for id: 191
+  slash, 137 tool and 644 typed events.
+- **Precision:** two reviewers each sampled 20 strong events, 20 reads and 20
+  log lines that mention a skill but produced no event, and checked them
+  against the source records. Strong loads: 40 of 40 correct. Reads: 40 of 40
+  correct. Missed loads among the 40 near misses: none.
+- **Reads are weak evidence.** In those samples, 19 of 40 reads were authoring:
+  editing or grading the skill rather than following it. skima tags authoring
+  when the session runs inside the dotfiles repo or a home's skills directory,
+  or when the same session loaded `grade`, `retro`, `writing-for-agents` or
+  `skill-creator`. The sampled ledger predates the skills-directory part of the
+  rule and tagged 13 of the 19; that part covers 5 of the other 6, all run
+  from `~/.codex/skills`. Reads are never added to the headline `sess` column.
+
+Reads with commands skima's grammar does not parse (`awk`, globs, heredocs) are
+missed; `skima scan --report` counts them and prints samples.
+
+## Tests
+
+```
+cargo test
+```
+
+The suite includes the 18 ported `install.sh` tests, a differential test of the
+YAML policy loader against PyYAML (needs `python3` with PyYAML, or set
+`SKIMA_SKIP_PYDIFF=1`), and ingest properties such as "a fresh scan equals an
+incremental one".
