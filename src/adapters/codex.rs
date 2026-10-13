@@ -6,9 +6,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session, SkillRoots};
-use crate::config::{self};
+use crate::config;
 use crate::ledger::Channel;
-use crate::readcmd::{self, Reads};
 use crate::tail::Chunk;
 
 pub struct Codex;
@@ -170,36 +169,22 @@ fn function_call(payload: &Value) -> Option<Call> {
 }
 
 /// Skill files that one command loads, indexed `<call>.<file>` by position in
-/// the command's read list. A command that names a skill file but is neither a
-/// load nor a known non-load is recorded as unparsed.
+/// the command's read list.
 fn read_events(roots: &SkillRoots, session: &Session, call: usize, c: &Call, unparsed: &mut Vec<String>) -> Vec<Found> {
     let workdir = match (&c.workdir, &session.cwd) {
         (Some(w), Some(cwd)) => Some(config::resolve(Path::new(cwd), w).to_string_lossy().into_owned()),
         (w, _) => w.clone(),
     };
     let base = workdir.as_deref().or(session.cwd.as_deref());
-    let files = match readcmd::reads(&c.cmd) {
-        Reads::Load(files) => files,
-        Reads::NotLoad => return Vec::new(),
-        Reads::Unknown => {
-            if roots.names_skill_doc(&c.cmd, base) {
-                unparsed.push(c.cmd.clone());
-            }
-            return Vec::new();
-        }
-    };
-    files
-        .iter()
-        .enumerate()
-        .filter_map(|(i, f)| {
-            let sf = roots.classify(f, base)?;
-            Some(Found {
-                index: format!("{call}.{i}"),
-                skill: sf.skill,
-                channel: sf.channel,
-                path: sf.path,
-                cwd: workdir.clone(),
-            })
+    roots
+        .shell_reads(&c.cmd, base, unparsed)
+        .into_iter()
+        .map(|(i, sf)| Found {
+            index: format!("{call}.{i}"),
+            skill: sf.skill,
+            channel: sf.channel,
+            path: sf.path,
+            cwd: workdir.clone(),
         })
         .collect()
 }

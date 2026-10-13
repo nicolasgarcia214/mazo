@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{self, Home};
 use crate::ledger::{Agent, Channel};
+use crate::readcmd::{self, Reads};
 use crate::tail::Chunk;
 
 /// Event identity before classification.
@@ -112,9 +113,24 @@ impl SkillRoots {
         }
         None
     }
-}
 
-impl SkillRoots {
+    /// The skill files a shell command run in `cwd` loads, each with its index
+    /// in the command's read list. A command that names a skill's Markdown file
+    /// but is neither a load nor a known non-load goes to `unparsed` (SPEC §4.5).
+    pub fn shell_reads(&self, cmd: &str, cwd: Option<&str>, unparsed: &mut Vec<String>) -> Vec<(usize, SkillFile)> {
+        let files = match readcmd::reads(cmd) {
+            Reads::Load(files) => files,
+            Reads::NotLoad => return Vec::new(),
+            Reads::Unknown => {
+                if self.names_skill_doc(cmd, cwd) {
+                    unparsed.push(cmd.to_string());
+                }
+                return Vec::new();
+            }
+        };
+        files.iter().enumerate().filter_map(|(i, f)| Some((i, self.classify(f, cwd)?))).collect()
+    }
+
     /// Whether `text` names a skill's Markdown file (`SKILL.md` or another `.md`
     /// inside a skill directory): the test for an unparsed command (SPEC §4.5).
     /// Running a skill's scripts reads no instructions, so it does not count.
