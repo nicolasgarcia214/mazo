@@ -28,3 +28,7 @@ impl Yaml {
 pub fn load(_text: &str) -> crate::Result<Yaml> {
     todo!("strict yaml")
 }
+
+pub fn frontmatter(_text: &str) -> crate::Result<Yaml> {
+    todo!("frontmatter")
+}

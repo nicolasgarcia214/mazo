@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
     Claude,
@@ -27,7 +27,7 @@ impl Agent {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
     Slash,

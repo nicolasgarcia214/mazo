@@ -1,1 +1,201 @@
-//! Stub: see SPEC §9.
+//! Drift classification and sync (SPEC §5.2, §5.5): `plan()` is pure and
+//! `apply()` is the only writer, so every check happens before any write.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::config::{Config, Home};
+use crate::inventory::Inventory;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Ok,
+    Missing,
+    Dangling,
+    WrongLink,
+    Obstructed,
+    Foreign,
+}
+
+impl State {
+    pub fn label(self) -> &'static str {
+        match self {
+            State::Ok => "ok",
+            State::Missing => "missing",
+            State::Dangling => "dangling",
+            State::WrongLink => "wrong-link",
+            State::Obstructed => "obstructed",
+            State::Foreign => "foreign",
+        }
+    }
+
+    pub fn is_error(self) -> bool {
+        !matches!(self, State::Ok | State::Foreign)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub home: String,
+    pub path: PathBuf,
+    pub state: State,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    Mkdir(PathBuf),
+    Link { source: PathBuf, path: PathBuf },
+    Remove(PathBuf),
+}
+
+#[derive(Debug, Default)]
+pub struct Plan {
+    pub entries: Vec<Entry>,
+    pub actions: Vec<Action>,
+    /// `ERROR: …` lines (with resolution hints); any conflict means no writes.
+    pub conflicts: Vec<String>,
+}
+
+/// One directory skima links into, with the canonical entries it should hold.
+struct Target {
+    home: String,
+    dir: PathBuf,
+    /// `(name in dir, absolute source)` pairs.
+    entries: Vec<(String, PathBuf)>,
+}
+
+fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<String>) -> Vec<Target> {
+    let mut common: Vec<(String, PathBuf)> = inv.skills.iter().map(|s| (s.clone(), cfg.source.join(s))).collect();
+    for loose in &cfg.loose {
+        let src = cfg.source.join(loose);
+        if src.is_file() {
+            common.push((loose.clone(), src));
+        }
+    }
+    common.sort();
+    let mut out = Vec::new();
+    for home in homes {
+        out.push(Target { home: home.name.clone(), dir: home.skills_dir(), entries: common.clone() });
+        for (key, value) in &home.links {
+            let path = home.path.join(key);
+            let src = cfg.source.join(value);
+            if !src.exists() {
+                conflicts.push(format!("ERROR: {} is missing", src.display()));
+                continue;
+            }
+            let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { continue };
+            let name = name.to_string_lossy().into_owned();
+            match out.iter_mut().find(|t: &&mut Target| t.home == home.name && t.dir == dir) {
+                Some(t) => t.entries.push((name, src)),
+                None => out.push(Target { home: home.name.clone(), dir: dir.to_path_buf(), entries: vec![(name, src)] }),
+            }
+        }
+    }
+    out
+}
+
+/// Classifies every entry of the selected homes and plans the writes that
+/// `sync` would make. Never touches the filesystem except to read it.
+pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
+    let mut plan = Plan::default();
+    let targets = targets(cfg, inv, homes, &mut plan.conflicts);
+    for t in &targets {
+        if let Err(bad) = check_dir(&t.dir) {
+            plan.conflicts.push(format!("ERROR: {} is not a directory", bad.display()));
+            continue;
+        }
+        let exists = fs::symlink_metadata(&t.dir).is_ok();
+        if !exists {
+            plan.actions.push(Action::Mkdir(t.dir.clone()));
+        }
+        for (name, src) in &t.entries {
+            let path = t.dir.join(name);
+            let state = match fs::symlink_metadata(&path) {
+                Err(_) => State::Missing,
+                Ok(m) if m.file_type().is_symlink() => match fs::read_link(&path) {
+                    Ok(text) if text == *src => State::Ok,
+                    _ => State::WrongLink,
+                },
+                Ok(_) => State::Obstructed,
+            };
+            match state {
+                State::Missing => plan.actions.push(Action::Link { source: src.clone(), path: path.clone() }),
+                State::WrongLink | State::Obstructed => {
+                    plan.conflicts.push(format!(
+                        "ERROR: {} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
+                        path.display(),
+                        hint(&path, state)
+                    ));
+                }
+                _ => {}
+            }
+            plan.entries.push(Entry { home: t.home.clone(), path, state });
+        }
+        if !exists {
+            continue;
+        }
+        let Ok(dir) = fs::read_dir(&t.dir) else { continue };
+        let mut others: Vec<PathBuf> = dir
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| !t.entries.iter().any(|(n, _)| p.file_name().is_some_and(|f| f == n.as_str())))
+            .collect();
+        others.sort();
+        for path in others {
+            let owned_dangling = fs::read_link(&path).is_ok_and(|text| {
+                path.file_name().is_some_and(|n| text == cfg.source.join(n)) && fs::metadata(&path).is_err()
+            });
+            let state = if owned_dangling { State::Dangling } else { State::Foreign };
+            if owned_dangling {
+                plan.actions.push(Action::Remove(path.clone()));
+            }
+            plan.entries.push(Entry { home: t.home.clone(), path, state });
+        }
+    }
+    plan
+}
+
+/// The directory, or its first existing ancestor, must be a directory
+/// (a regular file or a dangling symlink there is a conflict).
+fn check_dir(dir: &Path) -> Result<(), PathBuf> {
+    let mut p = dir.to_path_buf();
+    while fs::symlink_metadata(&p).is_err() {
+        if !p.pop() {
+            return Ok(());
+        }
+    }
+    if fs::metadata(&p).is_ok_and(|m| m.is_dir()) { Ok(()) } else { Err(p) }
+}
+
+fn hint(path: &Path, state: State) -> String {
+    let q = shell_quote(&path.to_string_lossy());
+    if state == State::WrongLink {
+        format!("rm {q}")
+    } else {
+        format!("mv {q} {}", shell_quote(&format!("{}.local", path.to_string_lossy())))
+    }
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Performs a conflict-free plan. Returns the lines to print.
+pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
+    assert!(plan.conflicts.is_empty(), "apply() is only called on a conflict-free plan");
+    let mut out = Vec::new();
+    for a in &plan.actions {
+        match a {
+            Action::Mkdir(d) => fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?,
+            Action::Link { source, path } => {
+                std::os::unix::fs::symlink(source, path).map_err(|e| format!("{}: {e}", path.display()))?;
+                out.push(format!("linked    {}", path.display()));
+            }
+            Action::Remove(p) => {
+                fs::remove_file(p).map_err(|e| format!("{}: {e}", p.display()))?;
+                out.push(format!("pruned    {} (dangling)", p.display()));
+            }
+        }
+    }
+    Ok(out)
+}
