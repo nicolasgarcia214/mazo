@@ -249,7 +249,7 @@ fn a_shared_directory_prunes_once() {
 #[test]
 fn a_directory_shared_through_a_symlink_is_synced_once() {
     let mut fx = fixture();
-    fx.skima(&["sync"]).assert_ok(); // creates ~/.codex
+    fs::create_dir_all(fx.home.join(".codex")).unwrap();
     let alias = fx.home.join("codex-alias");
     std::os::unix::fs::symlink(fx.home.join(".codex"), &alias).unwrap();
     fx.set_env("PI_CODING_AGENT_DIR", Some(&alias));
