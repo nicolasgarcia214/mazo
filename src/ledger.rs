@@ -108,7 +108,7 @@ pub fn data_dir() -> Result<PathBuf> {
 
 /// The ledger, held under `scan.lock` while a scan or reparse writes it.
 pub struct Ledger {
-    pub dir: PathBuf,
+    dir: PathBuf,
     /// Last line per id, in first-appearance order of the id.
     events: Vec<Event>,
     index: HashMap<String, usize>,

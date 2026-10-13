@@ -10,7 +10,7 @@ use std::path::Path;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cursor {
     pub dev: u64,
     pub ino: u64,
@@ -25,7 +25,7 @@ pub type Cursors = BTreeMap<String, Cursor>;
 pub struct Prefilter(Regex);
 
 impl Prefilter {
-    pub const MARKERS: [&'static str; 7] = [
+    const MARKERS: [&'static str; 7] = [
         "Base directory for this skill",
         "\"Skill\"",
         "\"commandName\"",

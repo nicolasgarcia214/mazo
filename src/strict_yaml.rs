@@ -44,20 +44,6 @@ impl Yaml {
         }
     }
 
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Yaml::Str(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            Yaml::Bool(b) => Some(*b),
-            _ => None,
-        }
-    }
-
     /// A calendar date as `YYYY-MM-DD`: an unquoted date, the date part of an
     /// unquoted timestamp as written, or a string holding a valid `YYYY-MM-DD`.
     pub fn as_date(&self) -> Option<String> {
@@ -987,11 +973,9 @@ mod tests {
     }
 
     #[test]
-    fn helpers_read_strings_bools_and_dates() {
+    fn as_date_reads_dates_and_datetimes() {
         let y =
             load("a: x\nb: true\nc: 2026-01-02\nd: '2026-02-03'\ne: 2026-01-02 10:00:00Z\nf: '2026-02-30'\n").unwrap();
-        assert_eq!(y.get("a").and_then(Yaml::as_str), Some("x"));
-        assert_eq!(y.get("b").and_then(Yaml::as_bool), Some(true));
         assert_eq!(y.get("c").and_then(Yaml::as_date).as_deref(), Some("2026-01-02"));
         assert_eq!(y.get("d").and_then(Yaml::as_date).as_deref(), Some("2026-02-03"));
         assert_eq!(y.get("e").and_then(Yaml::as_date).as_deref(), Some("2026-01-02"));
