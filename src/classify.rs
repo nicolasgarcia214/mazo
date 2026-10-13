@@ -108,10 +108,12 @@ impl Classifier<'_> {
             self.path_origin(&raw.skill, raw.path.as_deref())
         };
         let cwd = raw.cwd.or(raw.session.cwd.clone());
-        let authoring = match (&cwd, &self.inv.worktree) {
-            (Some(c), Some(w)) => Path::new(c).starts_with(w),
-            _ => false,
-        };
+        // Only weak reads can be authoring (SPEC §4.1); the stored part is the cwd rule.
+        let authoring = !raw.channel.strong()
+            && match (&cwd, &self.inv.worktree) {
+                (Some(c), Some(w)) => Path::new(c).starts_with(w),
+                _ => false,
+            };
         Event {
             v: 1,
             id,
