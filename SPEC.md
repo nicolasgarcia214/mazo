@@ -313,7 +313,8 @@ records on 2026-10-12, all `/tmp` probes), so the rule matches any block.
 **Event ids:**
 - `cc:<tool_use id>` for rows 1 and 3.
 - `cc:<meta uuid>` for row 2.
-- `cc:<assistant uuid>:<content index>:<file index>` for reads.
+- `cc:<assistant uuid>:<content index>:<file index>` for reads, the file
+  index counted among all files the command reads (§4.3).
 
 **History backfill.** Each `<home>/history.jsonl` line has `display`,
 `timestamp` (in milliseconds), `project` and `sessionId`. Backfill runs once per
@@ -381,7 +382,9 @@ timestamp is not part of the id.
   an id. Reports collapse them per root session anyway (§4.1), so only `show`
   lists one line fewer.
 - The index separates several events in one record. For reads it is
-  `<call index>.<file index>`: an `exec` wrapper can call
+  `<call index>.<file index>`, where the file index is the file's position
+  among all files the command reads, skill files or not, so an id does not
+  move when a file's classification changes: an `exec` wrapper can call
   `tools.exec_command` more than once, and one `cmd` can read two files. For a
   `$name` block it is the content index of its `input_text` block.
 
