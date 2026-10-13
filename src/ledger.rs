@@ -44,6 +44,11 @@ impl Channel {
     }
 }
 
+/// The serde name of a unit variant, as the ledger and `--json` write it.
+pub fn name(v: impl Serialize) -> String {
+    serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Actor {

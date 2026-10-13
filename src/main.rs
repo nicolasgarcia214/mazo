@@ -121,12 +121,7 @@ fn with_scanned(
     render: impl FnOnce(&report::Input) -> skima::Result<String>,
 ) -> skima::Result<ExitCode> {
     let data = ledger::data_dir()?;
-    let scanned = scan::scan(cfg, inv, &data, false)?;
-    for (home, r) in &scanned.homes {
-        for e in &r.io_errors {
-            eprintln!("warning: {home}: {e}");
-        }
-    }
+    warn_io_errors(&scan::scan(cfg, inv, &data, false)?);
     let ledger = Ledger::load(&data)?;
     let coverage = ledger::load_coverage(&data)?;
     let now = jiff::Timestamp::now();
@@ -164,11 +159,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     }
     let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events.len())).collect();
     println!("scan: {}", summary.join(" · "));
-    for (name, h) in &r.homes {
-        for e in &h.io_errors {
-            eprintln!("warning: {name}: {e}");
-        }
-    }
+    warn_io_errors(&r);
     if detail {
         let ledger = Ledger::load(&data)?;
         for (name, h) in &r.homes {
@@ -176,7 +167,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
             for e in ledger.events().iter().filter(|e| &e.home == name) {
                 *counts.entry(e.channel).or_default() += 1;
             }
-            let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{c:?}={n}").to_lowercase()).collect();
+            let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{}={n}", ledger::name(c))).collect();
             println!("{name}: {} files; ledger {}", h.files, counts.join(" "));
             println!("  unparsed skill commands in this scan: {}", h.unparsed);
             for s in &h.unparsed_samples {
@@ -191,6 +182,14 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn warn_io_errors(r: &scan::ScanReport) {
+    for (home, h) in &r.homes {
+        for e in &h.io_errors {
+            eprintln!("warning: {home}: {e}");
+        }
+    }
 }
 
 fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {

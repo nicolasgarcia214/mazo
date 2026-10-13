@@ -13,7 +13,7 @@ use serde_json::json;
 use crate::config::Config;
 use crate::evals::{self, Evals};
 use crate::inventory::{self, Inventory};
-use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
+use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin, name};
 use crate::render::{self, Align};
 
 /// A report window: the last N days, or everything.
@@ -485,7 +485,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
                 e.ts.parse::<Timestamp>()
                     .map_or(e.ts.to_string(), |t| t.to_zoned(view.tz.clone()).strftime("%Y-%m-%d %H:%M").to_string());
             let src = if e.expired { format!("{} expired", e.src) } else { e.src.to_string() };
-            vec![ts, lower(e.agent), lower(e.channel), lower(e.actor), e.cwd.unwrap_or("-").to_string(), src]
+            vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.unwrap_or("-").to_string(), src]
         })
         .collect();
     let ev_header = [
@@ -513,9 +513,4 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         _ => out.push_str("retros: 0\n"),
     }
     Ok(out)
-}
-
-/// The serde name of a lowercase enum.
-fn lower(v: impl Serialize) -> String {
-    serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
