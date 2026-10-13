@@ -162,7 +162,7 @@ fn assistant(ctx: &ParseCtx, r: &Record, out: &mut Parsed) {
             (Some("Read"), Some(file), _) => push_reads(ctx, r, uuid, ci, &[file], out),
             (Some("Bash"), _, Some(cmd)) => match readcmd::reads(cmd) {
                 Reads::Load(files) => push_reads(ctx, r, uuid, ci, &files, out),
-                Reads::Unknown if names_skill_file(ctx, cmd) => out.unparsed.push(cmd.chars().take(SAMPLE).collect()),
+                Reads::Unknown if ctx.roots.names_skill_doc(cmd, r.session.cwd.as_deref()) => out.unparsed.push(cmd.chars().take(SAMPLE).collect()),
                 _ => {}
             },
             _ => {}
@@ -178,16 +178,6 @@ fn push_reads(ctx: &ParseCtx, r: &Record, uuid: &str, ci: usize, files: &[impl A
             out.raws.push(r.raw(format!("cc:{uuid}:{ci}:{fi}"), sf.skill, sf.channel, Some(sf.path), false));
         }
     }
-}
-
-/// Whether a command the grammar cannot read names `SKILL.md`, the source root
-/// or a home's skills directory (SPEC §4.5 Unparsed).
-fn names_skill_file(ctx: &ParseCtx, cmd: &str) -> bool {
-    cmd.contains("SKILL.md")
-        || std::iter::once(&ctx.roots.source)
-            .chain(&ctx.roots.home_skills)
-            .filter_map(|p| p.to_str())
-            .any(|p| !p.is_empty() && cmd.contains(p))
 }
 
 /// One-time `typed` events from `<home>/history.jsonl` (SPEC §4.2 History backfill).

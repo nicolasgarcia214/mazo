@@ -445,8 +445,10 @@ and Pi `read` rows use the same definition.
   so `sed -n '1,200p' f | wc -l` or `| rg foo` is not a load.
 - **Not a load:** `rg`, `grep`, `wc`, `ls`, `find`, `git` or `apply_patch` on
   skill files, and any pipeline whose first stage is not a reader.
-- **Unparsed:** a command that names a skill file but matches neither rule
-  increments `unparsed_skill_cmd`. `scan --report` shows that count with 5
+- **Unparsed:** a command that names a skill's Markdown file (`SKILL.md` or
+  another `.md` inside a skill directory) but matches neither rule increments
+  `unparsed_skill_cmd`. Running a skill's scripts reads no instructions, so it
+  is neither a load nor unparsed. `scan --report` shows that count with 5
   samples, so misses are visible rather than silent.
 
 ### 4.6 Accuracy caveats

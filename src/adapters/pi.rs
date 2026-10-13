@@ -122,7 +122,7 @@ impl Entry<'_> {
                 (Some("bash"), _, Some(cmd)) => match readcmd::reads(cmd) {
                     Reads::Load(files) => self.emit(ci, files.iter().map(String::as_str), out),
                     Reads::NotLoad => {}
-                    Reads::Unknown if names_skill_file(self.ctx.roots, cmd, cwd) => {
+                    Reads::Unknown if self.ctx.roots.names_skill_doc(cmd, cwd) => {
                         out.unparsed.push(cmd.to_string())
                     }
                     Reads::Unknown => {}
@@ -142,13 +142,6 @@ impl Entry<'_> {
             }
         }
     }
-}
-
-/// Whether any path-like word of `cmd` is a skill file (SPEC §4.5 Unparsed).
-fn names_skill_file(roots: &SkillRoots, cmd: &str, cwd: Option<&str>) -> bool {
-    cmd.split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}=,:".contains(c))
-        .filter(|w| w.contains('/') || w.ends_with("SKILL.md"))
-        .any(|w| roots.classify(w, cwd).is_some())
 }
 
 fn session_of_header(line: &[u8]) -> Option<Session> {

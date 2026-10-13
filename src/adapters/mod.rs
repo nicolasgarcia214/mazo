@@ -114,6 +114,17 @@ impl SkillRoots {
     }
 }
 
+impl SkillRoots {
+    /// Whether `text` names a skill's Markdown file (`SKILL.md` or another `.md`
+    /// inside a skill directory): the test for an unparsed command (SPEC §4.5).
+    /// Running a skill's scripts reads no instructions, so it does not count.
+    pub fn names_skill_doc(&self, text: &str, cwd: Option<&str>) -> bool {
+        text.split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}=,:[]".contains(c))
+            .filter(|w| w.ends_with(".md"))
+            .any(|w| self.classify(w, cwd).is_some())
+    }
+}
+
 /// Context shared by every parse in one scan.
 pub struct ParseCtx<'a> {
     pub home: &'a Home,

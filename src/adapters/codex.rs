@@ -48,7 +48,7 @@ impl Adapter for Codex {
                     for (i, call) in exec_calls(input).iter().enumerate() {
                         match call {
                             Ok(c) => found.extend(read_events(ctx.roots, &session, i, c, &mut out.unparsed)),
-                            Err(()) if names_skill(ctx.roots, input) => out.unparsed.push(input.to_string()),
+                            Err(()) if ctx.roots.names_skill_doc(input, session.cwd.as_deref()) => out.unparsed.push(input.to_string()),
                             Err(()) => {}
                         }
                     }
@@ -185,7 +185,8 @@ fn read_events(roots: &SkillRoots, session: &Session, call: usize, c: &Call, unp
         Reads::Load(files) => files,
         Reads::NotLoad => return Vec::new(),
         Reads::Unknown => {
-            if names_skill(roots, &c.cmd) {
+            let base = c.workdir.as_deref().or(session.cwd.as_deref());
+            if roots.names_skill_doc(&c.cmd, base) {
                 unparsed.push(c.cmd.clone());
             }
             return Vec::new();
@@ -210,15 +211,6 @@ fn read_events(roots: &SkillRoots, session: &Session, call: usize, c: &Call, unp
             })
         })
         .collect()
-}
-
-/// Whether text mentions `SKILL.md`, the source root or a home skills dir.
-fn names_skill(roots: &SkillRoots, text: &str) -> bool {
-    text.contains("SKILL.md")
-        || std::iter::once(&roots.source)
-            .chain(&roots.home_skills)
-            .filter_map(|p| p.to_str())
-            .any(|p| !p.is_empty() && text.contains(p))
 }
 
 // ---- The JavaScript of an `exec` input -------------------------------------
