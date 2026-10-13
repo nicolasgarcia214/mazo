@@ -1,0 +1,315 @@
+//! The append-only event ledger (SPEC §6.2): schema, append rule, lock, coverage.
+
+use std::collections::{BTreeMap, HashMap};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::Result;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum Agent {
+    Claude,
+    Codex,
+    Pi,
+}
+
+impl Agent {
+    pub fn letter(self) -> char {
+        match self {
+            Agent::Claude => 'C',
+            Agent::Codex => 'X',
+            Agent::Pi => 'P',
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    Slash,
+    Tool,
+    Typed,
+    Read,
+    Ref,
+}
+
+impl Channel {
+    pub const ALL: [Channel; 5] = [Channel::Slash, Channel::Tool, Channel::Typed, Channel::Read, Channel::Ref];
+
+    /// Strong channels feed the headline `sess` column; weak ones never do (SPEC §4.1).
+    pub fn strong(self) -> bool {
+        matches!(self, Channel::Slash | Channel::Tool | Channel::Typed)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum Actor {
+    Probe,
+    Subagent,
+    Headless,
+    Main,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    Canonical,
+    Other,
+}
+
+/// Event schema v1. Field order is the serialised key order.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Event {
+    pub v: u32,
+    pub id: String,
+    pub ts: String,
+    pub agent: Agent,
+    pub home: String,
+    pub agent_version: Option<String>,
+    pub session: String,
+    pub actor: Actor,
+    pub skill: String,
+    pub origin: Origin,
+    pub channel: Channel,
+    pub path: Option<String>,
+    pub cwd: Option<String>,
+    pub authoring: bool,
+    pub src: String,
+}
+
+impl Event {
+    /// The transcript file named by `src` (`<path>:<line>`).
+    pub fn src_file(&self) -> &str {
+        self.src.rsplit_once(':').map_or(&self.src, |(f, _)| f)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Coverage {
+    pub first: Option<String>,
+    pub last_scan: Option<String>,
+}
+
+/// `${XDG_DATA_HOME:-~/.local/share}/skima`.
+pub fn data_dir() -> Result<PathBuf> {
+    if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|x| !x.is_empty()) {
+        return Ok(PathBuf::from(x).join("skima"));
+    }
+    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    Ok(PathBuf::from(home).join(".local/share/skima"))
+}
+
+/// The ledger, held under `scan.lock` while a scan or reparse writes it.
+pub struct Ledger {
+    pub dir: PathBuf,
+    /// Last line per id, in first-appearance order of the id.
+    events: Vec<Event>,
+    index: HashMap<String, usize>,
+    _lock: Option<File>,
+}
+
+impl Ledger {
+    /// Read-only load: no lock, keeps the last line for each id.
+    pub fn load(dir: &Path) -> Result<Ledger> {
+        let mut ledger = Ledger { dir: dir.to_path_buf(), events: Vec::new(), index: HashMap::new(), _lock: None };
+        let path = dir.join("events.jsonl");
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ledger),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        for (n, line) in BufReader::new(file).lines().enumerate() {
+            let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            // A torn last line (crash mid-append) is skipped; the next scan re-derives it.
+            let Ok(event) = serde_json::from_str::<Event>(&line) else {
+                eprintln!("warning: {}:{}: unreadable ledger line skipped", path.display(), n + 1);
+                continue;
+            };
+            ledger.keep(event);
+        }
+        Ok(ledger)
+    }
+
+    /// Takes `scan.lock` with a blocking flock, then loads the id set (SPEC §6.2 Locking).
+    pub fn open_locked(dir: &Path) -> Result<Ledger> {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let lock_path = dir.join("scan.lock");
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+        lock.lock().map_err(|e| format!("{}: {e}", lock_path.display()))?;
+        let mut ledger = Ledger::load(dir)?;
+        ledger._lock = Some(lock);
+        Ok(ledger)
+    }
+
+    /// An empty in-memory ledger for the same directory (reparse builds into it).
+    pub fn empty_like(other: &Ledger) -> Ledger {
+        Ledger { dir: other.dir.clone(), events: Vec::new(), index: HashMap::new(), _lock: None }
+    }
+
+    fn keep(&mut self, event: Event) {
+        match self.index.get(&event.id) {
+            Some(&i) => self.events[i] = event,
+            None => {
+                self.index.insert(event.id.clone(), self.events.len());
+                self.events.push(event);
+            }
+        }
+    }
+
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Event> {
+        self.index.get(id).map(|&i| &self.events[i])
+    }
+
+    /// The append rule. Returns the line to append, if any: a new id, or a
+    /// `path: null` event upgraded with a path, which copies the stored event and
+    /// sets only `path` (SPEC §6.2).
+    pub fn admit(&mut self, event: Event) -> Option<Event> {
+        let line = match self.get(&event.id) {
+            None => event,
+            Some(stored) if stored.path.is_none() && event.path.is_some() => {
+                Event { path: event.path, ..stored.clone() }
+            }
+            Some(_) => return None,
+        };
+        self.keep(line.clone());
+        Some(line)
+    }
+
+    /// Appends lines admitted by [`Ledger::admit`].
+    pub fn append(&self, lines: &[Event]) -> Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let path = self.dir.join("events.jsonl");
+        let mut out = String::new();
+        for e in lines {
+            out.push_str(&serde_json::to_string(e).expect("event serialises"));
+            out.push('\n');
+        }
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        f.write_all(out.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+        f.sync_data().map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Replaces the ledger with `lines` (reparse only): write, fsync, rename.
+    pub fn replace(&mut self, lines: Vec<Event>) -> Result<()> {
+        let path = self.dir.join("events.jsonl");
+        let tmp = self.dir.join("events.jsonl.new");
+        let mut out = String::new();
+        for e in &lines {
+            out.push_str(&serde_json::to_string(e).expect("event serialises"));
+            out.push('\n');
+        }
+        let mut f = File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        f.write_all(out.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        f.sync_all().map_err(|e| format!("{}: {e}", tmp.display()))?;
+        fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.events.clear();
+        self.index.clear();
+        for e in lines {
+            self.keep(e);
+        }
+        Ok(())
+    }
+}
+
+pub fn load_coverage(dir: &Path) -> Result<BTreeMap<String, Coverage>> {
+    read_json(&dir.join("coverage.json"))
+}
+
+pub fn save_coverage(dir: &Path, coverage: &BTreeMap<String, Coverage>) -> Result<()> {
+    write_json(&dir.join("coverage.json"), coverage)
+}
+
+pub(crate) fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Result<T> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let tmp = path.with_extension("json.new");
+    let bytes = serde_json::to_vec_pretty(value).expect("state serialises");
+    fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(crate) fn event(id: &str, path: Option<&str>) -> Event {
+        Event {
+            v: 1,
+            id: id.into(),
+            ts: "2026-10-01T00:00:00Z".into(),
+            agent: Agent::Claude,
+            home: "claude".into(),
+            agent_version: None,
+            session: "s".into(),
+            actor: Actor::Main,
+            skill: "unslop".into(),
+            origin: Origin::Canonical,
+            channel: Channel::Tool,
+            path: path.map(Into::into),
+            cwd: None,
+            authoring: false,
+            src: "/t.jsonl:3".into(),
+        }
+    }
+
+    #[test]
+    fn append_rule_admits_new_ids_and_path_upgrades_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = Ledger::open_locked(dir.path()).unwrap();
+        assert!(l.admit(event("a", None)).is_some());
+        assert!(l.admit(event("a", None)).is_none());
+        let mut later = event("a", Some("/x/SKILL.md"));
+        later.src = "/t.jsonl:4".into();
+        let up = l.admit(later).unwrap();
+        assert_eq!(up.path.as_deref(), Some("/x/SKILL.md"));
+        assert_eq!(up.src, "/t.jsonl:3", "an upgrade copies the stored event");
+        assert!(l.admit(event("a", Some("/y/SKILL.md"))).is_none());
+    }
+
+    #[test]
+    fn last_line_wins_and_torn_lines_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = serde_json::to_string(&event("a", None)).unwrap();
+        let b = serde_json::to_string(&event("a", Some("/p"))).unwrap();
+        fs::write(dir.path().join("events.jsonl"), format!("{a}\n{b}\n{{\"v\":1,\"id\"")).unwrap();
+        let l = Ledger::load(dir.path()).unwrap();
+        assert_eq!(l.events().len(), 1);
+        assert_eq!(l.events()[0].path.as_deref(), Some("/p"));
+    }
+
+    #[test]
+    fn serialised_key_order_matches_schema() {
+        let s = serde_json::to_string(&event("a", None)).unwrap();
+        assert!(s.starts_with(r#"{"v":1,"id":"a","ts":"#));
+        assert!(s.ends_with(r#""authoring":false,"src":"/t.jsonl:3"}"#));
+    }
+}
