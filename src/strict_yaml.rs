@@ -990,7 +990,3 @@ mod tests {
         assert_eq!(y.get("f").and_then(Yaml::as_date), None);
     }
 }
-
-pub fn frontmatter(_text: &str) -> crate::Result<Yaml> {
-    todo!("frontmatter")
-}

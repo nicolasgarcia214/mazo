@@ -337,7 +337,7 @@ fn bash_reading_two_skill_files_yields_two_events_with_distinct_ids() {
 fn unknown_command_naming_a_skill_file_is_counted_as_unparsed() {
     let (p, _) = parse_from(&fixture("unparsed.jsonl"), None);
     assert!(p.raws.is_empty());
-    assert_eq!(p.unparsed, vec!["command cat /home/nicolas/.claude/skills/unslop/references/prose-tells.md"]);
+    assert_eq!(p.unparsed, vec!["awk 'NR<5' /home/nicolas/.claude/skills/unslop/references/prose-tells.md"]);
 }
 
 const HISTORY_ARGUS_TS: &str = "2026-03-13T15:43:39.625Z";
