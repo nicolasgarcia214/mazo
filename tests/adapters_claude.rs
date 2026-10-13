@@ -35,7 +35,7 @@ fn roots() -> SkillRoots {
 
 /// Reads `path` through the scan's prefilter from `cursor` and parses the chunk.
 fn parse_from(path: &Path, cursor: Option<&Cursor>) -> (Parsed, Cursor) {
-    common::parse_file(&Claude, &home(Path::new("/nonexistent/.claude")), &roots(), path, cursor)
+    common::parse_file(&Claude, &roots(), path, cursor)
 }
 
 fn parse(name: &str) -> Vec<Raw> {
@@ -47,7 +47,7 @@ fn parse(name: &str) -> Vec<Raw> {
 /// Parses every line of a fixture, prefilter bypassed: a no-event fixture
 /// whose records carry no marker still reaches the parser.
 fn parse_all(name: &str) -> Parsed {
-    common::parse_unfiltered(&Claude, &home(Path::new("/nonexistent/.claude")), &roots(), &fixture(name))
+    common::parse_unfiltered(&Claude, &roots(), &fixture(name))
 }
 
 fn session(id: &str, entrypoint: &str, subagent: bool, cwd: &str, version: &str) -> Session {

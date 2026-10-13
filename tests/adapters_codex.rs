@@ -37,7 +37,7 @@ fn home(path: &Path) -> Home {
 
 /// Parses a whole file from offset 0 with the scan's prefilter.
 fn parse_path(path: &Path) -> Parsed {
-    common::parse_file(&Codex, &home(Path::new("/nonexistent")), &roots(), path, None).0
+    common::parse_file(&Codex, &roots(), path, None).0
 }
 
 fn parse(name: &str) -> Parsed {

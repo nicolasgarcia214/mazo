@@ -141,12 +141,6 @@ impl SkillRoots {
     }
 }
 
-/// Context shared by every parse in one scan.
-pub struct ParseCtx<'a> {
-    pub home: &'a Home,
-    pub roots: &'a SkillRoots,
-}
-
 /// The result of parsing one chunk of one file.
 #[derive(Debug, Default)]
 pub struct Parsed {
@@ -163,7 +157,7 @@ pub trait Adapter {
         jsonl_files(&home.transcripts())
     }
     /// Parses the prefiltered lines of one file. `header` is line 1 of the file.
-    fn parse(&self, ctx: &ParseCtx, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
+    fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
 }
 
 pub fn for_agent(agent: Agent) -> &'static dyn Adapter {

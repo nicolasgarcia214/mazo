@@ -12,7 +12,7 @@ use std::process::Command;
 
 use serde_json::Value;
 use skima::adapters::claude::Claude;
-use skima::adapters::{ActorInputs, Adapter, Key, ParseCtx, Parsed, Raw, Session};
+use skima::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
 use skima::config::{Config, Home};
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Event, Ledger};
@@ -291,8 +291,8 @@ impl<F: Fn(&Path, &Chunk, &mut Parsed)> Adapter for Rule<F> {
     fn files(&self, home: &Home) -> Vec<PathBuf> {
         Claude.files(home)
     }
-    fn parse(&self, ctx: &ParseCtx, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
-        let mut parsed = Claude.parse(ctx, path, header, chunk);
+    fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
+        let mut parsed = Claude.parse(roots, path, header, chunk);
         (self.0)(path, chunk, &mut parsed);
         parsed
     }

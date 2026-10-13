@@ -33,7 +33,7 @@ fn roots() -> SkillRoots {
 }
 
 fn parse(path: &Path) -> Parsed {
-    common::parse_file(&pi::Pi, &home(Path::new("/nonexistent")), &roots(), path, None).0
+    common::parse_file(&pi::Pi, &roots(), path, None).0
 }
 
 /// `(key, skill, channel, path, line)` of every raw event.

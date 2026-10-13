@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session, SkillRoots};
+use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Session, SkillRoots};
 use crate::config;
 use crate::ledger::Channel;
 use crate::tail::Chunk;
@@ -13,7 +13,7 @@ use crate::tail::Chunk;
 pub struct Codex;
 
 impl Adapter for Codex {
-    fn parse(&self, ctx: &ParseCtx, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
+    fn parse(&self, roots: &SkillRoots, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let mut out = Parsed::default();
         let Some(Header { session, guardian }) = header.and_then(parse_header) else {
             return out;
@@ -36,19 +36,19 @@ impl Adapter for Codex {
             let found = match payload["type"].as_str() {
                 Some("message") if payload["role"] == "user" => slash_blocks(payload),
                 Some("function_call") => function_call(payload)
-                    .map_or_else(Vec::new, |c| read_events(ctx.roots, &session, 0, &c, &mut out.unparsed)),
+                    .map_or_else(Vec::new, |c| read_events(roots, &session, 0, &c, &mut out.unparsed)),
                 Some("custom_tool_call") if payload["name"] == "exec" => {
                     let input = payload["input"].as_str().unwrap_or_default();
                     let mut found = Vec::new();
                     let mut opaque = false;
                     for (i, call) in exec_calls(input).iter().enumerate() {
                         match call {
-                            Ok(c) => found.extend(read_events(ctx.roots, &session, i, c, &mut out.unparsed)),
+                            Ok(c) => found.extend(read_events(roots, &session, i, c, &mut out.unparsed)),
                             Err(()) => opaque = true,
                         }
                     }
                     // One record counts once, however many calls in it are opaque.
-                    if opaque && ctx.roots.names_skill_doc(input, session.cwd.as_deref()) {
+                    if opaque && roots.names_skill_doc(input, session.cwd.as_deref()) {
                         out.unparsed.push(input.to_string());
                     }
                     found

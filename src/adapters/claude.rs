@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, ParseCtx, Parsed, Raw, Session};
+use super::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
 use crate::config::Home;
 use crate::ledger::Channel;
 use crate::tail::Chunk;
@@ -21,7 +21,7 @@ pub struct Claude;
 const BASE_DIR: &str = "Base directory for this skill: ";
 
 impl Adapter for Claude {
-    fn parse(&self, ctx: &ParseCtx, path: &Path, _header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
+    fn parse(&self, roots: &SkillRoots, path: &Path, _header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let in_subagents = path.to_string_lossy().contains("/subagents/");
         let mut out = Parsed::default();
         // tool_use id → index in `out.raws` of the event that id already produced.
@@ -31,7 +31,7 @@ impl Adapter for Claude {
             let Some(r) = Record::new(&rec, *line, in_subagents) else { continue };
             match rec["type"].as_str() {
                 Some("user") => user(&r, &mut loads, &mut out),
-                Some("assistant") => assistant(ctx, &r, &mut out),
+                Some("assistant") => assistant(roots, &r, &mut out),
                 _ => {}
             }
         }
@@ -143,7 +143,7 @@ fn blocks(content: &Value) -> impl Iterator<Item = &Value> {
 
 /// Rows 4–5: `Read` and `Bash` tool calls on skill files, one event per skill
 /// file keyed by its index among the files read.
-fn assistant(ctx: &ParseCtx, r: &Record, out: &mut Parsed) {
+fn assistant(roots: &SkillRoots, r: &Record, out: &mut Parsed) {
     let Some(uuid) = r.v["uuid"].as_str() else { return };
     let cwd = r.session.cwd.as_deref();
     for (ci, b) in blocks(r.content()).enumerate() {
@@ -152,8 +152,8 @@ fn assistant(ctx: &ParseCtx, r: &Record, out: &mut Parsed) {
         }
         let input = &b["input"];
         let found = match (b["name"].as_str(), input["file_path"].as_str(), input["command"].as_str()) {
-            (Some("Read"), Some(file), _) => ctx.roots.classify(file, cwd).map(|sf| (0, sf)).into_iter().collect(),
-            (Some("Bash"), _, Some(cmd)) => ctx.roots.shell_reads(cmd, cwd, &mut out.unparsed),
+            (Some("Read"), Some(file), _) => roots.classify(file, cwd).map(|sf| (0, sf)).into_iter().collect(),
+            (Some("Bash"), _, Some(cmd)) => roots.shell_reads(cmd, cwd, &mut out.unparsed),
             _ => continue,
         };
         for (fi, sf) in found {

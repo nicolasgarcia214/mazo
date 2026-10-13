@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session};
+use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Session, SkillRoots};
 use crate::ledger::Channel;
 use crate::tail::Chunk;
 
@@ -18,7 +18,7 @@ static SKILL_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^<skill name="([^"]+)" location="([^"]+)">"#).expect("valid regex"));
 
 impl Adapter for Pi {
-    fn parse(&self, ctx: &ParseCtx, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
+    fn parse(&self, roots: &SkillRoots, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let Some(session) = header.and_then(session_of_header) else {
             return Parsed { skipped: true, ..Parsed::default() };
         };
@@ -33,7 +33,7 @@ impl Adapter for Pi {
             let (Some(id), Some(ts)) = (v["id"].as_str(), v["timestamp"].as_str()) else {
                 continue;
             };
-            let entry = Entry { ctx, session: &session, id, ts, line: *line };
+            let entry = Entry { roots, session: &session, id, ts, line: *line };
             let msg = &v["message"];
             match msg["role"].as_str() {
                 Some("user") => out.raws.extend(entry.slash(&msg["content"])),
@@ -47,7 +47,7 @@ impl Adapter for Pi {
 
 /// One message entry being parsed.
 struct Entry<'a> {
-    ctx: &'a ParseCtx<'a>,
+    roots: &'a SkillRoots,
     session: &'a Session,
     id: &'a str,
     ts: &'a str,
@@ -92,7 +92,7 @@ impl Entry<'_> {
         let Some(items) = content.as_array() else {
             return;
         };
-        let roots = self.ctx.roots;
+        let roots = self.roots;
         let cwd = self.session.cwd.as_deref();
         for (ci, item) in items.iter().enumerate() {
             if item["type"] != "toolCall" {

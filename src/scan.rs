@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::Result;
-use crate::adapters::{self, Adapter, ParseCtx, SkillRoots};
+use crate::adapters::{self, Adapter, SkillRoots};
 use crate::classify::{Classifier, Roots};
 use crate::config::Config;
 use crate::inventory::Inventory;
@@ -80,7 +80,6 @@ pub fn scan_with<'a>(
 
     for (home, files) in cfg.homes.iter().zip(files) {
         let adapter = adapter_for(home.agent);
-        let ctx = ParseCtx { home, roots: &roots };
         let classifier = Classifier { inv, home, homes: &cfg.homes };
         let mut roots_cache = Roots::default();
         let mut hr = HomeReport::default();
@@ -116,7 +115,7 @@ pub fn scan_with<'a>(
                 continue;
             }
             let header = tail::first_line(&path).ok().flatten();
-            let parsed = adapter.parse(&ctx, &path, header.as_deref(), &chunk);
+            let parsed = adapter.parse(&roots, &path, header.as_deref(), &chunk);
             hr.unparsed += parsed.unparsed.len();
             for s in parsed.unparsed {
                 if hr.unparsed_samples.len() < 5 {

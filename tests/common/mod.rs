@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use skima::adapters::{Adapter, ParseCtx, Parsed, SkillRoots};
+use skima::adapters::{Adapter, Parsed, SkillRoots};
 use skima::config::Home;
 use skima::ledger::Agent;
 use skima::tail::{self, Chunk, Cursor, Prefilter};
@@ -32,29 +32,23 @@ pub fn home(name: &str, agent: Agent, path: &Path) -> Home {
 
 /// Reads `path` from `cursor` through the scan's prefilter (markers, the source
 /// and every home skills dir in `roots`) and parses the chunk with its header.
-pub fn parse_file(
-    adapter: &dyn Adapter,
-    home: &Home,
-    roots: &SkillRoots,
-    path: &Path,
-    cursor: Option<&Cursor>,
-) -> (Parsed, Cursor) {
+pub fn parse_file(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path, cursor: Option<&Cursor>) -> (Parsed, Cursor) {
     let extra: Vec<String> =
         std::iter::once(&roots.source).chain(&roots.home_skills).map(|p| p.to_string_lossy().into_owned()).collect();
     let chunk = tail::read(path, cursor, &Prefilter::new(extra.iter().map(String::as_str))).unwrap();
     let header = tail::first_line(path).unwrap();
-    let parsed = adapter.parse(&ParseCtx { home, roots }, path, header.as_deref(), &chunk);
+    let parsed = adapter.parse(roots, path, header.as_deref(), &chunk);
     (parsed, chunk.cursor)
 }
 
 /// Parses every line of `path`, prefilter bypassed, so a no-event test reaches
 /// the parser even when its records carry no marker.
-pub fn parse_unfiltered(adapter: &dyn Adapter, home: &Home, roots: &SkillRoots, path: &Path) -> Parsed {
+pub fn parse_unfiltered(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path) -> Parsed {
     let text = fs::read_to_string(path).unwrap();
     let lines: Vec<(u64, Vec<u8>)> = text.lines().zip(1..).map(|(l, n)| (n, l.as_bytes().to_vec())).collect();
-    let chunk = Chunk { lines, cursor: Cursor::default() };
+    let chunk = Chunk { lines, cursor: Cursor { dev: 0, ino: 0, offset: 0, line: 0 } };
     let header = tail::first_line(path).unwrap();
-    adapter.parse(&ParseCtx { home, roots }, path, header.as_deref(), &chunk)
+    adapter.parse(roots, path, header.as_deref(), &chunk)
 }
 
 /// Copies a directory tree, passing every file's text through `edit`.
