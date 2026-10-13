@@ -104,11 +104,7 @@ pub fn frontmatter(text: &str) -> crate::Result<Yaml> {
     if lines.first() != Some(&"---") {
         return Err("SKILL.md must start with YAML frontmatter".into());
     }
-    let end = lines[1..]
-        .iter()
-        .position(|l| *l == "---")
-        .ok_or("YAML frontmatter has no closing --- line")?
-        + 1;
+    let end = lines[1..].iter().position(|l| *l == "---").ok_or("YAML frontmatter has no closing --- line")? + 1;
     load(&lines[1..end].join("\n"))
 }
 
@@ -171,7 +167,9 @@ fn reader(text: &str) -> crate::Result<String> {
         match c {
             '\u{85}' => out.push('\n'),
             '\u{2028}' | '\u{2029}' => return Err(format!("unsupported line separator {:?} in YAML", c)),
-            '\t' | '\n' | '\r' | ' '..='~' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'.. => out.push(c),
+            '\t' | '\n' | '\r' | ' '..='~' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'.. => {
+                out.push(c)
+            }
             _ => return Err(format!("special characters are not allowed in YAML: {:?}", c)),
         }
     }
@@ -276,7 +274,9 @@ fn lexical_checks(text: &str, events: &[(Event, Span)]) -> crate::Result<()> {
         if starts_line {
             directive = c == '%';
             let line: String = chars[i..].iter().take_while(|&&c| c != '\n' && c != '\r').collect();
-            if region[i] == Region::Structure && let Some(version) = line.strip_prefix("%YAML") {
+            if region[i] == Region::Structure
+                && let Some(version) = line.strip_prefix("%YAML")
+            {
                 let major = version.split_whitespace().next().and_then(|v| v.split('.').next());
                 if major.and_then(|m| m.parse::<u64>().ok()) != Some(1) {
                     return Err(format!("incompatible YAML document {line:?}: version 1.* is required"));
@@ -290,7 +290,9 @@ fn lexical_checks(text: &str, events: &[(Event, Span)]) -> crate::Result<()> {
             Region::Alias if i == 0 || region[i - 1] != Region::Alias => {
                 name_at(i + 1)?;
             }
-            Region::Structure if c == '&' && !directive && (starts_line || matches!(chars[i - 1], ' ' | '[' | '{' | ',')) => {
+            Region::Structure
+                if c == '&' && !directive && (starts_line || matches!(chars[i - 1], ' ' | '[' | '{' | ',')) =>
+            {
                 let name = name_at(i + 1)?;
                 if anchors.contains(&name) {
                     return Err(format!("found duplicate anchor {name:?}"));
@@ -981,7 +983,8 @@ mod tests {
 
     #[test]
     fn helpers_read_strings_bools_and_dates() {
-        let y = load("a: x\nb: true\nc: 2026-01-02\nd: '2026-02-03'\ne: 2026-01-02 10:00:00Z\nf: '2026-02-30'\n").unwrap();
+        let y =
+            load("a: x\nb: true\nc: 2026-01-02\nd: '2026-02-03'\ne: 2026-01-02 10:00:00Z\nf: '2026-02-30'\n").unwrap();
         assert_eq!(y.get("a").and_then(Yaml::as_str), Some("x"));
         assert_eq!(y.get("b").and_then(Yaml::as_bool), Some(true));
         assert_eq!(y.get("c").and_then(Yaml::as_date).as_deref(), Some("2026-01-02"));

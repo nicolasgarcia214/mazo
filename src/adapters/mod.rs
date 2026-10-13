@@ -101,9 +101,7 @@ impl SkillRoots {
             let Ok(rest) = abs.strip_prefix(root) else { continue };
             let mut parts = rest.components();
             let name = parts.next()?.as_os_str().to_str()?;
-            if parts.next().is_none() {
-                return None; // the directory itself, or a loose file
-            }
+            parts.next()?; // the directory itself, or a loose file, is not a skill file
             let real_skill = !name.starts_with('.') && root.join(name).join("SKILL.md").is_file();
             // `ref` is instruction text only: scripts, tests and manifests are not loads.
             let markdown = abs.extension().is_some_and(|e| e == "md");

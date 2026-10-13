@@ -23,40 +23,23 @@ fn roots() -> SkillRoots {
     SkillRoots {
         source: SOURCE.into(),
         home_skills: vec![CODEX_SKILLS.into(), "/home/nicolas/.claude/skills".into()],
-        known: ["resolve-issue", "triage-finding", "unslop", "writing-for-agents"]
-            .map(String::from)
-            .into(),
+        known: ["resolve-issue", "triage-finding", "unslop", "writing-for-agents"].map(String::from).into(),
     }
 }
 
 fn home(path: &Path) -> Home {
-    Home {
-        name: "codex".into(),
-        agent: Agent::Codex,
-        path: path.into(),
-        links: Default::default(),
-    }
+    Home { name: "codex".into(), agent: Agent::Codex, path: path.into(), links: Default::default() }
 }
 
 /// Parses a whole file from offset 0 with the scan's prefilter.
 fn parse_path(path: &Path) -> Parsed {
     let roots = roots();
-    let extra: Vec<String> = std::iter::once(&roots.source)
-        .chain(&roots.home_skills)
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
+    let extra: Vec<String> =
+        std::iter::once(&roots.source).chain(&roots.home_skills).map(|p| p.to_string_lossy().into_owned()).collect();
     let chunk = tail::read(path, None, &Prefilter::new(extra.iter().map(String::as_str))).unwrap();
     let header = tail::first_line(path).unwrap();
     let h = home(Path::new("/nonexistent"));
-    Codex.parse(
-        &ParseCtx {
-            home: &h,
-            roots: &roots,
-        },
-        path,
-        header.as_deref(),
-        &chunk,
-    )
+    Codex.parse(&ParseCtx { home: &h, roots: &roots }, path, header.as_deref(), &chunk)
 }
 
 fn parse(name: &str) -> Parsed {
@@ -85,10 +68,7 @@ fn full_id(home_dir: &Path, r: &Raw) -> String {
 }
 
 fn summary(p: &Parsed) -> Vec<(u64, &str, Channel, &str)> {
-    p.raws
-        .iter()
-        .map(|r| (r.line, r.skill.as_str(), r.channel, r.path.as_deref().unwrap()))
-        .collect()
+    p.raws.iter().map(|r| (r.line, r.skill.as_str(), r.channel, r.path.as_deref().unwrap())).collect()
 }
 
 #[test]
@@ -99,12 +79,7 @@ fn name_block_without_payload_id_is_one_slash_event() {
     let p = parse("name_block.jsonl");
     assert_eq!(
         summary(&p),
-        [(
-            6,
-            "triage-finding",
-            Channel::Slash,
-            "/home/nicolas/dotfiles/skills/triage-finding/SKILL.md"
-        )]
+        [(6, "triage-finding", Channel::Slash, "/home/nicolas/dotfiles/skills/triage-finding/SKILL.md")]
     );
     let r = &p.raws[0];
     assert_eq!(key(r).1, "0");
@@ -112,10 +87,7 @@ fn name_block_without_payload_id_is_one_slash_event() {
     assert_eq!(r.cwd, None);
     assert!(!r.name_origin);
     assert_eq!(r.session.id, "019fa4cd-55e5-74a0-8ca6-f85824b9f349");
-    assert_eq!(
-        r.session.parent,
-        Some(Parent::Codex("019fa4cb-582b-7fc0-93d5-4f0b3122ae42".into()))
-    );
+    assert_eq!(r.session.parent, Some(Parent::Codex("019fa4cb-582b-7fc0-93d5-4f0b3122ae42".into())));
     assert_eq!(r.session.version.as_deref(), Some("0.145.0"));
     assert!(p.unparsed.is_empty() && !p.skipped);
 }
@@ -126,48 +98,23 @@ fn exec_wrapper_with_two_exec_command_reads_gives_two_ids() {
     assert_eq!(
         summary(&p),
         [
-            (
-                2,
-                "writing-for-agents",
-                Channel::Read,
-                "/home/nicolas/.codex/skills/writing-for-agents/SKILL.md"
-            ),
-            (
-                2,
-                "unslop",
-                Channel::Read,
-                "/home/nicolas/.codex/skills/unslop/SKILL.md"
-            ),
+            (2, "writing-for-agents", Channel::Read, "/home/nicolas/.codex/skills/writing-for-agents/SKILL.md"),
+            (2, "unslop", Channel::Read, "/home/nicolas/.codex/skills/unslop/SKILL.md"),
         ]
     );
     let (a, b) = (key(&p.raws[0]), key(&p.raws[1]));
     assert_eq!((a.1, b.1), ("0.0", "1.0"));
     assert_eq!(a.0, b.0, "one record, one payload hash");
-    assert!(
-        p.raws
-            .iter()
-            .all(|r| r.cwd.as_deref() == Some("/home/nicolas/projects/demo"))
-    );
+    assert!(p.raws.iter().all(|r| r.cwd.as_deref() == Some("/home/nicolas/projects/demo")));
 }
 
 #[test]
 fn subagent_rollout_loads_root_to_parent_with_subagent_actor() {
     let p = parse("subagent.jsonl");
-    assert_eq!(
-        summary(&p),
-        [(
-            2,
-            "unslop",
-            Channel::Read,
-            "/home/nicolas/.codex/skills/unslop/SKILL.md"
-        )]
-    );
+    assert_eq!(summary(&p), [(2, "unslop", Channel::Read, "/home/nicolas/.codex/skills/unslop/SKILL.md")]);
     let s = &p.raws[0].session;
     assert!(s.actor.subagent);
-    assert!(
-        s.actor.codex_exec,
-        "originator codex_exec; the actor rules rank subagent first"
-    );
+    assert!(s.actor.codex_exec, "originator codex_exec; the actor rules rank subagent first");
     assert_eq!(s.cwd.as_deref(), Some("/home/nicolas/projects/demo/src"));
     let parent = "01a05e9c-0184-7800-80d2-6cda4a52db01";
     assert_eq!(s.parent, Some(Parent::Codex(parent.into())));
@@ -195,15 +142,7 @@ fn fork_header_on_line_one_wins_and_restamped_copies_collapse() {
         Some("019d3f9f-e9d9-7c50-a727-71c34e2255b3")
     );
     // A relative `sed -n '1,260p' SKILL.md` run inside the skill.
-    assert_eq!(
-        summary(&child),
-        [(
-            4,
-            "argus",
-            Channel::Read,
-            "/home/nicolas/dotfiles/skills/argus/SKILL.md"
-        )]
-    );
+    assert_eq!(summary(&child), [(4, "argus", Channel::Read, "/home/nicolas/dotfiles/skills/argus/SKILL.md")]);
     assert_ne!(p.ts, c.ts, "the child re-stamps the copy");
     let id = full_id(&home_dir, p);
     assert!(id.starts_with("cx:019d3f9f-e9d9-7c50-a727-71c34e2255b3:"));
@@ -214,13 +153,7 @@ fn fork_header_on_line_one_wins_and_restamped_copies_collapse() {
 fn split_sed_chunks_read_one_file_under_two_ids() {
     let p = parse("split_sed.jsonl");
     let path = "/home/nicolas/.codex/skills/resolve-issue/SKILL.md";
-    assert_eq!(
-        summary(&p),
-        [
-            (2, "resolve-issue", Channel::Read, path),
-            (3, "resolve-issue", Channel::Read, path)
-        ]
-    );
+    assert_eq!(summary(&p), [(2, "resolve-issue", Channel::Read, path), (3, "resolve-issue", Channel::Read, path)]);
     assert_ne!(p.raws[0].key, p.raws[1].key);
 }
 
@@ -229,17 +162,9 @@ fn relative_read_resolves_against_workdir() {
     let p = parse("relative_read.jsonl");
     assert_eq!(
         summary(&p),
-        [(
-            2,
-            "resolve-issue",
-            Channel::Read,
-            "/home/nicolas/.codex/skills/resolve-issue/SKILL.md"
-        )]
+        [(2, "resolve-issue", Channel::Read, "/home/nicolas/.codex/skills/resolve-issue/SKILL.md")]
     );
-    assert_eq!(
-        p.raws[0].cwd.as_deref(),
-        Some("/home/nicolas/.codex/skills/resolve-issue")
-    );
+    assert_eq!(p.raws[0].cwd.as_deref(), Some("/home/nicolas/.codex/skills/resolve-issue"));
 }
 
 #[test]
@@ -247,15 +172,7 @@ fn reader_first_pipeline_loads_only_through_pass_through_stages() {
     // Line 2 is real (`| nl -ba -v150`); line 3 is the same call with `| wc -l`,
     // because the corpus has no real reader piped into `wc` on a skill file.
     let p = parse("pipeline.jsonl");
-    assert_eq!(
-        summary(&p),
-        [(
-            2,
-            "audit",
-            Channel::Read,
-            "/home/nicolas/projects/demo/skills/audit/SKILL.md"
-        )]
-    );
+    assert_eq!(summary(&p), [(2, "audit", Channel::Read, "/home/nicolas/projects/demo/skills/audit/SKILL.md")]);
     assert!(p.unparsed.is_empty());
 }
 
@@ -285,15 +202,7 @@ fn duplicates_outputs_and_compacted_history_are_excluded() {
     // line 4 its *_output, line 5 a `compacted` record (from another rollout)
     // whose replacement_history holds the `$name` item of `name_block.jsonl`.
     let p = parse("excluded.jsonl");
-    assert_eq!(
-        summary(&p),
-        [(
-            2,
-            "vbc-noimpl",
-            Channel::Read,
-            "/tmp/probe/.agents/skills/vbc-noimpl/SKILL.md"
-        )]
-    );
+    assert_eq!(summary(&p), [(2, "vbc-noimpl", Channel::Read, "/tmp/probe/.agents/skills/vbc-noimpl/SKILL.md")]);
     assert_eq!(key(&p.raws[0]).1, "0.0");
 }
 

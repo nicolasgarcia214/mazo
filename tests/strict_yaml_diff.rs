@@ -417,12 +417,57 @@ fn synthetic() -> Vec<Case> {
 /// float, timestamp and null resolvers care about, from a fixed-seed LCG.
 fn generated_scalars() -> Vec<(String, String)> {
     const ALPHABET: &[&str] = &[
-        "0", "0", "1", "1", "5", "7", "8", "9", "_", ":", ":", ".", ".", "-", "+", "e", "E", "x", "b", "o", "F",
-        "nan", "inf", "Inf", ".nan", ".inf", "~", "null", "true", "=", "<<", "2001-12-14", "2001-1-2", " 10:00:00",
-        "T1:02:03", ".5", " -5", "Z", "60", "59",
+        "0",
+        "0",
+        "1",
+        "1",
+        "5",
+        "7",
+        "8",
+        "9",
+        "_",
+        ":",
+        ":",
+        ".",
+        ".",
+        "-",
+        "+",
+        "e",
+        "E",
+        "x",
+        "b",
+        "o",
+        "F",
+        "nan",
+        "inf",
+        "Inf",
+        ".nan",
+        ".inf",
+        "~",
+        "null",
+        "true",
+        "=",
+        "<<",
+        "2001-12-14",
+        "2001-1-2",
+        " 10:00:00",
+        "T1:02:03",
+        ".5",
+        " -5",
+        "Z",
+        "60",
+        "59",
     ];
-    const WRAP: &[(&str, &str)] =
-        &[("", ""), ("", ""), ("", ""), ("'", "'"), ("!!int '", "'"), ("!!float '", "'"), ("!!timestamp '", "'"), ("! '", "'")];
+    const WRAP: &[(&str, &str)] = &[
+        ("", ""),
+        ("", ""),
+        ("", ""),
+        ("'", "'"),
+        ("!!int '", "'"),
+        ("!!float '", "'"),
+        ("!!timestamp '", "'"),
+        ("! '", "'"),
+    ];
     let mut state: u64 = 0x5eed;
     let mut next = |n: usize| {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -499,7 +544,9 @@ fn canon(value: &Yaml) -> Value {
         Yaml::DateTime(dt) => json!({"datetime": dt}),
         Yaml::Binary(b) => json!({"binary": b.iter().map(|x| format!("{x:02x}")).collect::<String>()}),
         Yaml::Seq(items) => json!({"seq": items.iter().map(canon).collect::<Vec<_>>()}),
-        Yaml::Pairs(pairs) => json!({"seq": pairs.iter().map(|(k, v)| json!({"tuple": [canon(k), canon(v)]})).collect::<Vec<_>>()}),
+        Yaml::Pairs(pairs) => {
+            json!({"seq": pairs.iter().map(|(k, v)| json!({"tuple": [canon(k), canon(v)]})).collect::<Vec<_>>()})
+        }
         Yaml::Set(items) => json!({"set": items.iter().map(canon).collect::<Vec<_>>()}),
         Yaml::Map(pairs) => json!({"map": pairs.iter().map(|(k, v)| json!([canon(k), canon(v)])).collect::<Vec<_>>()}),
     }
@@ -579,12 +626,23 @@ fn strict_yaml_matches_pyyaml_policy_loader() {
         let rejected = want == json!({"error": true});
         if case.expect == Stricter {
             if rejected || got != json!({"error": true}) {
-                failures.push(format!("{}: {:?}\n  expected PyYAML to accept and skima to reject\n  pyyaml: {want}\n  skima:  {got}", case.name, case.text));
+                failures.push(format!(
+                    "{}: {:?}\n  expected PyYAML to accept and skima to reject\n  pyyaml: {want}\n  skima:  {got}",
+                    case.name, case.text
+                ));
             }
         } else if got != want {
-            failures.push(format!("{}: {:?}\n  pyyaml: {want}\n  skima:  {got} ({:?})", case.name, case.text, result.err()));
+            failures.push(format!(
+                "{}: {:?}\n  pyyaml: {want}\n  skima:  {got} ({:?})",
+                case.name,
+                case.text,
+                result.err()
+            ));
         } else if (case.expect == Accept && rejected) || (case.expect == Reject && !rejected) {
-            failures.push(format!("{}: {:?}\n  both loaders gave {want}, expected {:?}", case.name, case.text, case.expect));
+            failures.push(format!(
+                "{}: {:?}\n  both loaders gave {want}, expected {:?}",
+                case.name, case.text, case.expect
+            ));
         }
     }
     eprintln!(

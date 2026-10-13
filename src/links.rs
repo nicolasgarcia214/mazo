@@ -87,7 +87,9 @@ fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<S
             let name = name.to_string_lossy().into_owned();
             match out.iter_mut().find(|t: &&mut Target| t.home == home.name && t.dir == dir) {
                 Some(t) => t.entries.push((name, src)),
-                None => out.push(Target { home: home.name.clone(), dir: dir.to_path_buf(), entries: vec![(name, src)] }),
+                None => {
+                    out.push(Target { home: home.name.clone(), dir: dir.to_path_buf(), entries: vec![(name, src)] })
+                }
             }
         }
     }

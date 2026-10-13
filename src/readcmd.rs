@@ -306,10 +306,7 @@ mod tests {
 
     #[test]
     fn chains_and_chunks_collapse_to_distinct_files() {
-        assert_eq!(
-            reads("sed -n '1,220p' /s/a/SKILL.md && sed -n '220,440p' /s/a/SKILL.md"),
-            load(&["/s/a/SKILL.md"])
-        );
+        assert_eq!(reads("sed -n '1,220p' /s/a/SKILL.md && sed -n '220,440p' /s/a/SKILL.md"), load(&["/s/a/SKILL.md"]));
         assert_eq!(
             reads("cat /s/a/SKILL.md; cat /s/b/references/x.md"),
             load(&["/s/a/SKILL.md", "/s/b/references/x.md"])

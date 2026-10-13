@@ -27,10 +27,7 @@ fn conflict_in_the_last_home_leaves_zero_writes_in_every_home() {
     let r = fx.skima(&["sync"]);
     assert_eq!(r.code(), 1, "{}", r.stdout());
     assert!(
-        r.stderr().contains(&format!(
-            "{} conflicts with a canonical entry",
-            fx.target.join(last).display()
-        )),
+        r.stderr().contains(&format!("{} conflicts with a canonical entry", fx.target.join(last).display())),
         "{}",
         r.stderr()
     );
@@ -44,10 +41,7 @@ fn claude_work_is_linked_and_policy_checked() {
     let work = fx.home.join(".claude-work");
     fx.skima(&["sync", "--agent", "claude"]).assert_ok();
     for name in &fx.skills {
-        assert_eq!(
-            fs::read_link(work.join("skills").join(name)).unwrap(),
-            fx.source.join(name)
-        );
+        assert_eq!(fs::read_link(work.join("skills").join(name)).unwrap(), fx.source.join(name));
     }
 
     let first = &fx.skills[0];
@@ -68,17 +62,8 @@ fn claude_work_is_linked_and_policy_checked() {
     fs::remove_file(work.join("settings.json")).unwrap();
     let r = fx.skima(&["sync"]);
     assert_eq!(r.code(), 1);
-    assert!(
-        r.stderr()
-            .contains(&format!("ERROR: {}: no Claude settings profile", work.display())),
-        "{}",
-        r.stderr()
-    );
-    assert_eq!(
-        fx.skima(&["status", "--agent", "claude"]).code(),
-        1,
-        "status runs the same check"
-    );
+    assert!(r.stderr().contains(&format!("ERROR: {}: no Claude settings profile", work.display())), "{}", r.stderr());
+    assert_eq!(fx.skima(&["status", "--agent", "claude"]).code(), 1, "status runs the same check");
 }
 
 #[test]
@@ -94,17 +79,9 @@ fn sync_agent_pi_runs_per_skill_rules_and_skips_claude_settings() {
     let before = fx.snapshot();
     let r = fx.skima(&["sync", "--agent", "pi"]);
     assert_eq!(r.code(), 1);
-    assert!(
-        r.stderr().contains(&format!("ERROR: {}:", skill.display())),
-        "{}",
-        r.stderr()
-    );
+    assert!(r.stderr().contains(&format!("ERROR: {}:", skill.display())), "{}", r.stderr());
     assert!(r.stderr().contains("agents/openai.yaml"), "{}", r.stderr());
-    assert!(
-        !r.stderr().contains("settings"),
-        "Claude settings are not checked: {}",
-        r.stderr()
-    );
+    assert!(!r.stderr().contains("settings"), "Claude settings are not checked: {}", r.stderr());
     assert_eq!(fx.snapshot(), before);
 
     fs::write(&manifest, policy).unwrap();
@@ -121,18 +98,11 @@ fn write_coverage(fx: &Fixture, ages: &[(&str, i64)]) {
         .iter()
         .map(|(home, days)| {
             let t = now.checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap();
-            (
-                home.to_string(),
-                serde_json::json!({ "first": null, "last_scan": t.to_string() }),
-            )
+            (home.to_string(), serde_json::json!({ "first": null, "last_scan": t.to_string() }))
         })
         .collect();
     fs::create_dir_all(fx.data.join("skima")).unwrap();
-    fs::write(
-        fx.data.join("skima/coverage.json"),
-        serde_json::Value::Object(map).to_string(),
-    )
-    .unwrap();
+    fs::write(fx.data.join("skima/coverage.json"), serde_json::Value::Object(map).to_string()).unwrap();
 }
 
 #[test]
@@ -146,21 +116,13 @@ fn status_warns_when_a_claude_home_nears_retention() {
     assert_eq!(r.stdout(), "");
     assert!(r.stderr().contains("warning: claude: last scanned"), "{}", r.stderr());
     assert!(r.stderr().contains("after 30 days"), "{}", r.stderr());
-    assert!(
-        !r.stderr().contains("warning: claude-work"),
-        "22 days is fresh: {}",
-        r.stderr()
-    );
+    assert!(!r.stderr().contains("warning: claude-work"), "22 days is fresh: {}", r.stderr());
 
     write_coverage(&fx, &[("claude", 22)]);
     let r = fx.skima(&["status"]);
     r.assert_ok();
     assert!(!r.stderr().contains("warning: claude:"), "{}", r.stderr());
-    assert!(
-        r.stderr().contains("warning: claude-work: last scanned never"),
-        "never scanned warns: {}",
-        r.stderr()
-    );
+    assert!(r.stderr().contains("warning: claude-work: last scanned never"), "never scanned warns: {}", r.stderr());
 
     write_coverage(&fx, &[("claude", 22), ("claude-work", 1)]);
     let r = fx.skima(&["status"]);
@@ -176,11 +138,7 @@ fn status_writes_nothing() {
     let before = fx.snapshot();
     let r = fx.skima(&["status"]);
     assert_eq!(r.code(), 1, "missing links are drift");
-    assert!(
-        r.stdout().contains(&format!("codex: missing {}", fx.skills[0])),
-        "{}",
-        r.stdout()
-    );
+    assert!(r.stdout().contains(&format!("codex: missing {}", fx.skills[0])), "{}", r.stdout());
     assert!(r.stdout().contains("codex: dangling gone"), "{}", r.stdout());
     assert_eq!(fx.snapshot(), before);
 

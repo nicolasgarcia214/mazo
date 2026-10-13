@@ -146,7 +146,8 @@ pub fn scan_with<'a>(
             }
         }
 
-        let entry = coverage.entry(home.name.clone()).or_insert_with(|| Coverage { first: earliest.clone(), last_scan: None });
+        let entry =
+            coverage.entry(home.name.clone()).or_insert_with(|| Coverage { first: earliest.clone(), last_scan: None });
         if hr.io_errors.is_empty() {
             entry.last_scan = Some(now.clone());
         }
@@ -177,6 +178,8 @@ fn first_timestamp(path: &Path) -> Option<String> {
         .lines()
         .take(20)
         .map_while(std::result::Result::ok)
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok()?.get("timestamp")?.as_str().map(str::to_string))
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(&line).ok()?.get("timestamp")?.as_str().map(str::to_string)
+        })
         .min()
 }

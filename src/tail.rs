@@ -36,13 +36,8 @@ impl Prefilter {
     ];
 
     pub fn new<'a>(extra: impl IntoIterator<Item = &'a str>) -> Prefilter {
-        let alts: Vec<String> = Self::MARKERS
-            .iter()
-            .copied()
-            .chain(extra)
-            .filter(|s| !s.is_empty())
-            .map(regex::escape)
-            .collect();
+        let alts: Vec<String> =
+            Self::MARKERS.iter().copied().chain(extra).filter(|s| !s.is_empty()).map(regex::escape).collect();
         Prefilter(Regex::new(&alts.join("|")).expect("escaped literals form a valid regex"))
     }
 

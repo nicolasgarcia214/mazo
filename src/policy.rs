@@ -69,7 +69,10 @@ pub fn per_home(inv: &Inventory, home: &Home) -> Vec<String> {
         return vec![format!("ERROR: {}: no Claude settings profile", home.path.display())];
     }
     let p = path.display();
-    let settings: serde_json::Value = match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string())) {
+    let settings: serde_json::Value = match std::fs::read(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+    {
         Ok(v) => v,
         Err(e) => return vec![format!("ERROR: {p}: {e}")],
     };
@@ -79,7 +82,8 @@ pub fn per_home(inv: &Inventory, home: &Home) -> Vec<String> {
         Some(Some(serde_json::Value::Object(o))) => o,
         _ => return vec![format!("ERROR: {p}: skillOverrides must be an object")],
     };
-    let missing: Vec<&String> = inv.skills.iter().filter(|s| overrides.get(*s).and_then(|v| v.as_str()) != Some("name-only")).collect();
+    let missing: Vec<&String> =
+        inv.skills.iter().filter(|s| overrides.get(*s).and_then(|v| v.as_str()) != Some("name-only")).collect();
     if missing.is_empty() {
         return Vec::new();
     }
@@ -103,7 +107,10 @@ pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff:
     for home in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
         let days = retention_days(home);
         let limit = (days - 7).max(0) * 86_400;
-        let last = coverage.get(&home.name).and_then(|c| c.last_scan.as_deref()).and_then(|t| t.parse::<jiff::Timestamp>().ok());
+        let last = coverage
+            .get(&home.name)
+            .and_then(|c| c.last_scan.as_deref())
+            .and_then(|t| t.parse::<jiff::Timestamp>().ok());
         let stale = match last {
             None => true,
             Some(t) => now.as_second() - t.as_second() > limit,
@@ -136,7 +143,8 @@ mod tests {
     #[test]
     fn freshness_warns_after_retention_minus_seven_days() {
         let dir = tempfile::tempdir().unwrap();
-        let home = Home { name: "claude".into(), agent: Agent::Claude, path: dir.path().into(), links: Default::default() };
+        let home =
+            Home { name: "claude".into(), agent: Agent::Claude, path: dir.path().into(), links: Default::default() };
         let cfg = Config { source: dir.path().into(), loose: vec![], homes: vec![home] };
         let now: jiff::Timestamp = "2026-10-31T00:00:00Z".parse().unwrap();
         let at = |days: i64| {

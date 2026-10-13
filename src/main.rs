@@ -110,7 +110,11 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
 }
 
 /// Usage reports scan first, then render, then print freshness warnings (SPEC D3, §5.4).
-fn with_scanned(cfg: &Config, inv: &Inventory, render: impl FnOnce(&report::Input) -> skima::Result<String>) -> skima::Result<ExitCode> {
+fn with_scanned(
+    cfg: &Config,
+    inv: &Inventory,
+    render: impl FnOnce(&report::Input) -> skima::Result<String>,
+) -> skima::Result<ExitCode> {
     let data = ledger::data_dir()?;
     let scanned = scan::scan(cfg, inv, &data, false)?;
     for (home, r) in &scanned.homes {
@@ -210,7 +214,8 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -
             .iter()
             .map(|e| serde_json::json!({"home": e.home, "path": e.path, "state": e.state.label(), "error": e.state.is_error()}))
             .collect();
-        let v = serde_json::json!({"drift": entries, "policy": errors, "conflicts": plan.conflicts, "warnings": warnings});
+        let v =
+            serde_json::json!({"drift": entries, "policy": errors, "conflicts": plan.conflicts, "warnings": warnings});
         println!("{v}");
     } else {
         for e in &drift {

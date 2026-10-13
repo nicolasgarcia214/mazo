@@ -118,11 +118,7 @@ impl Fixture {
             format!("---\nname: {name}\ndescription: Test skill.\n---\n\n# Test skill\n"),
         )
         .unwrap();
-        fs::write(
-            skill.join("agents/openai.yaml"),
-            "policy:\n  allow_implicit_invocation: false\n",
-        )
-        .unwrap();
+        fs::write(skill.join("agents/openai.yaml"), "policy:\n  allow_implicit_invocation: false\n").unwrap();
         self.overrides.push(name.to_string());
         self.write_settings(&self.home.clone());
         skill
@@ -243,11 +239,8 @@ pub fn exists(p: &Path) -> bool {
 }
 
 pub fn names(dir: &Path) -> Vec<String> {
-    let mut v: Vec<String> = fs::read_dir(dir)
-        .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
+    let mut v: Vec<String> =
+        fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     v.sort();
     v
 }

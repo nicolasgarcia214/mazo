@@ -16,9 +16,8 @@ use crate::tail::Chunk;
 pub struct Pi;
 
 /// The `/skill:name` expansion Pi injects as a user message.
-static SKILL_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^<skill name="([^"]+)" location="([^"]+)">"#).expect("valid regex")
-});
+static SKILL_BLOCK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^<skill name="([^"]+)" location="([^"]+)">"#).expect("valid regex"));
 
 impl Adapter for Pi {
     fn files(&self, home: &Home) -> Vec<PathBuf> {
@@ -27,10 +26,7 @@ impl Adapter for Pi {
 
     fn parse(&self, ctx: &ParseCtx, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let Some(session) = header.and_then(session_of_header) else {
-            return Parsed {
-                skipped: true,
-                ..Parsed::default()
-            };
+            return Parsed { skipped: true, ..Parsed::default() };
         };
         let mut out = Parsed::default();
         for (line, bytes) in &chunk.lines {
@@ -43,13 +39,7 @@ impl Adapter for Pi {
             let (Some(id), Some(ts)) = (v["id"].as_str(), v["timestamp"].as_str()) else {
                 continue;
             };
-            let entry = Entry {
-                ctx,
-                session: &session,
-                id,
-                ts,
-                line: *line,
-            };
+            let entry = Entry { ctx, session: &session, id, ts, line: *line };
             let msg = &v["message"];
             match msg["role"].as_str() {
                 Some("user") => out.raws.extend(entry.slash(&msg["content"])),
@@ -113,18 +103,12 @@ impl Entry<'_> {
                 continue;
             }
             let args = &item["arguments"];
-            match (
-                item["name"].as_str(),
-                args["path"].as_str(),
-                args["command"].as_str(),
-            ) {
+            match (item["name"].as_str(), args["path"].as_str(), args["command"].as_str()) {
                 (Some("read"), Some(path), _) => self.emit(ci, [path], out),
                 (Some("bash"), _, Some(cmd)) => match readcmd::reads(cmd) {
                     Reads::Load(files) => self.emit(ci, files.iter().map(String::as_str), out),
                     Reads::NotLoad => {}
-                    Reads::Unknown if self.ctx.roots.names_skill_doc(cmd, cwd) => {
-                        out.unparsed.push(cmd.to_string())
-                    }
+                    Reads::Unknown if self.ctx.roots.names_skill_doc(cmd, cwd) => out.unparsed.push(cmd.to_string()),
                     Reads::Unknown => {}
                 },
                 _ => {}
@@ -149,10 +133,7 @@ fn session_of_header(line: &[u8]) -> Option<Session> {
     let (id, parent) = id_parent(&v)?;
     Some(Session {
         id,
-        actor: ActorInputs {
-            subagent: parent.is_some(),
-            ..ActorInputs::default()
-        },
+        actor: ActorInputs { subagent: parent.is_some(), ..ActorInputs::default() },
         parent: parent.map(Parent::Pi),
         cwd: v["cwd"].as_str().map(str::to_string),
         version: None,
@@ -164,10 +145,7 @@ fn id_parent(v: &Value) -> Option<(String, Option<PathBuf>)> {
         return None;
     }
     let id = v["id"].as_str()?.to_string();
-    let parent = v["parentSession"]
-        .as_str()
-        .filter(|p| !p.is_empty())
-        .map(PathBuf::from);
+    let parent = v["parentSession"].as_str().filter(|p| !p.is_empty()).map(PathBuf::from);
     Some((id, parent))
 }
 

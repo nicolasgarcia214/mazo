@@ -236,7 +236,8 @@ fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
     assert_eq!(second.raws[0].key, unslop_pair().key);
     assert_eq!(second.raws[0].line, 2);
 
-    let inv = Inventory { skills: ["unslop".to_string()].into(), known: ["unslop".to_string()].into(), ..Default::default() };
+    let inv =
+        Inventory { skills: ["unslop".to_string()].into(), known: ["unslop".to_string()].into(), ..Default::default() };
     let h = home(dir.path());
     let homes = [h.clone()];
     let classifier = Classifier { inv: &inv, home: &h, homes: &homes };
@@ -310,13 +311,7 @@ fn bench_and_probe_entrypoints_pass_through_to_a_probe_actor() {
 
 #[test]
 fn bash_reading_two_skill_files_yields_two_events_with_distinct_ids() {
-    let s = session(
-        "301fa4b5-1181-4988-a473-67dffb7eae85",
-        "cli",
-        false,
-        "/home/nicolas/dotfiles/skills",
-        "2.1.292",
-    );
+    let s = session("301fa4b5-1181-4988-a473-67dffb7eae85", "cli", false, "/home/nicolas/dotfiles/skills", "2.1.292");
     let r = |fi: u32, skill: &str| {
         raw(
             &format!("cc:4651fe5d-8f81-4419-9766-fe5c71b2acbb:0:{fi}"),
@@ -424,7 +419,10 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     assert_eq!(got[0].1, Origin::Other);
     assert_eq!((got[1].0, got[1].1), ("grade", Origin::Canonical));
     assert_eq!(got[2], ("argus", Origin::Other, HISTORY_ARGUS_TS));
-    assert!(ledger.events().iter().all(|e| e.channel == Channel::Typed && e.src.ends_with(".jsonl:1") == (e.skill == "gitmoji-conventional-commit")));
+    assert!(
+        ledger.events().iter().all(|e| e.channel == Channel::Typed
+            && e.src.ends_with(".jsonl:1") == (e.skill == "gitmoji-conventional-commit"))
+    );
 
     let mut h = std::fs::OpenOptions::new().append(true).open(claude_home.join("history.jsonl")).unwrap();
     writeln!(h, r#"{{"display":"/grade","pastedContents":{{}},"timestamp":1791921825029,"project":"/x","sessionId":"00000000-0000-0000-0000-000000000000"}}"#).unwrap();

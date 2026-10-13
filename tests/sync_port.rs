@@ -31,20 +31,14 @@ fn pi_discovers_all_skills_and_is_idempotent() {
     for name in &expected {
         assert_eq!(fs::read_link(fx.target.join(name)).unwrap(), fx.source.join(name));
     }
-    assert_eq!(
-        fs::read_link(fx.agent.join("extensions").join(PI_EXTENSION)).unwrap(),
-        fx.source.join(PI_EXTENSION)
-    );
+    assert_eq!(fs::read_link(fx.agent.join("extensions").join(PI_EXTENSION)).unwrap(), fx.source.join(PI_EXTENSION));
     // :81-82: the Claude and Codex homes are unchanged (§5.7: snapshot).
     assert_eq!(snapshot(&[&fx.home]), homes_before);
     let inodes: Vec<u64> = expected.iter().map(|n| ino(&fx.target.join(n))).collect();
     let second = fx.skima(&["sync", "--agent", "pi"]);
     second.assert_ok();
     assert_eq!(second.stdout(), "");
-    assert_eq!(
-        inodes,
-        expected.iter().map(|n| ino(&fx.target.join(n))).collect::<Vec<_>>()
-    );
+    assert_eq!(inodes, expected.iter().map(|n| ino(&fx.target.join(n))).collect::<Vec<_>>());
     assert_eq!(fs::read(&settings).unwrap(), before);
 }
 
@@ -56,11 +50,8 @@ fn frontmatter_must_omit_model_invocation_key() {
         let path = fx.source.join(name).join("SKILL.md");
         let original = fs::read_to_string(&path).unwrap();
         for value in ["true", "false", "\"true\"", "yes", "null"] {
-            fs::write(
-                &path,
-                original.replace("---\n\n#", &format!("disable-model-invocation: {value}\n---\n\n#")),
-            )
-            .unwrap();
+            fs::write(&path, original.replace("---\n\n#", &format!("disable-model-invocation: {value}\n---\n\n#")))
+                .unwrap();
             fx.assert_rejected_before_writes();
         }
         fs::write(&path, original.replace("---\n\n#", "\n#")).unwrap();
@@ -92,11 +83,7 @@ fn claude_profiles_must_list_explicit_skills_as_name_only() {
     for (path, content, needle) in [
         (&main, missing.to_string(), "\"goal-smart\": \"name-only\""),
         (&main, wrong.to_string(), "goal-smart"),
-        (
-            &main,
-            r#"{"skillOverrides": []}"#.to_string(),
-            "skillOverrides must be an object",
-        ),
+        (&main, r#"{"skillOverrides": []}"#.to_string(), "skillOverrides must be an object"),
         (&main, "{".to_string(), "settings.json"),
         // :118 `settings.work.json` is `.claude-work/settings.json` (§5.7).
         (&work, missing.to_string(), ".claude-work/settings.json"),
@@ -174,15 +161,7 @@ fn conflicts_preserve_foreign_entries_and_prevent_partial_install() {
     fs::create_dir(&foreign).unwrap();
     fs::write(foreign.join("keep.txt"), "preserve me").unwrap();
     let conflict = fx.target.join("goal-smart");
-    for kind in [
-        "directory",
-        "file",
-        "absolute",
-        "relative",
-        "dangling",
-        "relative-dangling",
-        "relative-canonical",
-    ] {
+    for kind in ["directory", "file", "absolute", "relative", "dangling", "relative-dangling", "relative-canonical"] {
         match kind {
             "directory" => {
                 fs::create_dir(&conflict).unwrap();
@@ -285,11 +264,7 @@ fn every_mode_preflights_new_skill_policy_before_any_write() {
 #[test]
 fn all_harnesses_share_the_same_files_and_preserve_foreign_entries() {
     let fx = Fixture::new();
-    let targets = [
-        fx.home.join(".claude/skills"),
-        fx.home.join(".codex/skills"),
-        fx.target.clone(),
-    ];
+    let targets = [fx.home.join(".claude/skills"), fx.home.join(".codex/skills"), fx.target.clone()];
     for t in &targets {
         fs::create_dir_all(t.join("foreign-skill")).unwrap();
     }
@@ -303,10 +278,7 @@ fn all_harnesses_share_the_same_files_and_preserve_foreign_entries() {
         }
     }
     let inodes = |fx: &Fixture| -> Vec<Vec<u64>> {
-        targets
-            .iter()
-            .map(|t| fx.skills.iter().map(|n| ino(&t.join(n))).collect())
-            .collect()
+        targets.iter().map(|t| fx.skills.iter().map(|n| ino(&t.join(n))).collect()).collect()
     };
     let before = inodes(&fx);
     let second = fx.skima(&["sync"]);
@@ -338,11 +310,7 @@ fn conflict_in_any_harness_aborts_all_destinations() {
         let before = snapshot(&[&home]);
         let r = fx.skima(&["sync"]);
         assert_ne!(r.code(), 0, "{relative}");
-        assert!(
-            r.stderr().contains("conflicts with a canonical entry"),
-            "{relative}: {}",
-            r.stderr()
-        );
+        assert!(r.stderr().contains("conflicts with a canonical entry"), "{relative}: {}", r.stderr());
         assert_eq!(fs::read_to_string(&conflict).unwrap(), "preserve");
         // :283-284 (§5.7: snapshot instead of "the conflict is the only file, no links").
         assert_eq!(snapshot(&[&home]), before, "{relative}");
@@ -404,11 +372,7 @@ fn invalid_file_urls_are_rejected_before_writes() {
         fx.set_env("PI_CODING_AGENT_DIR", Some(Path::new(&value)));
         let r = fx.skima(&["sync", "--agent", "pi"]);
         assert_ne!(r.code(), 0, "{value:?}");
-        assert!(
-            r.stderr().contains("ERROR: invalid PI_CODING_AGENT_DIR"),
-            "{value:?}: {}",
-            r.stderr()
-        );
+        assert!(r.stderr().contains("ERROR: invalid PI_CODING_AGENT_DIR"), "{value:?}: {}", r.stderr());
         assert!(!exists(&fx.agent), "{value:?}");
         assert!(!exists(&fx.root.join("file:")), "{value:?}");
     }
@@ -442,10 +406,7 @@ fn option_like_paths_and_url_empty_segments_use_exact_fresh_targets() {
     let mut fx = Fixture::new();
     let cases = [
         ("-agent".to_string(), fx.root.join("-agent")),
-        (
-            format!("{}/empty//../agent", as_uri(&fx.root)),
-            fx.root.join("empty/agent"),
-        ),
+        (format!("{}/empty//../agent", as_uri(&fx.root)), fx.root.join("empty/agent")),
     ];
     for (value, expected) in cases {
         assert!(!exists(&expected), "{value:?}");
@@ -454,10 +415,7 @@ fn option_like_paths_and_url_empty_segments_use_exact_fresh_targets() {
         assert_eq!(r.code(), 0, "{value:?}: {}", r.stderr());
         assert_eq!(names(&expected.join("skills")), fx.skills, "{value:?}");
         for name in &fx.skills {
-            assert_eq!(
-                fs::read_link(expected.join("skills").join(name)).unwrap(),
-                fx.source.join(name)
-            );
+            assert_eq!(fs::read_link(expected.join("skills").join(name)).unwrap(), fx.source.join(name));
         }
         assert!(!exists(&fx.root.join("agent")), "{value:?}");
     }

@@ -1030,6 +1030,7 @@ skima/
     inventory.rs    canonical skills, frontmatter, known names from git history, fan-in graph
     policy.rs       per-skill and per-home rules (§5.4), scan-freshness warning
     links.rs        drift classification; plan() (pure) and apply() (the only writer)
+    scan.rs         the scan driver: scan order, cursors, coverage, typed backfill, reparse
     tail.rs         incremental JSONL reader: cursors, partial-line safety, byte prefilter
     ledger.rs       Event, append rule, lock, coverage, reparse
     adapters/
@@ -1044,7 +1045,7 @@ skima/
   tests/
     fixtures/{claude,codex,pi}/   one trimmed real record per positive and negative case
     policy_loader.py              verbatim PyYAML PolicyLoader, the reference for the YAML differential
-    adapters.rs  ingest.rs  inventory.rs  policy.rs  sync_port.rs  reports.rs
+    adapters_{claude,codex,pi}.rs  ingest.rs  reports.rs  strict_yaml_diff.rs  sync_port.rs  sync.rs
 ```
 
 The code splits into three paths:

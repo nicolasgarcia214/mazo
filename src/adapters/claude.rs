@@ -97,9 +97,7 @@ fn user(r: &Record, loads: &mut HashMap<String, usize>, out: &mut Parsed) {
     if result["success"] == true
         && let Some(name) = result["commandName"].as_str()
     {
-        let Some(id) = blocks(r.content())
-            .find(|b| b["type"] == "tool_result")
-            .and_then(|b| b["tool_use_id"].as_str())
+        let Some(id) = blocks(r.content()).find(|b| b["type"] == "tool_result").and_then(|b| b["tool_use_id"].as_str())
         else {
             return;
         };
@@ -162,7 +160,9 @@ fn assistant(ctx: &ParseCtx, r: &Record, out: &mut Parsed) {
             (Some("Read"), Some(file), _) => push_reads(ctx, r, uuid, ci, &[file], out),
             (Some("Bash"), _, Some(cmd)) => match readcmd::reads(cmd) {
                 Reads::Load(files) => push_reads(ctx, r, uuid, ci, &files, out),
-                Reads::Unknown if ctx.roots.names_skill_doc(cmd, r.session.cwd.as_deref()) => out.unparsed.push(cmd.chars().take(SAMPLE).collect()),
+                Reads::Unknown if ctx.roots.names_skill_doc(cmd, r.session.cwd.as_deref()) => {
+                    out.unparsed.push(cmd.chars().take(SAMPLE).collect())
+                }
                 _ => {}
             },
             _ => {}

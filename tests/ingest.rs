@@ -35,9 +35,18 @@ const TRANSCRIPTS: [(&str, &str); 15] = [
     ("slash.jsonl", "slash.jsonl"),
     ("tool_result_quote.jsonl", "tool_result_quote.jsonl"),
     ("unparsed.jsonl", "unparsed.jsonl"),
-    ("29b0f25b-ce3a-4cf5-8081-e6bb2a2ff99d/subagents/agent-a5b86c28fed127eef.jsonl", "subagents/agent-a5b86c28fed127eef.jsonl"),
-    ("3ea64990-464f-4f45-a9d0-91a25bf5a530/subagents/agent-aacafe9c375ac817e.jsonl", "subagents/agent-aacafe9c375ac817e.jsonl"),
-    ("2b0a61b3-e8ed-44c0-81a3-6e94d229e0e4/subagents/agent-ad81ed4c0f32313c2.jsonl", "subagents/agent-ad81ed4c0f32313c2.jsonl"),
+    (
+        "29b0f25b-ce3a-4cf5-8081-e6bb2a2ff99d/subagents/agent-a5b86c28fed127eef.jsonl",
+        "subagents/agent-a5b86c28fed127eef.jsonl",
+    ),
+    (
+        "3ea64990-464f-4f45-a9d0-91a25bf5a530/subagents/agent-aacafe9c375ac817e.jsonl",
+        "subagents/agent-aacafe9c375ac817e.jsonl",
+    ),
+    (
+        "2b0a61b3-e8ed-44c0-81a3-6e94d229e0e4/subagents/agent-ad81ed4c0f32313c2.jsonl",
+        "subagents/agent-ad81ed4c0f32313c2.jsonl",
+    ),
 ];
 
 /// The id the Claude adapter gives the Skill result/meta pair in `pair.jsonl`.
@@ -299,8 +308,7 @@ fn reparse_drops_a_new_false_positive_and_keeps_deleted_transcripts_verbatim() {
     env.scan();
     let target = "cc:toolu_01TJBdbiPJWDEp5ZGWUmM35V"; // result_only.jsonl
     assert!(ids(&env.data).contains(target));
-    let deleted: Vec<String> =
-        ledger_lines(&env.data).into_iter().filter(|l| l.contains("/subagents/")).collect();
+    let deleted: Vec<String> = ledger_lines(&env.data).into_iter().filter(|l| l.contains("/subagents/")).collect();
     assert_eq!(deleted.len(), 3);
     fs::remove_dir_all(env.transcript("29b0f25b-ce3a-4cf5-8081-e6bb2a2ff99d")).unwrap();
     fs::remove_dir_all(env.transcript("3ea64990-464f-4f45-a9d0-91a25bf5a530")).unwrap();
@@ -395,8 +403,11 @@ fn concurrent_scan_processes_write_no_duplicate_ids() {
     let root = env.tmp.path();
     let config = root.join("dotfiles/skills/skima.toml");
     let home = &env.cfg.homes[0].path;
-    fs::write(&config, format!("source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"{}\"\n", home.display()))
-        .unwrap();
+    fs::write(
+        &config,
+        format!("source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"{}\"\n", home.display()),
+    )
+    .unwrap();
     for round in 0..8 {
         let xdg = root.join(format!("xdg{round}"));
         let run = || {

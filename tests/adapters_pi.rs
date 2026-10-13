@@ -14,29 +14,15 @@ const PI_SKILLS: &str = "/home/nicolas/.pi/agent/skills";
 const SOURCE: &str = "/home/nicolas/dotfiles/skills";
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/pi")
-        .join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi").join(name)
 }
 
 fn home(path: &Path) -> Home {
-    Home {
-        name: "pi".into(),
-        agent: Agent::Pi,
-        path: path.to_path_buf(),
-        links: Default::default(),
-    }
+    Home { name: "pi".into(), agent: Agent::Pi, path: path.to_path_buf(), links: Default::default() }
 }
 
 fn roots() -> SkillRoots {
-    let known = [
-        "blast-radius",
-        "goal-investigate",
-        "goal-smart",
-        "grade",
-        "unslop",
-        "writing-for-agents",
-    ];
+    let known = ["blast-radius", "goal-investigate", "goal-smart", "grade", "unslop", "writing-for-agents"];
     SkillRoots {
         source: SOURCE.into(),
         home_skills: vec![PI_SKILLS.into()],
@@ -47,10 +33,7 @@ fn roots() -> SkillRoots {
 fn parse(path: &Path) -> Parsed {
     let roots = roots();
     let h = home(Path::new("/nonexistent"));
-    let ctx = ParseCtx {
-        home: &h,
-        roots: &roots,
-    };
+    let ctx = ParseCtx { home: &h, roots: &roots };
     let chunk = tail::read(path, None, &Prefilter::new([SOURCE, PI_SKILLS])).unwrap();
     let header = tail::first_line(path).unwrap();
     pi::Pi.parse(&ctx, path, header.as_deref(), &chunk)
@@ -61,27 +44,13 @@ fn events(p: &Parsed) -> Vec<(String, String, Channel, String, u64)> {
     p.raws
         .iter()
         .map(|r| {
-            let Key::Plain(k) = &r.key else {
-                panic!("pi keys are plain")
-            };
-            (
-                k.clone(),
-                r.skill.clone(),
-                r.channel,
-                r.path.clone().unwrap(),
-                r.line,
-            )
+            let Key::Plain(k) = &r.key else { panic!("pi keys are plain") };
+            (k.clone(), r.skill.clone(), r.channel, r.path.clone().unwrap(), r.line)
         })
         .collect()
 }
 
-fn ev(
-    key: &str,
-    skill: &str,
-    channel: Channel,
-    path: &str,
-    line: u64,
-) -> (String, String, Channel, String, u64) {
+fn ev(key: &str, skill: &str, channel: Channel, path: &str, line: u64) -> (String, String, Channel, String, u64) {
     (key.into(), skill.into(), channel, path.into(), line)
 }
 
@@ -102,10 +71,7 @@ fn skill_block_is_a_slash_load() {
     assert_eq!(r.ts, "2026-09-11T03:25:29.274Z");
     assert_eq!(r.session.id, "01a08e7c-3bde-7380-9061-4c05706c4214");
     assert_eq!(r.session.cwd.as_deref(), Some("/home/nicolas/dotfiles"));
-    assert_eq!(
-        (r.session.parent.as_ref(), r.session.actor.subagent),
-        (None, false)
-    );
+    assert_eq!((r.session.parent.as_ref(), r.session.actor.subagent), (None, false));
     assert_eq!(r.session.version, None);
     assert!(!r.name_origin);
     assert!(!p.skipped && p.unparsed.is_empty());
@@ -142,25 +108,12 @@ fn placeholders_fail_the_location_check_even_in_a_user_message() {
 fn read_tool_calls_resolve_against_the_header_cwd() {
     let p = parse(&fixture("read.jsonl"));
     let key = |i: u32| format!("pi:5f2d97ca@2026-09-11T03:25:57.990Z:{i}:0");
-    let read = |i, skill| {
-        ev(
-            &key(i),
-            skill,
-            Channel::Read,
-            &format!("{SOURCE}/{skill}/SKILL.md"),
-            2,
-        )
-    };
+    let read = |i, skill| ev(&key(i), skill, Channel::Read, &format!("{SOURCE}/{skill}/SKILL.md"), 2);
     // Items 0-1 are thinking/text, 2 `install.sh`, 3 the loose `skills/SKILLS_USAGE.md`,
     // 8 a bash call, 9 a doc outside every skill root.
     assert_eq!(
         events(&p),
-        [
-            read(4, "unslop"),
-            read(5, "writing-for-agents"),
-            read(6, "grade"),
-            read(7, "blast-radius")
-        ]
+        [read(4, "unslop"), read(5, "writing-for-agents"), read(6, "grade"), read(7, "blast-radius")]
     );
     // The bash call chains `date` (outside the grammar) with `find skills -name SKILL.md`.
     assert_eq!(p.unparsed.len(), 1);
@@ -172,39 +125,20 @@ fn noisy_bash_loop_is_unparsed_not_an_event() {
     let p = parse(&fixture("bash_loop.jsonl"));
     let ts = "427b7087@2026-09-07T04:34:07.893Z";
     let r = |i: u32, skill: &str, rest: &str, ch| {
-        ev(
-            &format!("pi:{ts}:{i}:0"),
-            skill,
-            ch,
-            &format!("{PI_SKILLS}/{skill}/{rest}"),
-            2,
-        )
+        ev(&format!("pi:{ts}:{i}:0"), skill, ch, &format!("{PI_SKILLS}/{skill}/{rest}"), 2)
     };
     // Item 0 is the `for p in …; do wc -l "$p"; done` loop, item 5 `subagents_list`.
     assert_eq!(
         events(&p),
         [
             r(1, "goal-smart", "references/pi-goals.md", Channel::Ref),
-            r(
-                2,
-                "goal-smart",
-                "references/artifact-contract.md",
-                Channel::Ref
-            ),
-            r(
-                3,
-                "goal-smart",
-                "references/multi-agent-policy.md",
-                Channel::Ref
-            ),
+            r(2, "goal-smart", "references/artifact-contract.md", Channel::Ref),
+            r(3, "goal-smart", "references/multi-agent-policy.md", Channel::Ref),
             r(4, "goal-investigate", "SKILL.md", Channel::Read),
         ]
     );
     assert_eq!(p.unparsed.len(), 1);
-    assert!(
-        p.unparsed[0]
-            .starts_with("for p in /home/nicolas/.pi/agent/skills/goal-smart/references/{")
-    );
+    assert!(p.unparsed[0].starts_with("for p in /home/nicolas/.pi/agent/skills/goal-smart/references/{"));
 }
 
 #[test]
@@ -220,9 +154,7 @@ fn fork_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let real = "/home/nicolas/.pi/agent/sessions/--home-nicolas-zama-fhevm--";
     let slug = dir.path().join("sessions/--home-nicolas-zama-fhevm--");
-    copy_tree(&fixture("fork"), &slug, &|s: String| {
-        s.replace(real, slug.to_str().unwrap())
-    });
+    copy_tree(&fixture("fork"), &slug, &|s: String| s.replace(real, slug.to_str().unwrap()));
     dir
 }
 
@@ -242,11 +174,8 @@ fn copy_tree(from: &Path, to: &Path, edit: &dyn Fn(String) -> String) {
 fn files_lists_session_jsonl_only_in_basename_order() {
     let dir = fork_dir();
     // The copy also holds a `.jsonl.herdr-complete.json` run-state file and Markdown artifacts.
-    let names: Vec<String> = pi::Pi
-        .files(&home(dir.path()))
-        .iter()
-        .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
-        .collect();
+    let names: Vec<String> =
+        pi::Pi.files(&home(dir.path())).iter().map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
     assert_eq!(
         names,
         [
@@ -270,13 +199,7 @@ fn fork_copies_share_keys_and_the_child_roots_to_the_parent() {
             &format!("{PI_SKILLS}/writing-for-agents/SKILL.md"),
             2,
         ),
-        ev(
-            &format!("pi:{ts}:3:0"),
-            "unslop",
-            Channel::Read,
-            &format!("{PI_SKILLS}/unslop/SKILL.md"),
-            2,
-        ),
+        ev(&format!("pi:{ts}:3:0"), "unslop", Channel::Read, &format!("{PI_SKILLS}/unslop/SKILL.md"), 2),
         ev(
             "pi:0a4d3ba5@2026-09-24T15:54:05.000Z:0:0",
             "writing-for-agents",
@@ -287,12 +210,7 @@ fn fork_copies_share_keys_and_the_child_roots_to_the_parent() {
     ];
     assert_eq!(events(&parent), expected);
     assert_eq!(events(&child), expected);
-    let keys: BTreeSet<_> = parent
-        .raws
-        .iter()
-        .chain(&child.raws)
-        .map(|r| format!("{:?}", r.key))
-        .collect();
+    let keys: BTreeSet<_> = parent.raws.iter().chain(&child.raws).map(|r| format!("{:?}", r.key)).collect();
     assert_eq!(keys.len(), 3);
 
     let parent_id = "01a0d41e-c38a-711d-84da-d0caa2649403";
@@ -300,21 +218,12 @@ fn fork_copies_share_keys_and_the_child_roots_to_the_parent() {
     assert_eq!(s.id, "d97aa721-d793-439c-9039-1fba426c0f34");
     assert_eq!(s.parent, Some(Parent::Pi(files[0].clone())));
     assert_eq!(classify::actor(Agent::Pi, &s.actor), Actor::Subagent);
-    assert_eq!(
-        classify::actor(Agent::Pi, &parent.raws[0].session.actor),
-        Actor::Main
-    );
+    assert_eq!(classify::actor(Agent::Pi, &parent.raws[0].session.actor), Actor::Main);
     let h = home(dir.path());
-    assert_eq!(
-        Roots::default().root(&h, &s.id, s.parent.as_ref()),
-        parent_id
-    );
+    assert_eq!(Roots::default().root(&h, &s.id, s.parent.as_ref()), parent_id);
     assert_eq!(
         pi::header_id_parent(&tail::first_line(&files[1]).unwrap().unwrap()),
         Some((s.id.clone(), Some(files[0].clone())))
     );
-    assert_eq!(
-        pi::header_id_parent(&tail::first_line(&files[0]).unwrap().unwrap()),
-        Some((parent_id.into(), None))
-    );
+    assert_eq!(pi::header_id_parent(&tail::first_line(&files[0]).unwrap().unwrap()), Some((parent_id.into(), None)));
 }

@@ -48,7 +48,9 @@ impl Adapter for Codex {
                     for (i, call) in exec_calls(input).iter().enumerate() {
                         match call {
                             Ok(c) => found.extend(read_events(ctx.roots, &session, i, c, &mut out.unparsed)),
-                            Err(()) if ctx.roots.names_skill_doc(input, session.cwd.as_deref()) => out.unparsed.push(input.to_string()),
+                            Err(()) if ctx.roots.names_skill_doc(input, session.cwd.as_deref()) => {
+                                out.unparsed.push(input.to_string())
+                            }
                             Err(()) => {}
                         }
                     }
@@ -64,10 +66,7 @@ impl Adapter for Codex {
                 .to_string();
             for f in found {
                 out.raws.push(Raw {
-                    key: Key::Codex {
-                        hash: hash.clone(),
-                        index: f.index,
-                    },
+                    key: Key::Codex { hash: hash.clone(), index: f.index },
                     ts: ts.to_string(),
                     skill: f.skill,
                     channel: f.channel,
@@ -105,9 +104,7 @@ fn parse_header(line: &[u8]) -> Option<Header> {
     let p = &rec["payload"];
     let source = &p["source"];
     let subagent = &source["subagent"];
-    let parent = p["forked_from_id"]
-        .as_str()
-        .or(subagent["thread_spawn"]["parent_thread_id"].as_str());
+    let parent = p["forked_from_id"].as_str().or(subagent["thread_spawn"]["parent_thread_id"].as_str());
     let text = |v: &Value| v.as_str().map(str::to_string);
     Some(Header {
         session: Session {
@@ -171,10 +168,7 @@ struct Call {
 /// A `function_call` whose JSON `arguments` carry a string `cmd`.
 fn function_call(payload: &Value) -> Option<Call> {
     let args: Value = serde_json::from_str(payload["arguments"].as_str()?).ok()?;
-    Some(Call {
-        cmd: args["cmd"].as_str()?.to_string(),
-        workdir: args["workdir"].as_str().map(str::to_string),
-    })
+    Some(Call { cmd: args["cmd"].as_str()?.to_string(), workdir: args["workdir"].as_str().map(str::to_string) })
 }
 
 /// Skill files that one command loads, indexed `<call>.<file>` by position in
@@ -232,11 +226,7 @@ fn exec_calls(src: &str) -> Vec<Result<Call, ()>> {
                 continue;
             }
             j = skip_ws(s, j + 1);
-            let (call, end) = if s.get(j) == Some(&b'{') {
-                object_call(s, j)
-            } else {
-                (Err(()), skip_expr(s, j))
-            };
+            let (call, end) = if s.get(j) == Some(&b'{') { object_call(s, j) } else { (Err(()), skip_expr(s, j)) };
             out.push(call);
             i = end;
         } else {
@@ -310,11 +300,7 @@ fn literal(s: &[u8], i: usize) -> (Option<String>, usize) {
     match s.get(i) {
         Some(b'"' | b'\'' | b'`') => {
             let (v, lit_end) = string_lit(s, i);
-            if skip_ws(s, lit_end) == end {
-                (v, end)
-            } else {
-                (None, end)
-            } // `"a" + b`
+            if skip_ws(s, lit_end) == end { (v, end) } else { (None, end) } // `"a" + b`
         }
         _ => (None, end),
     }
@@ -362,11 +348,7 @@ fn unescape(s: &[u8], j: usize, out: &mut Vec<u8>) -> usize {
         push(ch);
         return j + 1;
     }
-    let hex = |a: usize, b: usize| {
-        std::str::from_utf8(s.get(a..b)?)
-            .ok()
-            .and_then(|h| u32::from_str_radix(h, 16).ok())
-    };
+    let hex = |a: usize, b: usize| std::str::from_utf8(s.get(a..b)?).ok().and_then(|h| u32::from_str_radix(h, 16).ok());
     match c {
         b'\n' => j + 1,
         b'\r' => j + 1 + usize::from(s.get(j + 1) == Some(&b'\n')),
@@ -410,10 +392,7 @@ fn skip_token(s: &[u8], i: usize) -> usize {
     match (s[i], s.get(i + 1)) {
         (b'"' | b'\'' | b'`', _) => string_lit(s, i).1,
         (b'/', Some(b'/')) => s[i..].iter().position(|&b| b == b'\n').map_or(s.len(), |p| i + p),
-        (b'/', Some(b'*')) => s[i + 2..]
-            .windows(2)
-            .position(|w| w == b"*/")
-            .map_or(s.len(), |p| i + 2 + p + 2),
+        (b'/', Some(b'*')) => s[i + 2..].windows(2).position(|w| w == b"*/").map_or(s.len(), |p| i + 2 + p + 2),
         _ => i + 1,
     }
 }
@@ -470,10 +449,7 @@ mod tests {
     use super::*;
 
     fn calls(src: &str) -> Vec<Option<(String, Option<String>)>> {
-        exec_calls(src)
-            .into_iter()
-            .map(|c| c.ok().map(|c| (c.cmd, c.workdir)))
-            .collect()
+        exec_calls(src).into_iter().map(|c| c.ok().map(|c| (c.cmd, c.workdir))).collect()
     }
 
     #[test]
@@ -482,10 +458,7 @@ mod tests {
                    text(await tools.exec_command({ cmd: `cat \"b\"\\n`, max_output_tokens: 10 }));";
         assert_eq!(
             calls(two),
-            vec![
-                Some(("sed -n '1,9p' a/SKILL.md".into(), Some("/w".into()))),
-                Some(("cat \"b\"\n".into(), None)),
-            ]
+            vec![Some(("sed -n '1,9p' a/SKILL.md".into(), Some("/w".into()))), Some(("cat \"b\"\n".into(), None)),]
         );
         assert_eq!(calls("tools.exec_command({cmd: `cat ${f}`})"), vec![None]);
         assert_eq!(calls("tools.exec_command({cmd})"), vec![None]);
@@ -496,10 +469,7 @@ mod tests {
             vec![Some(("é😀😀A".into(), None))]
         );
         // A callee named inside a string or comment is not a call.
-        assert_eq!(
-            calls("// tools.exec_command({cmd:'x'})\nlog(\"tools.exec_command({cmd:'y'})\")"),
-            vec![]
-        );
+        assert_eq!(calls("// tools.exec_command({cmd:'x'})\nlog(\"tools.exec_command({cmd:'y'})\")"), vec![]);
         assert_eq!(
             calls("tools.exec_command({cmd: `x`, opts: {a: [1, ')']}, workdir: \"/d\"})"),
             vec![Some(("x".into(), Some("/d".into())))]
