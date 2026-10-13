@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"01a08e7c-3bde-7380-9061-4c05706c4214","timestamp":"2026-09-11T03:21:41.600Z","cwd":"/home/nicolas/dotfiles"}
+{"type":"message","id":"d7e9796d","parentId":"407f4df2","timestamp":"2026-09-11T03:25:29.274Z","message":{"role":"user","content":[{"type":"text","text":"<skill name=\"goal-smart\" location=\"/home/nicolas/.pi/agent/skills/goal-smart/SKILL.md\">\n[scrubbed]\n</skill>\n\n[scrubbed]"}],"timestamp":1789097129264}}
