@@ -86,7 +86,15 @@ fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<S
             let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { continue };
             let name = name.to_string_lossy().into_owned();
             match out.iter_mut().find(|t: &&mut Target| t.home == home.name && t.dir == dir) {
-                Some(t) => t.entries.push((name, src)),
+                Some(t) => match t.entries.iter().find(|(n, _)| *n == name) {
+                    Some((_, other)) => conflicts.push(format!(
+                        "ERROR: {} is claimed by two sources: {} and {}",
+                        path.display(),
+                        other.display(),
+                        src.display()
+                    )),
+                    None => t.entries.push((name, src)),
+                },
                 None => {
                     out.push(Target { home: home.name.clone(), dir: dir.to_path_buf(), entries: vec![(name, src)] })
                 }

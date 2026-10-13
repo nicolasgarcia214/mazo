@@ -14,7 +14,8 @@ use crate::tail::{self, Cursors, Prefilter};
 
 #[derive(Debug, Default)]
 pub struct HomeReport {
-    pub new_events: usize,
+    /// Ledger lines this scan appended (or, on reparse, re-derived).
+    pub new_events: Vec<Event>,
     pub files: usize,
     pub io_errors: Vec<String>,
     pub unparsed: usize,
@@ -129,8 +130,8 @@ pub fn scan_with<'a>(
                 let event = classifier.event(&mut roots_cache, raw, &path);
                 let target = if reparse { &mut fresh } else { &mut ledger };
                 if let Some(line) = target.admit(event) {
+                    hr.new_events.push(line.clone());
                     lines.push(line);
-                    hr.new_events += 1;
                 }
             }
             cursors.insert(key, chunk.cursor);
@@ -142,8 +143,8 @@ pub fn scan_with<'a>(
                 let event = classifier.event(&mut roots_cache, raw, &history);
                 let target = if reparse { &mut fresh } else { &mut ledger };
                 if let Some(line) = target.admit(event) {
+                    hr.new_events.push(line.clone());
                     lines.push(line);
-                    hr.new_events += 1;
                 }
             }
         }

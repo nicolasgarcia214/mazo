@@ -162,7 +162,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
         println!("{}", serde_json::Value::Object(homes));
         return Ok(ExitCode::SUCCESS);
     }
-    let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events)).collect();
+    let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events.len())).collect();
     println!("scan: {}", summary.join(" · "));
     for (name, h) in &r.homes {
         for e in &h.io_errors {
@@ -178,7 +178,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
             }
             let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{c:?}={n}").to_lowercase()).collect();
             println!("{name}: {} files; ledger {}", h.files, counts.join(" "));
-            println!("  unparsed skill commands: {}", h.unparsed);
+            println!("  unparsed skill commands in this scan: {}", h.unparsed);
             for s in &h.unparsed_samples {
                 println!("    {s}");
             }

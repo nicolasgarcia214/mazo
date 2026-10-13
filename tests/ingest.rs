@@ -167,7 +167,7 @@ fn line_of(data: &Path, id: &str) -> Option<String> {
 }
 
 fn new_events(r: &ScanReport) -> usize {
-    r.homes.values().map(|h| h.new_events).sum()
+    r.homes.values().map(|h| h.new_events.len()).sum()
 }
 
 #[test]

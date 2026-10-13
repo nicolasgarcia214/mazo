@@ -411,7 +411,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     };
     let first = skima::scan::scan(&cfg, &inv, &data, false).unwrap();
     // No transcript exists here, so line 1 counts too.
-    assert_eq!(first.homes["claude"].new_events, 3);
+    assert_eq!(first.homes["claude"].new_events.len(), 3);
     let ledger = Ledger::load(&data).unwrap();
     let got: Vec<(&str, Origin, &str)> =
         ledger.events().iter().map(|e| (e.skill.as_str(), e.origin, e.ts.as_str())).collect();
@@ -427,5 +427,5 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     let mut h = std::fs::OpenOptions::new().append(true).open(claude_home.join("history.jsonl")).unwrap();
     writeln!(h, r#"{{"display":"/grade","pastedContents":{{}},"timestamp":1791921825029,"project":"/x","sessionId":"00000000-0000-0000-0000-000000000000"}}"#).unwrap();
     let second = skima::scan::scan(&cfg, &inv, &data, false).unwrap();
-    assert_eq!(second.homes["claude"].new_events, 0);
+    assert_eq!(second.homes["claude"].new_events.len(), 0);
 }

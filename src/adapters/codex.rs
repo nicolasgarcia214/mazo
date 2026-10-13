@@ -173,22 +173,21 @@ fn function_call(payload: &Value) -> Option<Call> {
 /// the command's read list. A command that names a skill file but is neither a
 /// load nor a known non-load is recorded as unparsed.
 fn read_events(roots: &SkillRoots, session: &Session, call: usize, c: &Call, unparsed: &mut Vec<String>) -> Vec<Found> {
+    let workdir = match (&c.workdir, &session.cwd) {
+        (Some(w), Some(cwd)) => Some(config::resolve(Path::new(cwd), w).to_string_lossy().into_owned()),
+        (w, _) => w.clone(),
+    };
+    let base = workdir.as_deref().or(session.cwd.as_deref());
     let files = match readcmd::reads(&c.cmd) {
         Reads::Load(files) => files,
         Reads::NotLoad => return Vec::new(),
         Reads::Unknown => {
-            let base = c.workdir.as_deref().or(session.cwd.as_deref());
             if roots.names_skill_doc(&c.cmd, base) {
                 unparsed.push(c.cmd.clone());
             }
             return Vec::new();
         }
     };
-    let workdir = match (&c.workdir, &session.cwd) {
-        (Some(w), Some(cwd)) => Some(config::resolve(Path::new(cwd), w).to_string_lossy().into_owned()),
-        (w, _) => w.clone(),
-    };
-    let base = workdir.as_deref().or(session.cwd.as_deref());
     files
         .iter()
         .enumerate()

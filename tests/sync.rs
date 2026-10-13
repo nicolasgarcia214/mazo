@@ -257,3 +257,18 @@ fn a_directory_shared_through_a_symlink_is_synced_once() {
     r.assert_ok();
     assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), "");
 }
+
+#[test]
+fn a_links_entry_colliding_with_a_skill_aborts_before_writes() {
+    let fx = fixture();
+    let toml = fs::read_to_string(fx.source.join("skima.toml")).unwrap();
+    let name = &fx.skills[0];
+    let other = &fx.skills[1];
+    let toml = toml.replace("links = {", &format!("links = {{ \"skills/{name}\" = \"{other}\", "));
+    fs::write(fx.source.join("skima.toml"), toml).unwrap();
+    let before = fx.snapshot();
+    let r = fx.skima(&["sync", "--agent", "pi"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(r.stderr().contains("claimed by two sources"), "{}", r.stderr());
+    assert_eq!(fx.snapshot(), before);
+}
