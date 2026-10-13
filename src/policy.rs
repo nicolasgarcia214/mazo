@@ -74,10 +74,7 @@ pub fn per_home(inv: &Inventory, home: &Home) -> Vec<String> {
         return vec![format!("ERROR: {}: no Claude settings profile", home.path.display())];
     }
     let p = path.display();
-    let settings: serde_json::Value = match std::fs::read(&path)
-        .map_err(|e| e.to_string())
-        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
-    {
+    let settings = match settings(home) {
         Ok(v) => v,
         Err(e) => return vec![format!("ERROR: {p}: {e}")],
     };
@@ -96,13 +93,15 @@ pub fn per_home(inv: &Inventory, home: &Home) -> Vec<String> {
     vec![format!("ERROR: {p}: skillOverrides must set every skill to name-only:\n{}", entries.join(",\n"))]
 }
 
+/// A Claude home's parsed `settings.json`.
+fn settings(home: &Home) -> crate::Result<serde_json::Value> {
+    let bytes = std::fs::read(home.settings()).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
 /// Retention in days for a Claude home: `cleanupPeriodDays`, or 30 when unset.
-pub fn retention_days(home: &Home) -> i64 {
-    std::fs::read(home.settings())
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| v.get("cleanupPeriodDays").and_then(|d| d.as_i64()))
-        .unwrap_or(30)
+fn retention_days(home: &Home) -> i64 {
+    settings(home).ok().and_then(|v| v["cleanupPeriodDays"].as_i64()).unwrap_or(30)
 }
 
 /// Scan-freshness warnings (SPEC §5.4): a Claude home never scanned, or last
