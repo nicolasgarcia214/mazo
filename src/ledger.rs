@@ -212,21 +212,9 @@ impl Ledger {
         f.sync_data().map_err(err)
     }
 
-    /// Replaces the ledger with `lines` (reparse only): write, fsync, rename.
-    pub fn replace(&mut self, lines: Vec<Event>) -> Result<()> {
-        let path = self.dir.join("events.jsonl");
-        let tmp = self.dir.join("events.jsonl.new");
-        let out = to_lines(&lines);
-        let mut f = File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        f.write_all(out.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        f.sync_all().map_err(|e| format!("{}: {e}", tmp.display()))?;
-        fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.events.clear();
-        self.index.clear();
-        for e in lines {
-            self.keep(e);
-        }
-        Ok(())
+    /// Replaces the ledger file with `lines` (reparse only).
+    pub fn replace(&self, lines: &[Event]) -> Result<()> {
+        write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes())
     }
 }
 
@@ -250,13 +238,19 @@ fn to_lines(events: &[Event]) -> String {
     events.iter().map(|e| serde_json::to_string(e).expect("event serialises") + "\n").collect()
 }
 
-/// Write to a temporary file, fsync it, then rename over `path`, so a crash
-/// leaves either the old or the new file, never a truncated one.
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let tmp = path.with_extension("json.new");
+    write_atomic(path, &serde_json::to_vec(value).expect("state serialises"))
+}
+
+/// Write to `<path>.new`, fsync it, then rename over `path`, so a crash
+/// leaves either the old or the new file, never a truncated one.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".new");
+    let tmp = PathBuf::from(tmp);
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let mut f = File::create(&tmp).map_err(|e| err(&tmp, e))?;
-    f.write_all(&serde_json::to_vec(value).expect("state serialises")).map_err(|e| err(&tmp, e))?;
+    f.write_all(bytes).map_err(|e| err(&tmp, e))?;
     f.sync_all().map_err(|e| err(&tmp, e))?;
     fs::rename(&tmp, path).map_err(|e| err(path, e))
 }
