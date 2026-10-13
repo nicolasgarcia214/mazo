@@ -3,20 +3,24 @@
 //! `guardian.jsonl` line 2 and the `compacted` record in `excluded.jsonl` are
 //! composed from real records, as each test notes.
 
+mod common;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use skima::adapters::codex::{self, Codex};
-use skima::adapters::{Adapter, Key, Parent, ParseCtx, Parsed, Raw, SkillRoots};
+use skima::adapters::{Key, Parent, Parsed, Raw, SkillRoots};
 use skima::classify::Roots;
-use skima::config::Home;
-use skima::ledger::{Agent, Channel};
-use skima::tail::{self, Prefilter};
+use skima::config::{Config, Home};
+use skima::inventory::Inventory;
+use skima::ledger::{Actor, Agent, Channel, Event, Ledger};
+use skima::tail;
 
 const SOURCE: &str = "/home/nicolas/dotfiles/skills";
 const CODEX_SKILLS: &str = "/home/nicolas/.codex/skills";
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex")
+    common::fixture("codex")
 }
 
 fn roots() -> SkillRoots {
@@ -28,18 +32,12 @@ fn roots() -> SkillRoots {
 }
 
 fn home(path: &Path) -> Home {
-    Home { name: "codex".into(), agent: Agent::Codex, path: path.into(), links: Default::default() }
+    common::home("codex", Agent::Codex, path)
 }
 
 /// Parses a whole file from offset 0 with the scan's prefilter.
 fn parse_path(path: &Path) -> Parsed {
-    let roots = roots();
-    let extra: Vec<String> =
-        std::iter::once(&roots.source).chain(&roots.home_skills).map(|p| p.to_string_lossy().into_owned()).collect();
-    let chunk = tail::read(path, None, &Prefilter::new(extra.iter().map(String::as_str))).unwrap();
-    let header = tail::first_line(path).unwrap();
-    let h = home(Path::new("/nonexistent"));
-    Codex.parse(&ParseCtx { home: &h, roots: &roots }, path, header.as_deref(), &chunk)
+    common::parse_file(&Codex, &home(Path::new("/nonexistent")), &roots(), path, None).0
 }
 
 fn parse(name: &str) -> Parsed {
@@ -149,6 +147,81 @@ fn fork_header_on_line_one_wins_and_restamped_copies_collapse() {
     assert_eq!(id, full_id(&home_dir, c));
 }
 
+const FORK_PARENT: &str = "rollout-2026-03-30T11-42-17-019d3f9f-e9d9-7c50-a727-71c34e2255b3.jsonl";
+const FORK_CHILD: &str = "rollout-2026-03-30T11-56-58-019d3fad-5b36-7610-81ab-fc1318eb0cce.jsonl";
+
+/// A temporary machine for the real fork pair: a source holding `argus` (the
+/// fixture's dotfiles paths rewritten to it) and one Codex home whose sessions
+/// day directory starts empty.
+struct ForkMachine {
+    tmp: tempfile::TempDir,
+    cfg: Config,
+    inv: Inventory,
+    day: PathBuf,
+    /// The fork pair's lines with the dotfiles paths rewritten, by file name.
+    lines: BTreeMap<&'static str, Vec<String>>,
+}
+
+impl ForkMachine {
+    fn new() -> ForkMachine {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("dotfiles/skills");
+        common::write(&source.join("argus/SKILL.md"), "x");
+        let source = std::fs::canonicalize(source).unwrap();
+        let codex_home = tmp.path().join("codex");
+        let day = codex_home.join("sessions/2026/03/30");
+        std::fs::create_dir_all(&day).unwrap();
+        let fixture_day = fixtures().join("fork/sessions/2026/03/30");
+        let lines = [FORK_PARENT, FORK_CHILD]
+            .map(|f| {
+                let text = std::fs::read_to_string(fixture_day.join(f)).unwrap();
+                (f, text.replace(SOURCE, source.to_str().unwrap()).lines().map(String::from).collect())
+            })
+            .into();
+        let skills: BTreeSet<String> = ["argus".to_string()].into();
+        let inv = Inventory { source: source.clone(), known: skills.clone(), skills, worktree: None };
+        let cfg = Config { source, loose: vec![], homes: vec![home(&codex_home)] };
+        ForkMachine { tmp, cfg, inv, day, lines }
+    }
+
+    /// Appends lines `range` of fixture `file` to its rollout.
+    fn append(&self, file: &str, range: std::ops::Range<usize>) {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.day.join(file)).unwrap();
+        for l in &self.lines[file][range] {
+            writeln!(f, "{l}").unwrap();
+        }
+    }
+
+    fn scan(&self, data: &Path) -> Vec<Event> {
+        skima::scan::scan(&self.cfg, &self.inv, data, false).unwrap();
+        Ledger::load(data).unwrap().events().to_vec()
+    }
+}
+
+#[test]
+fn fork_pair_scanned_fresh_or_incrementally_stores_the_parent_copy() {
+    let m = ForkMachine::new();
+    let incremental = m.tmp.path().join("data-incremental");
+    // The parent exists alone; the fork appears later and grows a line at a time.
+    m.append(FORK_PARENT, 0..2);
+    assert_eq!(m.scan(&incremental).len(), 1);
+    m.append(FORK_CHILD, 0..3);
+    m.scan(&incremental);
+    m.append(FORK_CHILD, 3..4);
+    let incremental = m.scan(&incremental);
+
+    let fresh = m.scan(&m.tmp.path().join("data-fresh"));
+    assert_eq!(fresh, incremental);
+    assert_eq!(fresh.len(), 1, "the child's re-stamped copy collapses into the parent's id");
+    let e = &fresh[0];
+    assert!(e.id.starts_with("cx:019d3f9f-e9d9-7c50-a727-71c34e2255b3:"), "{}", e.id);
+    assert_eq!(e.session, "019d3f9f-e9d9-7c50-a727-71c34e2255b3");
+    assert_eq!(e.actor, Actor::Main);
+    assert_eq!(e.src, format!("{}:2", m.day.join(FORK_PARENT).display()));
+    assert_eq!(e.ts, "2026-03-30T16:42:36.643Z", "the parent's timestamp, not the child's re-stamp");
+}
+
 #[test]
 fn split_sed_chunks_read_one_file_under_two_ids() {
     let p = parse("split_sed.jsonl");
@@ -222,18 +295,20 @@ fn unreadable_skill_commands_are_counted_unparsed() {
 /// `hashlib.sha1(json.dumps(payload, sort_keys=True, separators=(",", ":"),
 /// ensure_ascii=False).encode()).hexdigest()` in Python 3; the serialisations
 /// agree on this payload (shortest round-trip floats, integers above 2^53
-/// exact, code-point key order equal to UTF-8 byte order).
+/// exact, code-point key order equal to UTF-8 byte order). `create_time` is a
+/// real Codex value that serde_json misparses without its
+/// `float_roundtrip` feature, so the id pins that feature.
 #[test]
 fn golden_codex_id() {
     let header = r#"{"timestamp":"t0","type":"session_meta","payload":{"id":"golden-session","cwd":"/w","originator":"codex-tui","cli_version":"0.1","source":"cli"}}"#;
-    let payload = r#"{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"cat /s/golden/SKILL.md\"}","call_id":"call_golden","zeta":{"b":[1,2.5,{"y":true,"x":null}],"a":"ü"},"ärger":"naïve ☃","Alpha":9007199254740993,"pi":3.14159,"neg":-0.5,"esc":"line\nquote\"tab\t/"}"#;
+    let payload = r#"{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"cat /s/golden/SKILL.md\"}","call_id":"call_golden","zeta":{"b":[1,2.5,{"y":true,"x":null}],"a":"ü"},"ärger":"naïve ☃","Alpha":9007199254740993,"pi":3.14159,"neg":-0.5,"create_time":1791311493.9632053,"esc":"line\nquote\"tab\t/"}"#;
     let p = parse_text(&format!(
         "{header}\n{{\"timestamp\":\"2026-01-01T00:00:00Z\",\"type\":\"response_item\",\"payload\":{payload}}}\n"
     ));
     assert_eq!(p.raws.len(), 1);
     assert_eq!(
         full_id(Path::new("/nonexistent"), &p.raws[0]),
-        "cx:golden-session:f4b067871ef419960db380bfdde12dff97168292:0.0"
+        "cx:golden-session:bd6143dc8f7e968e6badbfeceaadc6b06becd08d:0.0"
     );
     // The timestamp is not part of the id.
     let later = parse_text(&format!(

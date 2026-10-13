@@ -1,24 +1,26 @@
 //! Pi adapter fixtures (SPEC §10.1 Pi). Each fixture is real session records,
 //! trimmed to the lines that matter, with prose scrubbed.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use skima::adapters::{Adapter, Key, Parent, ParseCtx, Parsed, SkillRoots, pi};
+use skima::adapters::{Adapter, Key, Parent, Parsed, SkillRoots, pi};
 use skima::classify::{self, Roots};
 use skima::config::Home;
 use skima::ledger::{Actor, Agent, Channel};
-use skima::tail::{self, Prefilter};
+use skima::tail;
 
 const PI_SKILLS: &str = "/home/nicolas/.pi/agent/skills";
 const SOURCE: &str = "/home/nicolas/dotfiles/skills";
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi").join(name)
+    common::fixture("pi").join(name)
 }
 
 fn home(path: &Path) -> Home {
-    Home { name: "pi".into(), agent: Agent::Pi, path: path.to_path_buf(), links: Default::default() }
+    common::home("pi", Agent::Pi, path)
 }
 
 fn roots() -> SkillRoots {
@@ -31,12 +33,7 @@ fn roots() -> SkillRoots {
 }
 
 fn parse(path: &Path) -> Parsed {
-    let roots = roots();
-    let h = home(Path::new("/nonexistent"));
-    let ctx = ParseCtx { home: &h, roots: &roots };
-    let chunk = tail::read(path, None, &Prefilter::new([SOURCE, PI_SKILLS])).unwrap();
-    let header = tail::first_line(path).unwrap();
-    pi::Pi.parse(&ctx, path, header.as_deref(), &chunk)
+    common::parse_file(&pi::Pi, &home(Path::new("/nonexistent")), &roots(), path, None).0
 }
 
 /// `(key, skill, channel, path, line)` of every raw event.
@@ -154,20 +151,8 @@ fn fork_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let real = "/home/nicolas/.pi/agent/sessions/--home-nicolas-zama-fhevm--";
     let slug = dir.path().join("sessions/--home-nicolas-zama-fhevm--");
-    copy_tree(&fixture("fork"), &slug, &|s: String| s.replace(real, slug.to_str().unwrap()));
+    common::copy_tree(&fixture("fork"), &slug, &|s: String| s.replace(real, slug.to_str().unwrap()));
     dir
-}
-
-fn copy_tree(from: &Path, to: &Path, edit: &dyn Fn(String) -> String) {
-    std::fs::create_dir_all(to).unwrap();
-    for e in std::fs::read_dir(from).unwrap().flatten() {
-        let target = to.join(e.file_name());
-        if e.file_type().unwrap().is_dir() {
-            copy_tree(&e.path(), &target, edit);
-        } else {
-            std::fs::write(&target, edit(std::fs::read_to_string(e.path()).unwrap())).unwrap();
-        }
-    }
 }
 
 #[test]

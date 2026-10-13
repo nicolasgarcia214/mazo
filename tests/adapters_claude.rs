@@ -1,26 +1,28 @@
 //! SPEC §10.1 Claude fixtures. Each fixture is a real record from this machine,
 //! trimmed to the fields the adapter reads, with prompt and tool text scrubbed.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use skima::adapters::claude::{self, Claude};
-use skima::adapters::{ActorInputs, Adapter, Key, ParseCtx, Parsed, Raw, Session, SkillRoots};
+use skima::adapters::{ActorInputs, Key, Parsed, Raw, Session, SkillRoots};
 use skima::classify::{Classifier, Roots};
 use skima::config::{Config, Home};
 use skima::inventory::Inventory;
 use skima::ledger::{Actor, Agent, Channel, Ledger, Origin};
-use skima::tail::{self, Cursor, Prefilter};
+use skima::tail::Cursor;
 
 const HOME_SKILLS: &str = "/home/nicolas/.claude/skills";
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude").join(name)
+    common::fixture("claude").join(name)
 }
 
 fn home(path: &Path) -> Home {
-    Home { name: "claude".into(), agent: Agent::Claude, path: path.to_path_buf(), links: Default::default() }
+    common::home("claude", Agent::Claude, path)
 }
 
 fn roots() -> SkillRoots {
@@ -31,23 +33,21 @@ fn roots() -> SkillRoots {
     }
 }
 
-fn filter() -> Prefilter {
-    Prefilter::new([HOME_SKILLS])
-}
-
-/// Reads `path` through the real prefilter from `cursor` and parses the chunk.
+/// Reads `path` through the scan's prefilter from `cursor` and parses the chunk.
 fn parse_from(path: &Path, cursor: Option<&Cursor>) -> (Parsed, Cursor) {
-    let chunk = tail::read(path, cursor, &filter()).unwrap();
-    let h = home(Path::new("/nonexistent/.claude"));
-    let roots = roots();
-    let ctx = ParseCtx { home: &h, roots: &roots };
-    (Claude.parse(&ctx, path, None, &chunk), chunk.cursor)
+    common::parse_file(&Claude, &home(Path::new("/nonexistent/.claude")), &roots(), path, cursor)
 }
 
 fn parse(name: &str) -> Vec<Raw> {
     let (p, _) = parse_from(&fixture(name), None);
     assert!(p.unparsed.is_empty(), "{:?}", p.unparsed);
     p.raws
+}
+
+/// Parses every line of a fixture, prefilter bypassed: a no-event fixture
+/// whose records carry no marker still reaches the parser.
+fn parse_all(name: &str) -> Parsed {
+    common::parse_unfiltered(&Claude, &home(Path::new("/nonexistent/.claude")), &roots(), &fixture(name))
 }
 
 fn session(id: &str, entrypoint: &str, subagent: bool, cwd: &str, version: &str) -> Session {
@@ -255,7 +255,11 @@ fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
 
 #[test]
 fn clear_command_yields_nothing() {
-    assert_eq!(parse("clear.jsonl"), vec![]);
+    // The real `/clear` triple: the `isMeta` caveat record, the
+    // `<command-name>` record and the `local_command` system record. None
+    // carries a prefilter marker, so the parser is fed every line.
+    let p = parse_all("clear.jsonl");
+    assert!(p.raws.is_empty() && p.unparsed.is_empty(), "{:?}", p.raws);
 }
 
 #[test]
@@ -270,8 +274,26 @@ fn skill_mention_and_invoked_skills_attachments_yield_nothing() {
 
 #[test]
 fn refused_skill_calls_yield_nothing() {
-    // `disable-model-invocation` and a `PreToolUse:Skill` hook refusal.
-    assert_eq!(parse("refused.jsonl"), vec![]);
+    // `disable-model-invocation` and a `PreToolUse:Skill` hook refusal, each
+    // the assistant `Skill` call and its error result. The results carry no
+    // prefilter marker, so the parser is fed every line.
+    let p = parse_all("refused.jsonl");
+    assert!(p.raws.is_empty() && p.unparsed.is_empty(), "{:?}", p.raws);
+}
+
+#[test]
+fn skill_result_without_success_true_yields_nothing() {
+    // SPEC §4.2 row 1 needs `success: true`. No refusal on this machine has a
+    // `commandName` (they store an error string), so this is the real result
+    // of `pair.jsonl` with `success` flipped.
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("t.jsonl");
+    let result = std::fs::read_to_string(fixture("pair.jsonl")).unwrap().lines().next().unwrap().to_string();
+    let flipped = result.replace(r#""success": true"#, r#""success": false"#);
+    assert_ne!(flipped, result);
+    std::fs::write(&p, flipped + "\n").unwrap();
+    let (parsed, _) = parse_from(&p, None);
+    assert!(parsed.raws.is_empty(), "{:?}", parsed.raws);
 }
 
 #[test]
@@ -342,8 +364,7 @@ fn history_backfill_emits_typed_only_for_known_names_without_a_transcript() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::copy(fixture("history.jsonl"), dir.path().join("history.jsonl")).unwrap();
     let projects = dir.path().join("projects/-home-nicolas-projects-argus");
-    std::fs::create_dir_all(&projects).unwrap();
-    std::fs::write(projects.join(format!("{ARGUS}.jsonl")), "").unwrap();
+    common::write(&projects.join(format!("{ARGUS}.jsonl")), "");
     let known: BTreeSet<String> =
         ["gitmoji-conventional-commit", "grade", "argus", "clear"].iter().map(|s| s.to_string()).collect();
     let typed = |line, sid: &str, ms: u64, ts: &str, skill: &str, cwd: &str| Raw {
@@ -395,8 +416,7 @@ fn history_backfill_emits_typed_only_for_known_names_without_a_transcript() {
 fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical_names() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("skills");
-    std::fs::create_dir_all(source.join("grade")).unwrap();
-    std::fs::write(source.join("grade/SKILL.md"), "x").unwrap();
+    common::write(&source.join("grade/SKILL.md"), "x");
     let claude_home = dir.path().join("claude");
     std::fs::create_dir_all(claude_home.join("projects")).unwrap();
     std::fs::copy(fixture("history.jsonl"), claude_home.join("history.jsonl")).unwrap();
@@ -428,4 +448,68 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     writeln!(h, r#"{{"display":"/grade","pastedContents":{{}},"timestamp":1791921825029,"project":"/x","sessionId":"00000000-0000-0000-0000-000000000000"}}"#).unwrap();
     let second = skima::scan::scan(&cfg, &inv, &data, false).unwrap();
     assert_eq!(second.homes["claude"].new_events.len(), 0);
+}
+
+/// SPEC §4.1 authoring, through a scan. The source sits in a git worktree
+/// built here; the transcript is the real authoring `Read` of
+/// `subagents/agent-a5b86c28fed127eef.jsonl` (cwd `~/dotfiles`) and the real
+/// `pair.jsonl` Skill call, with `~/dotfiles` and `~/.claude` moved under the
+/// temp root and the pair's cwd moved into the worktree. Copies of the `Read`
+/// (new `uuid`) move its cwd.
+#[test]
+fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let dotfiles = root.join("dotfiles");
+    for s in ["gitmoji-conventional-commit", "unslop"] {
+        common::write(&dotfiles.join(format!("skills/{s}/SKILL.md")), "x");
+    }
+    let date = "2026-01-01T00:00:00Z";
+    common::git(&dotfiles, &["init", "-q"], date);
+    common::git(&dotfiles, &["add", "."], date);
+    common::git(&dotfiles, &["commit", "-q", "-m", "skills"], date);
+    let source = dotfiles.join("skills");
+    let inv = Inventory::load(&source).unwrap();
+    assert_eq!(inv.worktree.as_deref(), Some(dotfiles.as_path()));
+
+    let claude_home = root.join("claude");
+    let elsewhere = root.join("elsewhere");
+    let move_paths = |text: String| {
+        text.replace("/home/nicolas/dotfiles", dotfiles.to_str().unwrap())
+            .replace("/home/nicolas/.claude", claude_home.to_str().unwrap())
+            .replace("/home/nicolas/projects/argus", dotfiles.to_str().unwrap())
+    };
+    let read = move_paths(std::fs::read_to_string(fixture("subagents/agent-a5b86c28fed127eef.jsonl")).unwrap());
+    let cwd_field = |p: &Path| format!(r#""cwd": "{}""#, p.display());
+    let read_in = |uuid: &str, cwd: &Path| {
+        read.replace("850b0039-5f37-4f9a-909f-cf9e7084bf15", uuid).replace(&cwd_field(&dotfiles), &cwd_field(cwd))
+    };
+    let home_skill_dir = claude_home.join("skills/gitmoji-conventional-commit");
+    let transcript = [
+        read.clone(),
+        read_in("00000000-0000-4000-8000-000000000001", &home_skill_dir),
+        read_in("00000000-0000-4000-8000-000000000002", &elsewhere),
+        move_paths(std::fs::read_to_string(fixture("pair.jsonl")).unwrap()),
+    ]
+    .concat();
+    common::write(&claude_home.join("projects/p/2e112b1e-0233-4375-99fd-cd21d2102ac1.jsonl"), &transcript);
+
+    let cfg = Config { source, loose: vec![], homes: vec![home(&claude_home)] };
+    let data = root.join("data");
+    skima::scan::scan(&cfg, &inv, &data, false).unwrap();
+    let got: Vec<(String, Channel, Option<String>, bool)> = Ledger::load(&data)
+        .unwrap()
+        .events()
+        .iter()
+        .map(|e| (e.id.clone(), e.channel, e.cwd.clone(), e.authoring))
+        .collect();
+    let s = |p: &Path| Some(p.display().to_string());
+    let want: Vec<(String, Channel, Option<String>, bool)> = vec![
+        ("cc:850b0039-5f37-4f9a-909f-cf9e7084bf15:0:0".into(), Channel::Read, s(&dotfiles), true),
+        ("cc:00000000-0000-4000-8000-000000000001:0:0".into(), Channel::Read, s(&home_skill_dir), true),
+        ("cc:00000000-0000-4000-8000-000000000002:0:0".into(), Channel::Read, s(&elsewhere), false),
+        // The strong Skill call in the worktree is a real use.
+        ("cc:toolu_01EKQ5jSt7RhgFyyw72kyqoY".into(), Channel::Tool, s(&dotfiles), false),
+    ];
+    assert_eq!(got, want);
 }

@@ -10,6 +10,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::common::real_skills;
+
 pub const PI_EXTENSION: &str = "pi-explicit-skills.ts";
 
 const SKIMA_TOML: &str = r#"source = "."
@@ -37,16 +39,8 @@ path  = "~/.pi/agent"
 links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 "#;
 
-/// The skills directory the skill list is read from: `SKIMA_TEST_SKILLS`, or
-/// `~/dotfiles/skills` (test_install.py:12-16 read its own parent).
-pub fn real_skills() -> PathBuf {
-    match std::env::var_os("SKIMA_TEST_SKILLS").filter(|v| !v.is_empty()) {
-        Some(p) => PathBuf::from(p),
-        None => PathBuf::from(std::env::var("HOME").expect("HOME")).join("dotfiles/skills"),
-    }
-}
-
-/// `PI_SKILLS`: sorted non-hidden child directories with a `SKILL.md`.
+/// `PI_SKILLS`: sorted non-hidden child directories of [`real_skills`] with a
+/// `SKILL.md` (test_install.py:12-16 read its own parent).
 pub fn pi_skills() -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(real_skills())
         .expect("SKIMA_TEST_SKILLS is readable")

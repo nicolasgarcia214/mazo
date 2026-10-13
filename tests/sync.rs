@@ -1,6 +1,7 @@
 //! skima's own permanent sync and status tests (SPEC §10.5), beyond the port
 //! of test_install.py.
 
+mod common;
 #[path = "fixtures/sync/harness.rs"]
 mod harness;
 
@@ -21,8 +22,7 @@ fn fixture() -> Fixture {
 fn conflict_in_the_last_home_leaves_zero_writes_in_every_home() {
     let fx = fixture();
     let last = fx.skills.last().unwrap();
-    fs::create_dir_all(&fx.target).unwrap();
-    fs::write(fx.target.join(last), "preserve").unwrap();
+    common::write(&fx.target.join(last), "preserve");
     let before = fx.snapshot();
     let r = fx.skima(&["sync"]);
     assert_eq!(r.code(), 1, "{}", r.stdout());
@@ -101,8 +101,7 @@ fn write_coverage(fx: &Fixture, ages: &[(&str, i64)]) {
             (home.to_string(), serde_json::json!({ "first": null, "last_scan": t.to_string() }))
         })
         .collect();
-    fs::create_dir_all(fx.data.join("skima")).unwrap();
-    fs::write(fx.data.join("skima/coverage.json"), serde_json::Value::Object(map).to_string()).unwrap();
+    common::write(&fx.data.join("skima/coverage.json"), &serde_json::Value::Object(map).to_string());
 }
 
 #[test]
