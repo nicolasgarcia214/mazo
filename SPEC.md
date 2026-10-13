@@ -201,7 +201,7 @@ an event, every parser checks the record type, the role and an anchored prefix.
 | `tool` | strong | The model called Claude's Skill tool, and the load succeeded. |
 | `typed` | strong | A `/name` line in `<home>/history.jsonl` for a session that had no transcript at the home's first scan (§4.2). |
 | `read` | weak | The model read `<skill>/SKILL.md` with a file or shell tool. |
-| `ref` | weak | The model read another file inside the skill directory, such as `references/*.md`. |
+| `ref` | weak | The model read another Markdown file inside the skill directory, such as `references/*.md`. Reading a skill's scripts, tests or `agents/openai.yaml` is not instruction loading and yields no event. |
 
 `read` is weak because it cannot tell reading to follow a skill from reading to
 edit or grade it. On Codex and Pi it is still the main channel. Both hosts hide
@@ -254,8 +254,9 @@ Reports show only `canonical` unless `--all` is given. Each event keeps its raw
 `path`, so a finer split can be computed later without a re-ingest.
 
 **Authoring tag.** A `read` or `ref` event gets `authoring = true` when:
-- the session's cwd is inside the dotfiles worktree that contains the source
-  root, or
+- the event's cwd is inside the dotfiles worktree that contains the source
+  root, or inside any configured home's skills directory (grading or editing
+  skills from `~/.codex/skills` is authoring too), or
 - its root session holds a strong event for `grade`, `retro`,
   `writing-for-agents` or `skill-creator`, anywhere in the ledger.
 

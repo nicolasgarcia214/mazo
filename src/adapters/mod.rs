@@ -105,7 +105,9 @@ impl SkillRoots {
                 return None; // the directory itself, or a loose file
             }
             let real_skill = !name.starts_with('.') && root.join(name).join("SKILL.md").is_file();
-            if self.known.contains(name) || real_skill {
+            // `ref` is instruction text only: scripts, tests and manifests are not loads.
+            let markdown = abs.extension().is_some_and(|e| e == "md");
+            if markdown && (self.known.contains(name) || real_skill) {
                 return Some(SkillFile { skill: name.to_string(), channel: Channel::Ref, path: abs_str });
             }
             return None;
@@ -195,6 +197,7 @@ mod tests {
         assert_eq!((r.skill.as_str(), r.channel), ("grade", Channel::Ref));
         assert!(roots.classify(&format!("{s}/.grades/grade/g.md"), None).is_none());
         assert!(roots.classify("references/x.md", None).is_none());
+        assert!(roots.classify(&format!("{s}/grade/scripts/run.py"), None).is_none(), "scripts are not instructions");
         assert_eq!(roots.classify("/tmp/p/probe/SKILL.md", None).unwrap().skill, "probe");
     }
 }
