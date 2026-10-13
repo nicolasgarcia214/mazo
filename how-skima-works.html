@@ -303,13 +303,15 @@ path  = "~/.claude-work"</pre>
       <tr><td><code>dangling</code> <span class="err">error</span></td><td>a link to a skill you deleted</td><td>removes the link</td></tr>
       <tr><td><code>wrong-link</code> <span class="err">error</span></td><td><code>unslop</code> links to some other folder</td><td>stops and tells you</td></tr>
       <tr><td><code>obstructed</code> <span class="err">error</span></td><td>a real folder named <code>unslop</code> sits where the link should be</td><td>stops and tells you</td></tr>
-      <tr><td><code>foreign</code> info</td><td><code>synced/</code> or Codex's <code>.system/</code></td><td>nothing, it isn't yours</td></tr>
+      <tr><td><code>foreign</code> info</td><td><code>synced/</code>, or a file another tool put there</td><td>nothing, it isn't yours</td></tr>
     </tbody>
   </table></div>
   <p>On this machine today, <code>status</code> should report exactly one error:</p>
 <pre class="term"><span class="p">$ </span>skima status
 <span class="h">claude-work: missing break-invariants</span>
-<span class="c">claude: foreign synced/   codex: foreign .system/ .codex</span></pre>
+<span class="c">claude: foreign synced
+claude-work: foreign synced
+pi: foreign herdr-agent-state.ts</span></pre>
   <h3>Policy checks</h3>
   <p>skima also checks the rules <code>install.sh</code> checks today:</p>
   <ul>
@@ -350,7 +352,7 @@ path  = "~/.claude-work"</pre>
   <p>skima also warns you when a log file mentions a skill marker but produced no event. That is the alarm for an agent changing its log format.</p>
   <h3>What the first build measured</h3>
   <ul>
-    <li>The first scan of this machine read all 469 Pi sessions, 6,111 Codex sessions and 1,858 Claude sessions in about 16 seconds. A second scan added nothing and took 0.19 seconds.</li>
+    <li>The first scan of this machine read all 469 Pi sessions, 6,111 Codex sessions and 1,858 Claude sessions in about 18 seconds. A second scan added nothing and took 0.2 seconds.</li>
     <li>Two independent counting scripts, written from the spec without seeing skima's code, found the same strong loads as skima, ID for ID: 191 slash, 137 tool and 644 typed.</li>
     <li>Two reviewers checked 80 sampled events against their source lines. All 40 strong loads and all 40 reads were correct, and 40 sampled near misses hid no real load.</li>
     <li>All 18 tests of the old <code>install.sh</code> pass against <code>skima sync</code>. On this machine <code>skima status</code> reports one error: <code>claude-work: missing break-invariants</code>.</li>
