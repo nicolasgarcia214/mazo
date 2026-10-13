@@ -11,6 +11,8 @@
 //! - Anything else is unknown; the caller counts it as unparsed when it names a
 //!   skill file.
 
+use crate::config;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reads {
     /// The distinct files read, in order of first read.
@@ -277,10 +279,7 @@ fn plain(p: &str) -> bool {
 
 /// The shell's leading `~/` expansion.
 fn expand_home(p: &str) -> String {
-    match (p.strip_prefix("~/"), std::env::var("HOME")) {
-        (Some(rest), Ok(home)) => format!("{home}/{rest}"),
-        _ => p.to_string(),
-    }
+    config::home_dir().map_or_else(|_| p.to_string(), |home| config::expand_tilde(p, &home))
 }
 
 fn join(base: Option<&str>, p: &str) -> String {
