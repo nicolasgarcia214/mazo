@@ -44,6 +44,11 @@ impl Channel {
     }
 }
 
+/// The serde name of a unit variant, as the ledger and `--json` write it.
+pub fn name(v: impl Serialize) -> String {
+    serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Actor {
@@ -98,13 +103,12 @@ pub fn data_dir() -> Result<PathBuf> {
     if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|x| !x.is_empty()) {
         return Ok(PathBuf::from(x).join("skima"));
     }
-    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".local/share/skima"))
+    Ok(PathBuf::from(crate::config::home_dir()?).join(".local/share/skima"))
 }
 
 /// The ledger, held under `scan.lock` while a scan or reparse writes it.
 pub struct Ledger {
-    pub dir: PathBuf,
+    dir: PathBuf,
     /// Last line per id, in first-appearance order of the id.
     events: Vec<Event>,
     index: HashMap<String, usize>,
@@ -213,21 +217,9 @@ impl Ledger {
         f.sync_data().map_err(err)
     }
 
-    /// Replaces the ledger with `lines` (reparse only): write, fsync, rename.
-    pub fn replace(&mut self, lines: Vec<Event>) -> Result<()> {
-        let path = self.dir.join("events.jsonl");
-        let tmp = self.dir.join("events.jsonl.new");
-        let out = to_lines(&lines);
-        let mut f = File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        f.write_all(out.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        f.sync_all().map_err(|e| format!("{}: {e}", tmp.display()))?;
-        fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.events.clear();
-        self.index.clear();
-        for e in lines {
-            self.keep(e);
-        }
-        Ok(())
+    /// Replaces the ledger file with `lines` (reparse only).
+    pub fn replace(&self, lines: &[Event]) -> Result<()> {
+        write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes())
     }
 }
 
@@ -251,13 +243,19 @@ fn to_lines(events: &[Event]) -> String {
     events.iter().map(|e| serde_json::to_string(e).expect("event serialises") + "\n").collect()
 }
 
-/// Write to a temporary file, fsync it, then rename over `path`, so a crash
-/// leaves either the old or the new file, never a truncated one.
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let tmp = path.with_extension("json.new");
+    write_atomic(path, &serde_json::to_vec(value).expect("state serialises"))
+}
+
+/// Write to `<path>.new`, fsync it, then rename over `path`, so a crash
+/// leaves either the old or the new file, never a truncated one.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".new");
+    let tmp = PathBuf::from(tmp);
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let mut f = File::create(&tmp).map_err(|e| err(&tmp, e))?;
-    f.write_all(&serde_json::to_vec(value).expect("state serialises")).map_err(|e| err(&tmp, e))?;
+    f.write_all(bytes).map_err(|e| err(&tmp, e))?;
     f.sync_all().map_err(|e| err(&tmp, e))?;
     fs::rename(&tmp, path).map_err(|e| err(path, e))
 }

@@ -160,7 +160,7 @@ pub fn scan_with<'a>(
     }
 
     if reparse {
-        ledger.replace(fresh.events().to_vec())?;
+        ledger.replace(fresh.events())?;
     } else {
         ledger.append(&lines)?;
     }

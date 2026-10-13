@@ -23,7 +23,7 @@ pub struct Grade {
     pub stale: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Evals {
     /// The latest grade, by date then filename.
     pub grade: Option<Grade>,

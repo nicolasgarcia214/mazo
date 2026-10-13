@@ -1,7 +1,7 @@
 //! Text rendering helpers shared by reports: aligned tables and sparklines.
 
 /// Column alignment.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub enum Align {
     Left,
     Right,

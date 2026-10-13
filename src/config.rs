@@ -70,7 +70,7 @@ struct RawHome {
 }
 
 /// `$SKIMA_CONFIG`, else `~/dotfiles/skills/skima.toml`.
-pub fn config_path() -> Result<PathBuf> {
+fn config_path() -> Result<PathBuf> {
     match std::env::var_os("SKIMA_CONFIG").filter(|v| !v.is_empty()) {
         Some(p) => Ok(PathBuf::from(p)),
         None => Ok(PathBuf::from(home_dir()?).join("dotfiles/skills/skima.toml")),
@@ -81,7 +81,7 @@ pub fn load() -> Result<Config> {
     load_from(&config_path()?)
 }
 
-pub fn load_from(path: &Path) -> Result<Config> {
+fn load_from(path: &Path) -> Result<Config> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let raw: RawConfig = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let base = path.parent().unwrap_or(Path::new("."));
@@ -106,12 +106,12 @@ pub fn load_from(path: &Path) -> Result<Config> {
     Ok(Config { source, loose: raw.loose, homes })
 }
 
-pub fn home_dir() -> Result<String> {
+pub(crate) fn home_dir() -> Result<String> {
     std::env::var("HOME").ok().filter(|h| !h.is_empty()).ok_or_else(|| "HOME is not set".to_string())
 }
 
 /// `~` alone is `$HOME`; `~/x` is the string `$HOME/x`. No other form expands.
-pub fn expand_tilde(value: &str, home: &str) -> String {
+pub(crate) fn expand_tilde(value: &str, home: &str) -> String {
     if value == "~" {
         home.to_string()
     } else if let Some(rest) = value.strip_prefix("~/") {
@@ -140,7 +140,7 @@ pub fn resolve(base: &Path, p: &str) -> PathBuf {
 
 /// The Pi agent directory from a `PI_CODING_AGENT_DIR`-style value (SPEC §5.6).
 /// The skills directory is `<result>/skills`.
-pub fn pi_agent_dir(value: &str, home: &str, cwd: &Path) -> Result<PathBuf> {
+fn pi_agent_dir(value: &str, home: &str, cwd: &Path) -> Result<PathBuf> {
     let invalid = |reason: &str| format!("invalid PI_CODING_AGENT_DIR: {reason}");
     let mut value = expand_tilde(value, home);
     if value.starts_with("file://") {

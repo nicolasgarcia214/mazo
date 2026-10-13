@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session};
 use crate::ledger::Channel;
-use crate::readcmd::{self, Reads};
 use crate::tail::Chunk;
 
 pub struct Pi;
@@ -87,35 +86,25 @@ impl Entry<'_> {
         Some(self.raw(key, name.to_string(), Channel::Slash, location.to_string()))
     }
 
-    /// `read` and `bash` tool calls on skill files.
+    /// `read` and `bash` tool calls on skill files, one event per skill file
+    /// keyed by its index among the files read.
     fn tool_calls(&self, content: &Value, out: &mut Parsed) {
         let Some(items) = content.as_array() else {
             return;
         };
+        let roots = self.ctx.roots;
         let cwd = self.session.cwd.as_deref();
         for (ci, item) in items.iter().enumerate() {
             if item["type"] != "toolCall" {
                 continue;
             }
             let args = &item["arguments"];
-            match (item["name"].as_str(), args["path"].as_str(), args["command"].as_str()) {
-                (Some("read"), Some(path), _) => self.emit(ci, [path], out),
-                (Some("bash"), _, Some(cmd)) => match readcmd::reads(cmd) {
-                    Reads::Load(files) => self.emit(ci, files.iter().map(String::as_str), out),
-                    Reads::NotLoad => {}
-                    Reads::Unknown if self.ctx.roots.names_skill_doc(cmd, cwd) => out.unparsed.push(cmd.to_string()),
-                    Reads::Unknown => {}
-                },
-                _ => {}
-            }
-        }
-    }
-
-    /// One event per skill file among `files`, keyed by its index in `files`.
-    fn emit<'f>(&self, ci: usize, files: impl IntoIterator<Item = &'f str>, out: &mut Parsed) {
-        let cwd = self.session.cwd.as_deref();
-        for (fi, f) in files.into_iter().enumerate() {
-            if let Some(sf) = self.ctx.roots.classify(f, cwd) {
+            let found = match (item["name"].as_str(), args["path"].as_str(), args["command"].as_str()) {
+                (Some("read"), Some(path), _) => roots.classify(path, cwd).map(|sf| (0, sf)).into_iter().collect(),
+                (Some("bash"), _, Some(cmd)) => roots.shell_reads(cmd, cwd, &mut out.unparsed),
+                _ => continue,
+            };
+            for (fi, sf) in found {
                 let key = format!("pi:{}@{}:{ci}:{fi}", self.id, self.ts);
                 out.raws.push(self.raw(key, sf.skill, sf.channel, sf.path));
             }

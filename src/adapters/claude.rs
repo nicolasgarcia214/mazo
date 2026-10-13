@@ -14,14 +14,11 @@ use serde_json::Value;
 use super::{ActorInputs, Adapter, Key, ParseCtx, Parsed, Raw, Session};
 use crate::config::Home;
 use crate::ledger::Channel;
-use crate::readcmd::{self, Reads};
 use crate::tail::Chunk;
 
 pub struct Claude;
 
 const BASE_DIR: &str = "Base directory for this skill: ";
-/// Length kept of an unparsed command sample.
-const SAMPLE: usize = 200;
 
 impl Adapter for Claude {
     fn parse(&self, ctx: &ParseCtx, path: &Path, _header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
@@ -144,33 +141,22 @@ fn blocks(content: &Value) -> impl Iterator<Item = &Value> {
     content.as_array().into_iter().flatten()
 }
 
-/// Rows 4–5: `Read` and `Bash` tool calls on skill files.
+/// Rows 4–5: `Read` and `Bash` tool calls on skill files, one event per skill
+/// file keyed by its index among the files read.
 fn assistant(ctx: &ParseCtx, r: &Record, out: &mut Parsed) {
     let Some(uuid) = r.v["uuid"].as_str() else { return };
+    let cwd = r.session.cwd.as_deref();
     for (ci, b) in blocks(r.content()).enumerate() {
         if b["type"] != "tool_use" {
             continue;
         }
         let input = &b["input"];
-        match (b["name"].as_str(), input["file_path"].as_str(), input["command"].as_str()) {
-            (Some("Read"), Some(file), _) => push_reads(ctx, r, uuid, ci, &[file], out),
-            (Some("Bash"), _, Some(cmd)) => match readcmd::reads(cmd) {
-                Reads::Load(files) => push_reads(ctx, r, uuid, ci, &files, out),
-                Reads::Unknown if ctx.roots.names_skill_doc(cmd, r.session.cwd.as_deref()) => {
-                    out.unparsed.push(cmd.chars().take(SAMPLE).collect())
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-}
-
-/// One `read`/`ref` event per skill file, keyed by its index among the files read.
-fn push_reads(ctx: &ParseCtx, r: &Record, uuid: &str, ci: usize, files: &[impl AsRef<str>], out: &mut Parsed) {
-    let cwd = r.session.cwd.as_deref();
-    for (fi, f) in files.iter().enumerate() {
-        if let Some(sf) = ctx.roots.classify(f.as_ref(), cwd) {
+        let found = match (b["name"].as_str(), input["file_path"].as_str(), input["command"].as_str()) {
+            (Some("Read"), Some(file), _) => ctx.roots.classify(file, cwd).map(|sf| (0, sf)).into_iter().collect(),
+            (Some("Bash"), _, Some(cmd)) => ctx.roots.shell_reads(cmd, cwd, &mut out.unparsed),
+            _ => continue,
+        };
+        for (fi, sf) in found {
             out.raws.push(r.raw(format!("cc:{uuid}:{ci}:{fi}"), sf.skill, sf.channel, Some(sf.path), false));
         }
     }
