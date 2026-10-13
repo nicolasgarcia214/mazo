@@ -1,0 +1,2 @@
+{"version":1,"runId":"bc7fedd026b5b396","entryId":"c725fb8a","stopReason":"stop","createdAt":"2026-09-05T03:23:17.264Z"}
+{"type":"message","id":"d7e9796d","parentId":"407f4df2","timestamp":"2026-09-11T03:25:29.274Z","message":{"role":"user","content":[{"type":"text","text":"<skill name=\"goal-smart\" location=\"/home/nicolas/.pi/agent/skills/goal-smart/SKILL.md\">\n[scrubbed]"}]}}

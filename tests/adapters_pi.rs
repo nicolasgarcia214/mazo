@@ -1,0 +1,320 @@
+//! Pi adapter fixtures (SPEC §10.1 Pi). Each fixture is real session records,
+//! trimmed to the lines that matter, with prose scrubbed.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use skima::adapters::{Adapter, Key, Parent, ParseCtx, Parsed, SkillRoots, pi};
+use skima::classify::{self, Roots};
+use skima::config::Home;
+use skima::ledger::{Actor, Agent, Channel};
+use skima::tail::{self, Prefilter};
+
+const PI_SKILLS: &str = "/home/nicolas/.pi/agent/skills";
+const SOURCE: &str = "/home/nicolas/dotfiles/skills";
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/pi")
+        .join(name)
+}
+
+fn home(path: &Path) -> Home {
+    Home {
+        name: "pi".into(),
+        agent: Agent::Pi,
+        path: path.to_path_buf(),
+        links: Default::default(),
+    }
+}
+
+fn roots() -> SkillRoots {
+    let known = [
+        "blast-radius",
+        "goal-investigate",
+        "goal-smart",
+        "grade",
+        "unslop",
+        "writing-for-agents",
+    ];
+    SkillRoots {
+        source: SOURCE.into(),
+        home_skills: vec![PI_SKILLS.into()],
+        known: known.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+fn parse(path: &Path) -> Parsed {
+    let roots = roots();
+    let h = home(Path::new("/nonexistent"));
+    let ctx = ParseCtx {
+        home: &h,
+        roots: &roots,
+    };
+    let chunk = tail::read(path, None, &Prefilter::new([SOURCE, PI_SKILLS])).unwrap();
+    let header = tail::first_line(path).unwrap();
+    pi::Pi.parse(&ctx, path, header.as_deref(), &chunk)
+}
+
+/// `(key, skill, channel, path, line)` of every raw event.
+fn events(p: &Parsed) -> Vec<(String, String, Channel, String, u64)> {
+    p.raws
+        .iter()
+        .map(|r| {
+            let Key::Plain(k) = &r.key else {
+                panic!("pi keys are plain")
+            };
+            (
+                k.clone(),
+                r.skill.clone(),
+                r.channel,
+                r.path.clone().unwrap(),
+                r.line,
+            )
+        })
+        .collect()
+}
+
+fn ev(
+    key: &str,
+    skill: &str,
+    channel: Channel,
+    path: &str,
+    line: u64,
+) -> (String, String, Channel, String, u64) {
+    (key.into(), skill.into(), channel, path.into(), line)
+}
+
+#[test]
+fn skill_block_is_a_slash_load() {
+    let p = parse(&fixture("slash.jsonl"));
+    assert_eq!(
+        events(&p),
+        [ev(
+            "pi:d7e9796d@2026-09-11T03:25:29.274Z",
+            "goal-smart",
+            Channel::Slash,
+            "/home/nicolas/.pi/agent/skills/goal-smart/SKILL.md",
+            2
+        )]
+    );
+    let r = &p.raws[0];
+    assert_eq!(r.ts, "2026-09-11T03:25:29.274Z");
+    assert_eq!(r.session.id, "01a08e7c-3bde-7380-9061-4c05706c4214");
+    assert_eq!(r.session.cwd.as_deref(), Some("/home/nicolas/dotfiles"));
+    assert_eq!(
+        (r.session.parent.as_ref(), r.session.actor.subagent),
+        (None, false)
+    );
+    assert_eq!(r.session.version, None);
+    assert!(!r.name_origin);
+    assert!(!p.skipped && p.unparsed.is_empty());
+}
+
+#[test]
+fn placeholder_block_in_a_tool_result_is_no_event() {
+    let p = parse(&fixture("placeholder.jsonl"));
+    assert!(p.raws.is_empty() && p.unparsed.is_empty() && !p.skipped);
+}
+
+#[test]
+fn placeholders_fail_the_location_check_even_in_a_user_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("s.jsonl");
+    let header = r#"{"type":"session","version":3,"id":"s","timestamp":"t","cwd":"/w"}"#;
+    let user = |text: &str| {
+        let msg = serde_json::json!({"type":"message","id":"e","parentId":null,"timestamp":"t",
+            "message":{"role":"user","content":[{"type":"text","text":text}]}});
+        msg.to_string()
+    };
+    let lines = [
+        user(r#"<skill name="..." location="...">"#),
+        user(r#"<skill name="{name}" location="{location}">"#),
+        user(r#"<skill name="${skill.name}" location="${skill.filePath}">"#),
+        user(r#"<skill name="x" location="x/SKILL.md">"#),
+        user(r#"see <skill name="x" location="/s/x/SKILL.md">"#),
+    ];
+    std::fs::write(&f, format!("{header}\n{}\n", lines.join("\n"))).unwrap();
+    assert!(parse(&f).raws.is_empty());
+}
+
+#[test]
+fn read_tool_calls_resolve_against_the_header_cwd() {
+    let p = parse(&fixture("read.jsonl"));
+    let key = |i: u32| format!("pi:5f2d97ca@2026-09-11T03:25:57.990Z:{i}:0");
+    let read = |i, skill| {
+        ev(
+            &key(i),
+            skill,
+            Channel::Read,
+            &format!("{SOURCE}/{skill}/SKILL.md"),
+            2,
+        )
+    };
+    // Items 0-1 are thinking/text, 2 `install.sh`, 3 the loose `skills/SKILLS_USAGE.md`,
+    // 8 a bash call, 9 a doc outside every skill root.
+    assert_eq!(
+        events(&p),
+        [
+            read(4, "unslop"),
+            read(5, "writing-for-agents"),
+            read(6, "grade"),
+            read(7, "blast-radius")
+        ]
+    );
+    // The bash call chains `date` (outside the grammar) with `find skills -name SKILL.md`.
+    assert_eq!(p.unparsed.len(), 1);
+    assert!(p.unparsed[0].starts_with("find skills -maxdepth 3 -type f | sort; "));
+}
+
+#[test]
+fn noisy_bash_loop_is_unparsed_not_an_event() {
+    let p = parse(&fixture("bash_loop.jsonl"));
+    let ts = "427b7087@2026-09-07T04:34:07.893Z";
+    let r = |i: u32, skill: &str, rest: &str, ch| {
+        ev(
+            &format!("pi:{ts}:{i}:0"),
+            skill,
+            ch,
+            &format!("{PI_SKILLS}/{skill}/{rest}"),
+            2,
+        )
+    };
+    // Item 0 is the `for p in …; do wc -l "$p"; done` loop, item 5 `subagents_list`.
+    assert_eq!(
+        events(&p),
+        [
+            r(1, "goal-smart", "references/pi-goals.md", Channel::Ref),
+            r(
+                2,
+                "goal-smart",
+                "references/artifact-contract.md",
+                Channel::Ref
+            ),
+            r(
+                3,
+                "goal-smart",
+                "references/multi-agent-policy.md",
+                Channel::Ref
+            ),
+            r(4, "goal-investigate", "SKILL.md", Channel::Read),
+        ]
+    );
+    assert_eq!(p.unparsed.len(), 1);
+    assert!(
+        p.unparsed[0]
+            .starts_with("for p in /home/nicolas/.pi/agent/skills/goal-smart/references/{")
+    );
+}
+
+#[test]
+fn run_state_line_one_is_skipped() {
+    // Line 1 is a herdr run-state record; line 2 would be a slash load in a session.
+    let p = parse(&fixture("not_session.jsonl"));
+    assert!(p.skipped && p.raws.is_empty());
+}
+
+/// Copies the fork pair into a temp Pi home's sessions dir, pointing the child's
+/// `parentSession` at the copied parent as Pi would.
+fn fork_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let real = "/home/nicolas/.pi/agent/sessions/--home-nicolas-zama-fhevm--";
+    let slug = dir.path().join("sessions/--home-nicolas-zama-fhevm--");
+    copy_tree(&fixture("fork"), &slug, &|s: String| {
+        s.replace(real, slug.to_str().unwrap())
+    });
+    dir
+}
+
+fn copy_tree(from: &Path, to: &Path, edit: &dyn Fn(String) -> String) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            copy_tree(&e.path(), &target, edit);
+        } else {
+            std::fs::write(&target, edit(std::fs::read_to_string(e.path()).unwrap())).unwrap();
+        }
+    }
+}
+
+#[test]
+fn files_lists_session_jsonl_only_in_basename_order() {
+    let dir = fork_dir();
+    // The copy also holds a `.jsonl.herdr-complete.json` run-state file and Markdown artifacts.
+    let names: Vec<String> = pi::Pi
+        .files(&home(dir.path()))
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "2026-09-24T15-53-01-067Z_01a0d41e-c38a-711d-84da-d0caa2649403.jsonl",
+            "2026-09-24T15-54-52-685Z_b7296a7d765078e4.jsonl",
+        ]
+    );
+}
+
+#[test]
+fn fork_copies_share_keys_and_the_child_roots_to_the_parent() {
+    let dir = fork_dir();
+    let files = pi::Pi.files(&home(dir.path()));
+    let (parent, child) = (parse(&files[0]), parse(&files[1]));
+    let ts = "d3accda9@2026-09-24T15:54:01.424Z";
+    let expected = [
+        ev(
+            &format!("pi:{ts}:2:0"),
+            "writing-for-agents",
+            Channel::Read,
+            &format!("{PI_SKILLS}/writing-for-agents/SKILL.md"),
+            2,
+        ),
+        ev(
+            &format!("pi:{ts}:3:0"),
+            "unslop",
+            Channel::Read,
+            &format!("{PI_SKILLS}/unslop/SKILL.md"),
+            2,
+        ),
+        ev(
+            "pi:0a4d3ba5@2026-09-24T15:54:05.000Z:0:0",
+            "writing-for-agents",
+            Channel::Ref,
+            &format!("{PI_SKILLS}/writing-for-agents/references/pi-runtime.md"),
+            3,
+        ),
+    ];
+    assert_eq!(events(&parent), expected);
+    assert_eq!(events(&child), expected);
+    let keys: BTreeSet<_> = parent
+        .raws
+        .iter()
+        .chain(&child.raws)
+        .map(|r| format!("{:?}", r.key))
+        .collect();
+    assert_eq!(keys.len(), 3);
+
+    let parent_id = "01a0d41e-c38a-711d-84da-d0caa2649403";
+    let s = &child.raws[0].session;
+    assert_eq!(s.id, "d97aa721-d793-439c-9039-1fba426c0f34");
+    assert_eq!(s.parent, Some(Parent::Pi(files[0].clone())));
+    assert_eq!(classify::actor(Agent::Pi, &s.actor), Actor::Subagent);
+    assert_eq!(
+        classify::actor(Agent::Pi, &parent.raws[0].session.actor),
+        Actor::Main
+    );
+    let h = home(dir.path());
+    assert_eq!(
+        Roots::default().root(&h, &s.id, s.parent.as_ref()),
+        parent_id
+    );
+    assert_eq!(
+        pi::header_id_parent(&tail::first_line(&files[1]).unwrap().unwrap()),
+        Some((s.id.clone(), Some(files[0].clone())))
+    );
+    assert_eq!(
+        pi::header_id_parent(&tail::first_line(&files[0]).unwrap().unwrap()),
+        Some((parent_id.into(), None))
+    );
+}
