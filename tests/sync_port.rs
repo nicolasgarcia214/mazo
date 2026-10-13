@@ -1,6 +1,7 @@
 //! The 18 cases of `dotfiles/skills/tests/test_install.py`, ported to drive
 //! `skima sync` (SPEC §5.7 step 3, §10.5). Line numbers cite test_install.py.
 
+mod common;
 #[path = "fixtures/sync/harness.rs"]
 mod harness;
 

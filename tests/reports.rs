@@ -1,12 +1,14 @@
 //! SPEC §10.1 Fan-in, Held and Evals, plus the report rules of §4.1 (filters,
 //! collapse, sess, authoring) on small fixture ledgers.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+mod common;
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use common::{copy_tree, git, real_skills, write};
 use serde_json::Value;
-use skima::config::{Config, Home};
+use skima::config::Config;
 use skima::evals;
 use skima::inventory::{self, Inventory};
 use skima::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
@@ -43,41 +45,10 @@ fn ev(id: &str, skill: &str, channel: Channel, session: &str, ts: &str) -> Event
     }
 }
 
-fn git(dir: &Path, args: &[&str], date: &str) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
-        .args(args)
-        .env("GIT_AUTHOR_DATE", date)
-        .env("GIT_COMMITTER_DATE", date)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-}
-
-fn write(path: &Path, text: &str) {
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    for e in std::fs::read_dir(from).unwrap().flatten() {
-        let dest = to.join(e.file_name());
-        if e.path().is_dir() {
-            std::fs::create_dir_all(&dest).unwrap();
-            copy_dir(&e.path(), &dest);
-        } else {
-            std::fs::copy(e.path(), dest).unwrap();
-        }
-    }
-}
-
 /// The fixture skills committed on 2026-01-01, plus `fresh`, which is never committed.
 fn fixture_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reports/skills"), dir.path());
+    copy_tree(&common::fixture("reports/skills"), dir.path(), &|s| s);
     git(dir.path(), &["init", "-q"], NOW);
     git(dir.path(), &["add", "."], NOW);
     git(dir.path(), &["commit", "-q", "-m", "skills"], "2026-01-01T00:00:00Z");
@@ -92,8 +63,7 @@ struct World {
 }
 
 fn world(source: &Path) -> World {
-    let home =
-        |name: &str, agent| Home { name: name.into(), agent, path: source.join(name), links: Default::default() };
+    let home = |name: &str, agent| common::home(name, agent, &source.join(name));
     let cfg = Config {
         source: source.into(),
         loose: vec![],
@@ -136,10 +106,6 @@ fn counts(r: &Value) -> [u64; 6] {
 
 // ---------------------------------------------------------------- fan-in
 
-fn real_skills() -> PathBuf {
-    std::env::var_os("SKIMA_TEST_SKILLS").map_or_else(|| "/home/nicolas/dotfiles/skills".into(), PathBuf::from)
-}
-
 fn citers(g: &inventory::Graph, b: &str) -> BTreeSet<String> {
     g.iter().filter(|(_, cited)| cited.contains(b)).map(|(a, _)| a.clone()).collect()
 }
@@ -173,7 +139,7 @@ fn fan_in_on_the_real_repo_matches_spec_counts() {
     assert!(g.iter().all(|(a, cited)| !cited.contains(a)), "no self-edges");
 
     let actual: String = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a} -> {b}\n"))).collect();
-    let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reports/fanin_edges.txt");
+    let snapshot = common::fixture("reports/fanin_edges.txt");
     let expected = std::fs::read_to_string(&snapshot).unwrap();
     assert!(actual == expected, "fan-in edge set changed; new snapshot for {}:\n{actual}", snapshot.display());
 }

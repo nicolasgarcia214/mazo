@@ -1,7 +1,10 @@
 //! Strict YAML differential (SPEC §10.5): `strict_yaml.rs` against the
 //! verbatim PyYAML `PolicyLoader` in `tests/policy_loader.py`, over a synthetic
-//! corpus and every real skill, grade and retro file in `~/dotfiles/skills`.
+//! corpus and every real skill, grade and retro file in the real skills
+//! directory (`SKIMA_TEST_SKILLS`, or `~/dotfiles/skills`).
 //! Both sides must agree on accept/reject and on the typed value tree.
+
+mod common;
 
 use serde_json::{Value, json};
 use skima::strict_yaml::{self, Yaml};
@@ -484,12 +487,14 @@ fn generated_scalars() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every real input from `~/dotfiles/skills`: SKILL.md, grade and retro
-/// frontmatter, and `agents/openai.yaml`.
+/// Every real input from the real skills directory: SKILL.md, grade and retro
+/// frontmatter, and `agents/openai.yaml`. A missing directory fails the test
+/// unless `SKIMA_SKIP_PYDIFF=1`.
 fn real_files() -> Vec<Case> {
-    let root = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("dotfiles/skills");
+    let root = common::real_skills();
     if !root.is_dir() {
-        eprintln!("strict_yaml_diff: {} not found; real files skipped", root.display());
+        assert!(skip_allowed(), "{} not found; set SKIMA_TEST_SKILLS, or SKIMA_SKIP_PYDIFF=1 to skip", root.display());
+        eprintln!("strict_yaml_diff: {} not found; real files SKIPPED (SKIMA_SKIP_PYDIFF=1)", root.display());
         return Vec::new();
     }
     let mut paths: Vec<(Mode, PathBuf)> = Vec::new();
@@ -570,6 +575,10 @@ fn sort_sets(value: &mut Value) {
     }
 }
 
+fn skip_allowed() -> bool {
+    std::env::var("SKIMA_SKIP_PYDIFF").as_deref() == Ok("1")
+}
+
 fn python_available() -> bool {
     Command::new("python3")
         .args(["-c", "import yaml"])
@@ -602,7 +611,7 @@ fn run_python(cases: &[Case]) -> Vec<Value> {
 #[test]
 fn strict_yaml_matches_pyyaml_policy_loader() {
     if !python_available() {
-        if std::env::var("SKIMA_SKIP_PYDIFF").as_deref() == Ok("1") {
+        if skip_allowed() {
             eprintln!("strict_yaml_diff: SKIPPED (python3 with PyYAML not found, SKIMA_SKIP_PYDIFF=1)");
             return;
         }

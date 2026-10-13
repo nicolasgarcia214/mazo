@@ -1,6 +1,8 @@
 //! SPEC §10.4 ingest properties and the F1 criteria, run against temporary
 //! Claude homes built from the real fixtures in `tests/fixtures/claude`.
 
+mod common;
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
@@ -53,7 +55,7 @@ const TRANSCRIPTS: [(&str, &str); 15] = [
 const PAIR_ID: &str = "cc:toolu_01EKQ5jSt7RhgFyyw72kyqoY";
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude").join(name)
+    common::fixture("claude").join(name)
 }
 
 fn fixture_lines(name: &str) -> Vec<String> {
@@ -74,16 +76,10 @@ impl Env {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("dotfiles/skills");
         for s in ["unslop", "gitmoji-conventional-commit", "grade"] {
-            fs::create_dir_all(source.join(s)).unwrap();
-            fs::write(source.join(s).join("SKILL.md"), "x").unwrap();
+            common::write(&source.join(s).join("SKILL.md"), "x");
         }
         let source = fs::canonicalize(source).unwrap();
-        let home = |name: &str| Home {
-            name: name.into(),
-            agent: Agent::Claude,
-            path: tmp.path().join(name).join(".claude"),
-            links: Default::default(),
-        };
+        let home = |name: &str| common::home(name, Agent::Claude, &tmp.path().join(name).join(".claude"));
         let mut homes = vec![home("claude")];
         homes.extend(empty_homes.iter().map(|n| home(n)));
         fs::create_dir_all(&homes[0].path).unwrap();
@@ -543,8 +539,7 @@ fn reparse_into_an_empty_data_dir_equals_a_first_scan() {
 #[test]
 fn a_torn_ledger_tail_does_not_swallow_the_next_append() {
     let env = Env::new(&[("slash.jsonl", "slash.jsonl")], &[]);
-    fs::create_dir_all(&env.data).unwrap();
-    fs::write(env.data.join("events.jsonl"), "{\"v\":1,\"id\"").unwrap();
+    common::write(&env.data.join("events.jsonl"), "{\"v\":1,\"id\"");
     env.scan();
     let fresh = env.tmp.path().join("fresh");
     env.scan_in(&fresh, false);
