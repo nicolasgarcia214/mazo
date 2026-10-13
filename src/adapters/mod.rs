@@ -143,7 +143,9 @@ pub struct Parsed {
 
 pub trait Adapter {
     /// Transcript files of a home, sorted by basename (SPEC §6.2 Scan order).
-    fn files(&self, home: &Home) -> Vec<PathBuf>;
+    fn files(&self, home: &Home) -> Vec<PathBuf> {
+        jsonl_files(&home.transcripts())
+    }
     /// Parses the prefiltered lines of one file. `header` is line 1 of the file.
     fn parse(&self, ctx: &ParseCtx, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
 }

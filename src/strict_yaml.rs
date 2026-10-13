@@ -99,13 +99,18 @@ impl fmt::Display for Yaml {
 /// The frontmatter of a SKILL.md, grade or retro file, extracted as
 /// `install.sh:141-145` does and loaded with [`load`].
 pub fn frontmatter(text: &str) -> crate::Result<Yaml> {
+    load(&split_frontmatter(text)?.0)
+}
+
+/// `(frontmatter YAML, body)` per the SPEC §5.4 extraction rules, both joined with `\n`.
+pub fn split_frontmatter(text: &str) -> crate::Result<(String, String)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let lines = splitlines(text);
     if lines.first() != Some(&"---") {
         return Err("SKILL.md must start with YAML frontmatter".into());
     }
     let end = lines[1..].iter().position(|l| *l == "---").ok_or("YAML frontmatter has no closing --- line")? + 1;
-    load(&lines[1..end].join("\n"))
+    Ok((lines[1..end].join("\n"), lines[end + 1..].join("\n")))
 }
 
 /// Python's `str.splitlines()`.

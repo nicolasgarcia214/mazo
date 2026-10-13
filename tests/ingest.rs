@@ -550,3 +550,25 @@ fn a_torn_ledger_tail_does_not_swallow_the_next_append() {
     env.scan_in(&fresh, false);
     assert_eq!(ids(&env.data), ids(&fresh));
 }
+
+#[test]
+fn coverage_first_is_filled_once_a_home_gets_transcripts() {
+    let env = Env::new(&TRANSCRIPTS, &["empty"]);
+    env.scan();
+    assert_eq!(env.coverage()["empty"].first, None);
+    let dir = env.cfg.homes[1].path.join("projects/p");
+    fs::create_dir_all(&dir).unwrap();
+    fs::copy(fixture("pair.jsonl"), dir.join("pair.jsonl")).unwrap();
+    env.scan();
+    assert!(env.coverage()["empty"].first.is_some(), "a home that gains transcripts gets its first timestamp");
+}
+
+#[test]
+fn a_skill_result_for_a_known_but_removed_skill_stays_canonical() {
+    let mut env = Env::new(&[("pair.jsonl", "pair.jsonl")], &[]);
+    env.inv.skills.remove("unslop"); // pruned from the repo, still in git history (known)
+    env.scan();
+    let tool = events(&env.data).into_iter().find(|e| e.channel == skima::ledger::Channel::Tool).unwrap();
+    assert_eq!(tool.skill, "unslop");
+    assert_eq!(tool.origin, skima::ledger::Origin::Canonical);
+}

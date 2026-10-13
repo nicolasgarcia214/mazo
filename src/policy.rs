@@ -35,7 +35,7 @@ fn check_skill(dir: &Path, name: &str) -> crate::Result<()> {
         return Err("SKILL.md must omit disable-model-invocation; Claude invocation lives in skillOverrides".into());
     }
     let description = match meta.get("description") {
-        Some(Yaml::Str(d)) if !d.trim().is_empty() => d,
+        Some(Yaml::Str(d)) if !d.trim_matches(python_space).is_empty() => d,
         _ => return Err("SKILL.md must declare its skill name and a nonempty description".into()),
     };
     if !matches!(meta.get("name"), Some(Yaml::Str(n)) if n == name) {
@@ -51,6 +51,11 @@ fn check_skill(dir: &Path, name: &str) -> crate::Result<()> {
         Some(policy @ Yaml::Map(_)) if policy.get("allow_implicit_invocation") == Some(&Yaml::Bool(false)) => Ok(()),
         _ => Err("agents/openai.yaml must set policy.allow_implicit_invocation: false".into()),
     }
+}
+
+/// Python's `str.isspace()`: Unicode whitespace plus the separators U+001C–U+001F.
+fn python_space(c: char) -> bool {
+    c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
 }
 
 /// `[a-z0-9]+(-[a-z0-9]+)*`
@@ -113,7 +118,7 @@ pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff:
             .and_then(|t| t.parse::<jiff::Timestamp>().ok());
         let stale = match last {
             None => true,
-            Some(t) => now.as_second() - t.as_second() > limit,
+            Some(t) => days <= 7 || now.as_second() - t.as_second() > limit,
         };
         if stale {
             let when = last.map_or("never".to_string(), |t| t.strftime("%Y-%m-%d").to_string());

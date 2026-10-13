@@ -9,7 +9,7 @@ use crate::adapters::{self, Adapter, ParseCtx, SkillRoots};
 use crate::classify::{Classifier, Roots};
 use crate::config::Config;
 use crate::inventory::Inventory;
-use crate::ledger::{self, Agent, Channel, Coverage, Event, Ledger};
+use crate::ledger::{self, Agent, Channel, Event, Ledger};
 use crate::tail::{self, Cursors, Prefilter};
 
 #[derive(Debug, Default)]
@@ -62,8 +62,8 @@ pub fn scan_with<'a>(
     let filter = Prefilter::new(std::iter::once(source.as_str()).chain(home_skills.iter().map(String::as_str)));
 
     let mut report = ScanReport::default();
+    let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut lines: Vec<Event> = Vec::new();
-    let now = jiff::Timestamp::now().to_string();
     let files: Vec<Vec<PathBuf>> = cfg.homes.iter().map(|h| adapter_for(h.agent).files(h)).collect();
 
     // Reparse builds a new ledger that starts with every typed event and every
@@ -84,10 +84,12 @@ pub fn scan_with<'a>(
         let mut roots_cache = Roots::default();
         let mut hr = HomeReport::default();
         let first_scan = !coverage.contains_key(&home.name);
+        let need_first = coverage.get(&home.name).is_none_or(|c| c.first.is_none());
         let mut earliest: Option<String> = None;
 
         for path in files {
             let key = path.to_string_lossy().into_owned();
+            listed.insert(key.clone());
             let chunk = match tail::read(&path, cursors.get(&key), &filter) {
                 Ok(c) => c,
                 Err(e) => {
@@ -102,7 +104,7 @@ pub fn scan_with<'a>(
                 }
             };
             hr.files += 1;
-            if first_scan
+            if need_first
                 && let Some(ts) = first_timestamp(&path)
                 && earliest.as_ref().is_none_or(|e| ts < *e)
             {
@@ -117,7 +119,7 @@ pub fn scan_with<'a>(
             hr.unparsed += parsed.unparsed.len();
             for s in parsed.unparsed {
                 if hr.unparsed_samples.len() < 5 {
-                    hr.unparsed_samples.push(s);
+                    hr.unparsed_samples.push(s.chars().take(200).collect());
                 }
             }
             if parsed.raws.is_empty() && !parsed.skipped && has_canary(&chunk) {
@@ -146,10 +148,12 @@ pub fn scan_with<'a>(
             }
         }
 
-        let entry =
-            coverage.entry(home.name.clone()).or_insert_with(|| Coverage { first: earliest.clone(), last_scan: None });
+        let entry = coverage.entry(home.name.clone()).or_default();
+        if entry.first.is_none() {
+            entry.first = earliest;
+        }
         if hr.io_errors.is_empty() {
-            entry.last_scan = Some(now.clone());
+            entry.last_scan = Some(jiff::Timestamp::now().to_string());
         }
         report.homes.insert(home.name.clone(), hr);
     }
@@ -159,6 +163,8 @@ pub fn scan_with<'a>(
     } else {
         ledger.append(&lines)?;
     }
+    // Transcripts Claude cleaned up keep no cursor.
+    cursors.retain(|k, _| listed.contains(k));
     ledger::write_json(&data.join("cursors.json"), &cursors)?;
     ledger::save_coverage(data, &coverage)?;
     Ok(report)

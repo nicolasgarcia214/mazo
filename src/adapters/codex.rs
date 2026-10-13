@@ -1,12 +1,12 @@
 //! Codex rollouts (SPEC §4.3): `$name` expansions and shell reads of skill
 //! files, keyed by a hash of the record payload so fork copies collapse.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
 use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session, SkillRoots};
-use crate::config::{self, Home};
+use crate::config::{self};
 use crate::ledger::Channel;
 use crate::readcmd::{self, Reads};
 use crate::tail::Chunk;
@@ -14,10 +14,6 @@ use crate::tail::Chunk;
 pub struct Codex;
 
 impl Adapter for Codex {
-    fn files(&self, home: &Home) -> Vec<PathBuf> {
-        super::jsonl_files(&home.transcripts())
-    }
-
     fn parse(&self, ctx: &ParseCtx, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let mut out = Parsed::default();
         let Some(Header { session, guardian }) = header.and_then(parse_header) else {
@@ -45,14 +41,16 @@ impl Adapter for Codex {
                 Some("custom_tool_call") if payload["name"] == "exec" => {
                     let input = payload["input"].as_str().unwrap_or_default();
                     let mut found = Vec::new();
+                    let mut opaque = false;
                     for (i, call) in exec_calls(input).iter().enumerate() {
                         match call {
                             Ok(c) => found.extend(read_events(ctx.roots, &session, i, c, &mut out.unparsed)),
-                            Err(()) if ctx.roots.names_skill_doc(input, session.cwd.as_deref()) => {
-                                out.unparsed.push(input.to_string())
-                            }
-                            Err(()) => {}
+                            Err(()) => opaque = true,
                         }
+                    }
+                    // One record counts once, however many calls in it are opaque.
+                    if opaque && ctx.roots.names_skill_doc(input, session.cwd.as_deref()) {
+                        out.unparsed.push(input.to_string());
                     }
                     found
                 }
@@ -242,9 +240,11 @@ fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
     let mut workdir = None;
     i += 1;
     loop {
+        let entry_start = i;
         i = skip_ws(s, i);
         match s.get(i) {
-            None => break,
+            // `)` or `]` here means the object was never closed: stop, do not spin.
+            None | Some(b')') | Some(b']') => break,
             Some(b'}') => {
                 i += 1;
                 break;
@@ -284,6 +284,9 @@ fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
             Some("cmd") => cmd = Some(value.ok_or(())),
             Some("workdir") => workdir = value,
             _ => {}
+        }
+        if i == entry_start {
+            break; // malformed input that no rule consumes
         }
     }
     let call = match cmd {
@@ -450,6 +453,15 @@ mod tests {
 
     fn calls(src: &str) -> Vec<Option<(String, Option<String>)>> {
         exec_calls(src).into_iter().map(|c| c.ok().map(|c| (c.cmd, c.workdir))).collect()
+    }
+
+    #[test]
+    fn unclosed_objects_end_instead_of_spinning() {
+        // A missing `}` once made the scanner loop forever while holding scan.lock.
+        let r = exec_calls("tools.exec_command({cmd: 'cat /s/a/SKILL.md')");
+        assert_eq!(r.len(), 1);
+        let r = exec_calls("tools.exec_command({a: [1, 2]], cmd: 'x'})");
+        assert_eq!(r.len(), 1);
     }
 
     #[test]

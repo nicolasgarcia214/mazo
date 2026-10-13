@@ -7,7 +7,7 @@
 //! never read.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -24,10 +24,6 @@ const BASE_DIR: &str = "Base directory for this skill: ";
 const SAMPLE: usize = 200;
 
 impl Adapter for Claude {
-    fn files(&self, home: &Home) -> Vec<PathBuf> {
-        super::jsonl_files(&home.transcripts())
-    }
-
     fn parse(&self, ctx: &ParseCtx, path: &Path, _header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let in_subagents = path.to_string_lossy().contains("/subagents/");
         let mut out = Parsed::default();

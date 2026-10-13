@@ -38,8 +38,6 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 5] = [Channel::Slash, Channel::Tool, Channel::Typed, Channel::Read, Channel::Ref];
-
     /// Strong channels feed the headline `sess` column; weak ones never do (SPEC §4.1).
     pub fn strong(self) -> bool {
         matches!(self, Channel::Slash | Channel::Tool | Channel::Typed)
@@ -198,11 +196,7 @@ impl Ledger {
             return Ok(());
         }
         let path = self.dir.join("events.jsonl");
-        let mut out = String::new();
-        for e in lines {
-            out.push_str(&serde_json::to_string(e).expect("event serialises"));
-            out.push('\n');
-        }
+        let mut out = to_lines(lines);
         let err = |e: std::io::Error| format!("{}: {e}", path.display());
         let mut f = OpenOptions::new().create(true).read(true).append(true).open(&path).map_err(err)?;
         // A crash mid-append leaves a torn last line. Appending to it would make
@@ -223,11 +217,7 @@ impl Ledger {
     pub fn replace(&mut self, lines: Vec<Event>) -> Result<()> {
         let path = self.dir.join("events.jsonl");
         let tmp = self.dir.join("events.jsonl.new");
-        let mut out = String::new();
-        for e in &lines {
-            out.push_str(&serde_json::to_string(e).expect("event serialises"));
-            out.push('\n');
-        }
+        let out = to_lines(&lines);
         let mut f = File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         f.write_all(out.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
         f.sync_all().map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -257,11 +247,19 @@ pub(crate) fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> 
     }
 }
 
+fn to_lines(events: &[Event]) -> String {
+    events.iter().map(|e| serde_json::to_string(e).expect("event serialises") + "\n").collect()
+}
+
+/// Write to a temporary file, fsync it, then rename over `path`, so a crash
+/// leaves either the old or the new file, never a truncated one.
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let tmp = path.with_extension("json.new");
-    let bytes = serde_json::to_vec_pretty(value).expect("state serialises");
-    fs::write(&tmp, bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    let mut f = File::create(&tmp).map_err(|e| err(&tmp, e))?;
+    f.write_all(&serde_json::to_vec(value).expect("state serialises")).map_err(|e| err(&tmp, e))?;
+    f.sync_all().map_err(|e| err(&tmp, e))?;
+    fs::rename(&tmp, path).map_err(|e| err(path, e))
 }
 
 #[cfg(test)]

@@ -121,7 +121,13 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
                 Ok(_) => State::Obstructed,
             };
             match state {
-                State::Missing => plan.actions.push(Action::Link { source: src.clone(), path: path.clone() }),
+                State::Missing => {
+                    // Two homes can share a directory (PI_CODING_AGENT_DIR pointing at another home).
+                    let link = Action::Link { source: src.clone(), path: path.clone() };
+                    if !plan.actions.contains(&link) {
+                        plan.actions.push(link);
+                    }
+                }
                 State::WrongLink | State::Obstructed => {
                     plan.conflicts.push(format!(
                         "ERROR: {} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
@@ -141,6 +147,8 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
             .flatten()
             .map(|e| e.path())
             .filter(|p| !t.entries.iter().any(|(n, _)| p.file_name().is_some_and(|f| f == n.as_str())))
+            // install.sh pruned `"$dir"/*`, which skips hidden names.
+            .filter(|p| p.file_name().is_some_and(|f| !f.to_string_lossy().starts_with('.')))
             .collect();
         others.sort();
         for path in others {

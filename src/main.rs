@@ -102,6 +102,11 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
         }
         Cmd::Unused { since, json } => with_scanned(&cfg, &inv, |input| Ok(report::unused(input, since, json, tty))),
         Cmd::Show { skill, since, limit, json } => {
+            // A usage error (exit 2), caught before paying for a scan.
+            if !inv.skills.contains(&skill) && !inv.known.contains(&skill) {
+                eprintln!("ERROR: unknown skill: {skill}");
+                return Ok(ExitCode::from(2));
+            }
             with_scanned(&cfg, &inv, |input| report::show(input, &skill, since, limit, json, tty))
         }
         Cmd::Status { agent, json } => cmd_status(&cfg, &inv, agent, json),

@@ -55,7 +55,8 @@ fn git_skill_names(source: &Path) -> BTreeSet<String> {
 
 /// Runs `git -C dir args…` and returns stdout on success.
 pub fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    // Reports run `git status`; without this it may rewrite the index under the user.
+    let out = Command::new("git").arg("--no-optional-locks").arg("-C").arg(dir).args(args).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -85,7 +86,7 @@ pub fn fan_in(source: &Path, skills: &BTreeSet<String>) -> Graph {
 /// backticks removed and each whitespace run collapsed to one space.
 fn citing_text(dir: &Path) -> String {
     let skill_md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
-    let mut parts = vec![strip_frontmatter(&skill_md).to_string()];
+    let mut parts = vec![crate::strict_yaml::split_frontmatter(&skill_md).map_or(skill_md, |(_, body)| body)];
     let mut stack = vec![dir.join("references")];
     let mut refs = Vec::new();
     while let Some(d) = stack.pop() {
@@ -101,22 +102,6 @@ fn citing_text(dir: &Path) -> String {
     refs.sort();
     parts.extend(refs.iter().filter_map(|p| std::fs::read_to_string(p).ok()));
     parts.join(" ").replace('`', "").split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// The text after the closing `---` of a leading frontmatter block; the whole
-/// text when there is none.
-fn strip_frontmatter(text: &str) -> &str {
-    let Some(rest) = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n")) else {
-        return text;
-    };
-    let mut offset = 0;
-    for line in rest.split_inclusive('\n') {
-        offset += line.len();
-        if line.trim_end_matches(['\n', '\r']) == "---" {
-            return &rest[offset..];
-        }
-    }
-    text
 }
 
 /// When the skill was first committed to the source repo (following renames of

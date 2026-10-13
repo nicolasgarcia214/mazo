@@ -8,7 +8,6 @@ use regex::Regex;
 use serde_json::Value;
 
 use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session};
-use crate::config::Home;
 use crate::ledger::Channel;
 use crate::readcmd::{self, Reads};
 use crate::tail::Chunk;
@@ -20,10 +19,6 @@ static SKILL_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^<skill name="([^"]+)" location="([^"]+)">"#).expect("valid regex"));
 
 impl Adapter for Pi {
-    fn files(&self, home: &Home) -> Vec<PathBuf> {
-        super::jsonl_files(&home.transcripts())
-    }
-
     fn parse(&self, ctx: &ParseCtx, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let Some(session) = header.and_then(session_of_header) else {
             return Parsed { skipped: true, ..Parsed::default() };

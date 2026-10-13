@@ -176,3 +176,58 @@ fn dry_run_on_a_clean_tree_prints_nothing() {
     assert_eq!(clean.stdout(), "");
     assert_eq!(clean.stderr(), "");
 }
+
+// Regression tests for the code-review findings.
+
+#[test]
+fn retention_of_seven_days_or_less_always_warns() {
+    let fx = fixture();
+    fx.skima(&["sync"]).assert_ok();
+    let mut settings: serde_json::Value = serde_json::from_str(&fx.valid_settings()).unwrap();
+    settings["cleanupPeriodDays"] = 5.into();
+    fs::write(fx.settings(".claude"), settings.to_string()).unwrap();
+    write_coverage(&fx, &[("claude", 0), ("claude-work", 0)]);
+    let r = fx.skima(&["status"]);
+    r.assert_ok();
+    assert!(r.stderr().contains("warning: claude: last scanned"), "{}", r.stderr());
+    assert!(!r.stderr().contains("warning: claude-work"), "{}", r.stderr());
+}
+
+#[test]
+fn two_homes_sharing_a_directory_sync_once() {
+    let mut fx = fixture();
+    let codex = fx.home.join(".codex");
+    fx.set_env("PI_CODING_AGENT_DIR", Some(&codex));
+    fx.skima(&["sync"]).assert_ok();
+    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), "");
+}
+
+#[test]
+fn a_description_of_only_python_whitespace_is_rejected() {
+    let fx = fixture();
+    let skill = fx.source.join(&fx.skills[0]).join("SKILL.md");
+    let name = &fx.skills[0];
+    fs::write(&skill, format!("---\nname: {name}\ndescription: \"\\x1f\"\n---\n\n# Test\n")).unwrap();
+    let r = fx.skima(&["sync", "--agent", "pi"]);
+    assert_eq!(r.code(), 1);
+    assert!(r.stderr().contains("nonempty description"), "{}", r.stderr());
+}
+
+#[test]
+fn hidden_dangling_links_are_not_pruned() {
+    let fx = fixture();
+    fx.skima(&["sync"]).assert_ok();
+    let hidden = fx.home.join(".claude/skills/.gone");
+    std::os::unix::fs::symlink(fx.source.join(".gone"), &hidden).unwrap();
+    fx.skima(&["sync"]).assert_ok();
+    assert!(hidden.is_symlink(), "install.sh's `*` glob never pruned hidden names");
+}
+
+#[test]
+fn show_of_an_unknown_skill_is_a_usage_error() {
+    let fx = fixture();
+    let r = fx.skima(&["show", "no-such-skill"]);
+    assert_eq!(r.code(), 2);
+    assert!(r.stderr().contains("unknown skill: no-such-skill"), "{}", r.stderr());
+    assert!(!fx.data.join("skima/events.jsonl").exists(), "no scan before the usage error");
+}

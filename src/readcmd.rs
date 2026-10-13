@@ -34,8 +34,8 @@ pub fn reads(cmd: &str) -> Reads {
         }
         if first[0] == "cd" && stages.len() == 1 {
             match first.get(1..) {
-                Some([dir]) => {
-                    base = Some(join(base.as_deref(), dir));
+                Some([dir]) if plain(dir) => {
+                    base = Some(join(base.as_deref(), &expand_home(dir)));
                     continue;
                 }
                 _ => return Reads::Unknown,
@@ -61,7 +61,10 @@ pub fn reads(cmd: &str) -> Reads {
             None => return Reads::Unknown,
         }
     }
-    if not_load {
+    // A reader mixed with non-readers matches neither rule: unparsed, not silent.
+    if not_load && !files.is_empty() {
+        Reads::Unknown
+    } else if not_load {
         Reads::NotLoad
     } else if files.is_empty() {
         Reads::Unknown
@@ -335,5 +338,9 @@ mod tests {
         assert_eq!(reads("cat \"$HOME/s/SKILL.md\""), Reads::Unknown);
         assert_eq!(reads("sed -i 's/a/b/' /s/a/SKILL.md"), Reads::Unknown);
         assert_eq!(reads("for f in a b; do cat $f; done"), Reads::Unknown);
+        assert_eq!(reads("ls /s && cat /s/a/SKILL.md"), Reads::Unknown);
+        assert_eq!(reads("cd $D && cat SKILL.md"), Reads::Unknown);
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(reads("cd ~/s && cat a/SKILL.md"), load(&[&format!("{home}/s/a/SKILL.md")]));
     }
 }

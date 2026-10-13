@@ -103,7 +103,7 @@ impl Classifier<'_> {
             Key::Codex { hash, index } => format!("cx:{session}:{hash}:{index}"),
         };
         let origin = if raw.name_origin {
-            self.name_origin(&raw.skill)
+            self.name_origin(&raw.skill, raw.channel)
         } else {
             self.path_origin(&raw.skill, raw.path.as_deref())
         };
@@ -134,10 +134,12 @@ impl Classifier<'_> {
         }
     }
 
-    /// Claude Skill results and typed history: the name alone decides. A typed
-    /// line is canonical only for a skill canonical now (SPEC §4.2, E15).
-    fn name_origin(&self, skill: &str) -> Origin {
-        if self.inv.skills.contains(skill) { Origin::Canonical } else { Origin::Other }
+    /// Claude Skill results and typed history: the name alone decides. A Skill
+    /// result needs a known name (SPEC §4.1), so renamed or pruned skills keep their
+    /// events; a typed line needs a skill canonical now (SPEC §4.2, E15).
+    fn name_origin(&self, skill: &str, channel: crate::ledger::Channel) -> Origin {
+        let names = if channel == crate::ledger::Channel::Typed { &self.inv.skills } else { &self.inv.known };
+        if names.contains(skill) { Origin::Canonical } else { Origin::Other }
     }
 
     fn path_origin(&self, skill: &str, path: Option<&str>) -> Origin {

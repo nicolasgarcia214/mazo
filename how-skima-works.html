@@ -131,7 +131,7 @@ footer { margin-top: 56px; font-size: .85rem; color: var(--muted); }
     <li><span>Does every agent home see exactly the right skills, with the right settings?</span></li>
   </ol>
   <p style="margin-top:14px">The idea comes from <a href="https://www.moltenbase.com/">MoltenBase</a>, which does usage tracking and syncing for teams. skima is the one-person version. It drops accounts, cloud sync and the web dashboard. It adds three things a single person with a git repo of skills needs: a usage history that never expires, a source line for every number, and a link to your existing <code>grade</code> and <code>retro</code> results.</p>
-  <p>It runs in the terminal and its output is plain text. Add <code>--json</code> when an agent needs to read it.</p>
+  <p>It's a single Rust binary that runs in the terminal, and its output is plain text. Add <code>--json</code> when an agent needs to read it.</p>
 </section>
 
 <section id="why">
@@ -177,12 +177,12 @@ footer { margin-top: 56px; font-size: .85rem; color: var(--muted); }
       <tr><td><code>tool</code></td><td><span class="pill strong">strong</span></td><td>Claude called its Skill tool for <code>unslop</code> and the call succeeded.</td></tr>
       <tr><td><code>typed</code></td><td><span class="pill strong">strong</span></td><td>An old <code>/unslop</code> line in <code>~/.claude/history.jsonl</code> whose session file is already deleted. Recovered once, on the first scan. Plugin commands such as <code>/argus:triage</code> don't count.</td></tr>
       <tr><td><code>read</code></td><td><span class="pill weak">weak</span></td><td>The model ran <code>sed -n '1,200p' unslop/SKILL.md</code>.</td></tr>
-      <tr><td><code>ref</code></td><td><span class="pill weak">weak</span></td><td>The model read <code>unslop/references/prose-tells.md</code>.</td></tr>
+      <tr><td><code>ref</code></td><td><span class="pill weak">weak</span></td><td>The model read <code>unslop/references/prose-tells.md</code>. Reading a skill's scripts or tests doesn't count: those aren't instructions.</td></tr>
     </tbody>
   </table></div>
   <p>Reads are weak because a read can mean two things. The model may be reading <code>grade/SKILL.md</code> to follow it, or because you asked it to edit or grade that skill. skima can't always tell which.</p>
   <p>Reads still matter a lot. Codex and Pi hide skills from the model, so your <code>AGENTS.md</code> rule makes the model read <code>SKILL.md</code> by path instead. One planner counted 1,472 Codex reads against 167 <code>$name</code> loads. Ignoring reads would undercount Codex about tenfold. Adding them to the headline would count your skill editing as skill use. So reads get their own columns and are never added to the headline number.</p>
-  <p>To reduce the editing noise, skima marks a read as "authoring" when the session runs inside your dotfiles repo, or when the same session also loaded <code>grade</code>, <code>retro</code>, <code>writing-for-agents</code> or <code>skill-creator</code>. Authoring reads are hidden unless you pass <code>--authoring</code>.</p>
+  <p>To reduce the editing noise, skima marks a read as "authoring" when the session runs inside your dotfiles repo or an agent's skills folder, or when the same session also loaded <code>grade</code>, <code>retro</code>, <code>writing-for-agents</code> or <code>skill-creator</code>. Authoring reads are hidden unless you pass <code>--authoring</code>.</p>
   <h3>Who loaded it</h3>
   <p>Each event also records who was at the keyboard, called the actor:</p>
   <ul>
@@ -332,9 +332,9 @@ path  = "~/.claude-work"</pre>
     <li>Delete <code>skills/install.sh</code>.</li>
     <li>Port its tests to drive <code>skima sync</code>.</li>
     <li>Update every reference to it (the skills README, <code>GOAL_SKILLS_USAGE.md</code>, the Pi integration test, the dotfiles README) until a search for <code>install.sh</code> comes back empty.</li>
-    <li>Add a step to the top-level dotfiles installer that clones skima, installs it with <code>uv tool install</code> and runs <code>skima sync</code>.</li>
+    <li>Add a step to the top-level dotfiles installer that clones skima, installs it with <code>cargo install</code> and runs <code>skima sync</code>.</li>
   </ol>
-  <p>The cost: a fresh machine now needs a second repo and <code>uv</code> to install skills. The spec accepts that so skima can have its own tests and releases.</p>
+  <p>The cost: a fresh machine now needs a second repo and a Rust toolchain to install skills. The spec accepts that so skima can have its own tests and releases.</p>
 </section>
 
 <section id="proof">
@@ -348,6 +348,13 @@ path  = "~/.claude-work"</pre>
     <li><strong>Live runs.</strong> A throwaway probe skill is loaded for real by <code>claude -p</code>, <code>codex exec</code> and Pi, and skima must report exactly those three loads.</li>
   </ul>
   <p>skima also warns you when a log file mentions a skill marker but produced no event. That is the alarm for an agent changing its log format.</p>
+  <h3>What the first build measured</h3>
+  <ul>
+    <li>The first scan of this machine read all 469 Pi sessions, 6,111 Codex sessions and 1,858 Claude sessions in about 16 seconds. A second scan added nothing and took 0.19 seconds.</li>
+    <li>Two independent counting scripts, written from the spec without seeing skima's code, found the same strong loads as skima, ID for ID: 191 slash, 137 tool and 644 typed.</li>
+    <li>Two reviewers checked 80 sampled events against their source lines. All 40 strong loads and all 40 reads were correct, and 40 sampled near misses hid no real load.</li>
+    <li>All 18 tests of the old <code>install.sh</code> pass against <code>skima sync</code>. On this machine <code>skima status</code> reports one error: <code>claude-work: missing break-invariants</code>.</li>
+  </ul>
 </section>
 
 <section id="plan">
