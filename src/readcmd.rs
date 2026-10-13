@@ -190,8 +190,7 @@ fn reader_files(words: &[String]) -> Option<Vec<String>> {
     let (verb, args) = words.split_first()?;
     let verb = if verb.starts_with('/') { verb.rsplit('/').next()? } else { verb.as_str() };
     let files = match verb {
-        "cat" | "bat" | "less" => flags_then_files(args, &[])?,
-        "nl" => flags_then_files(args, &[])?,
+        "cat" | "bat" | "less" | "nl" => flags_then_files(args, &[])?,
         "head" | "tail" => flags_then_files(args, &["-n", "-c"])?,
         "sed" => sed_files(args)?,
         _ => return None,

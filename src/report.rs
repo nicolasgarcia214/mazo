@@ -345,20 +345,14 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
             let is_new = inventory::first_commit(&input.inv.source, skill).is_none_or(|t| start.is_some_and(|s| t > s));
             let (holders, others): (Vec<String>, Vec<String>) =
                 citers(skill).into_iter().partition(|a| used.contains(a.as_str()));
-            let status = if is_new {
-                "new"
-            } else if !holders.is_empty() {
-                "held"
+            let (status, holders, cluster) = if is_new {
+                ("new", Vec::new(), Vec::new())
+            } else if holders.is_empty() {
+                ("unused", Vec::new(), others)
             } else {
-                "unused"
+                ("held", holders, Vec::new())
             };
-            UnusedRow {
-                skill: skill.clone(),
-                status,
-                holders: if status == "held" { holders } else { Vec::new() },
-                cluster: if status == "unused" { others } else { Vec::new() },
-                weak_only: weak.contains(skill.as_str()),
-            }
+            UnusedRow { skill: skill.clone(), status, holders, cluster, weak_only: weak.contains(skill.as_str()) }
         })
         .collect();
     let rank = |s: &str| ["unused", "held", "new"].iter().position(|x| *x == s);
