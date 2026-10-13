@@ -51,7 +51,7 @@ pub fn reads(cmd: &str) -> Reads {
                     return Reads::Unknown;
                 }
                 for p in paths {
-                    let p = join(base.as_deref(), &p);
+                    let p = join(base.as_deref(), &expand_home(&p));
                     if !files.contains(&p) {
                         files.push(p);
                     }
@@ -173,9 +173,12 @@ fn strip(words: &[String]) -> Vec<String> {
 }
 
 /// The files a reader stage reads, or `None` if the stage is not a reader.
+/// `command cat` and `/usr/bin/cat` are `cat`.
 fn reader_files(words: &[String]) -> Option<Vec<String>> {
+    let words = if words.first().is_some_and(|w| w == "command") { &words[1..] } else { words };
     let (verb, args) = words.split_first()?;
-    let files = match verb.as_str() {
+    let verb = if verb.starts_with('/') { verb.rsplit('/').next()? } else { verb.as_str() };
+    let files = match verb {
         "cat" | "bat" | "less" => flags_then_files(args, &[])?,
         "nl" => flags_then_files(args, &[])?,
         "head" | "tail" => flags_then_files(args, &["-n", "-c"])?,
@@ -232,15 +235,18 @@ fn sed_files(args: &[String]) -> Option<Vec<String>> {
     (quiet && script.is_some_and(|s| range_print(&s))).then_some(files)
 }
 
-/// `N p`, `N,M p`, with `$` allowed as an address and an optional trailing `;`.
+/// One or more `;`-separated `Np` / `N,Mp` commands, `$` allowed as an address.
 fn range_print(script: &str) -> bool {
-    let s = script.trim().trim_end_matches(';');
-    let Some(range) = s.strip_suffix('p') else { return false };
     let addr = |a: &str| a == "$" || (!a.is_empty() && a.bytes().all(|b| b.is_ascii_digit()));
-    match range.split_once(',') {
-        Some((a, b)) => addr(a) && addr(b),
-        None => addr(range),
-    }
+    let one = |cmd: &str| {
+        let Some(range) = cmd.trim().strip_suffix('p') else { return false };
+        match range.split_once(',') {
+            Some((a, b)) => addr(a) && addr(b),
+            None => addr(range),
+        }
+    };
+    let s = script.trim().trim_end_matches(';');
+    !s.is_empty() && s.split(';').all(one)
 }
 
 /// A later pipeline stage that only passes lines through, reading no file.
@@ -254,9 +260,18 @@ fn pass_through(words: &[String]) -> bool {
     }
 }
 
-/// A path with no shell expansion left in it.
+/// A path with no shell expansion left in it, other than a leading `~/`.
 fn plain(p: &str) -> bool {
-    !p.contains(['$', '*', '?', '[', '~'])
+    let rest = p.strip_prefix("~/").unwrap_or(p);
+    !rest.contains(['$', '*', '?', '[', '~'])
+}
+
+/// The shell's leading `~/` expansion.
+fn expand_home(p: &str) -> String {
+    match (p.strip_prefix("~/"), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) => format!("{home}/{rest}"),
+        _ => p.to_string(),
+    }
 }
 
 fn join(base: Option<&str>, p: &str) -> String {
@@ -282,6 +297,11 @@ mod tests {
         assert_eq!(reads("head -n 40 x/SKILL.md"), load(&["x/SKILL.md"]));
         assert_eq!(reads("nl -ba /s/a/SKILL.md"), load(&["/s/a/SKILL.md"]));
         assert_eq!(reads("bat --plain /s/a/SKILL.md"), load(&["/s/a/SKILL.md"]));
+        assert_eq!(reads("sed -n '1,80p;120,300p' /s/a/x.sh"), load(&["/s/a/x.sh"]));
+        assert_eq!(reads("/usr/bin/cat /s/a/SKILL.md"), load(&["/s/a/SKILL.md"]));
+        assert_eq!(reads("command cat /s/a/SKILL.md"), load(&["/s/a/SKILL.md"]));
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(reads("cat ~/s/a/SKILL.md"), load(&[&format!("{home}/s/a/SKILL.md")]));
     }
 
     #[test]

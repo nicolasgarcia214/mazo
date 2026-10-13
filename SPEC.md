@@ -438,7 +438,11 @@ and Pi `read` rows use the same definition.
   `head`, `tail`, `nl -ba`, `bat` or `less`, each naming files inside skill
   directories. Several reads may be chained with `&&` or `;`, whether they are
   chunks of one file or different files. Each distinct file read emits one
-  event.
+  event. A reader may also name files outside skills; only the skill files
+  emit events. `sed -n` may print several ranges (`'1,80p;120,300p'`).
+- `cd <dir>` segments are allowed and rebase later relative paths, and a
+  leading `~/` is expanded, because both are common in real reads
+  (`cd ~/dotfiles/skills && cat grade/SKILL.md`).
 - **A pipeline** is a load when its first stage is a reader and every later
   stage only passes lines through (`nl`, `cat`, `head`, `tail`, `sed -n`), as
   in `sed -n '1,200p' f | nl`. Only the last stage's output reaches the model,
@@ -1177,8 +1181,11 @@ each against its source record. The two then reconcile.
   Python script (`json.dumps(sort_keys=True, separators=(",", ":"),
   ensure_ascii=False)`), not by skima. One fixed payload with nested, unsorted and non-ASCII
   keys, a float and an integer above 2^53 must hash to a pinned `cx:` id.
-  `serde_json` is used with default features only (no `preserve_order`,
-  `arbitrary_precision` or `float_roundtrip`). The pin exists so a change in serialisation (for
+  `serde_json` is used with `float_roundtrip` on and no `preserve_order` or
+  `arbitrary_precision`. Without `float_roundtrip`, serde's fast float parser
+  can be one ULP off (a real Codex payload carries `create_time:
+  1791311493.9632053`), so the re-serialised payload and its id would depend
+  on that approximation instead of the value. The pin exists so a change in serialisation (for
   example, a dependency turning on `serde_json/preserve_order`) fails a test
   instead of silently duplicating every Codex event.
 - A conflict in the last home leaves zero writes in every home, checked with

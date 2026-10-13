@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session, SkillRoots};
+use super::{ActorInputs, Adapter, Key, Parent, ParseCtx, Parsed, Raw, Session};
 use crate::config::Home;
 use crate::ledger::Channel;
 use crate::readcmd::{self, Reads};
