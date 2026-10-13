@@ -61,3 +61,68 @@ pub fn git(dir: &Path, args: &[&str]) -> Option<String> {
 
 /// Fan-in edges: citing skill → cited skills (SPEC §5.3). Filled in by `fan_in`.
 pub type Graph = BTreeMap<String, BTreeSet<String>>;
+
+/// SPEC §5.3: A → B when the body of A's `SKILL.md` (frontmatter dropped) or
+/// any `.md` under `A/references/`, with backticks removed and whitespace
+/// collapsed, contains `the B skill`, `owned by B`, or `B/` as a path
+/// component. Self-edges are dropped. Every skill in `skills` gets a key.
+pub fn fan_in(source: &Path, skills: &BTreeSet<String>) -> Graph {
+    let name = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    let mut graph = Graph::new();
+    for a in skills {
+        let text = citing_text(&source.join(a));
+        let cited = skills.iter().filter(|b| *b != a).filter(|b| {
+            text.contains(&format!("the {b} skill"))
+                || text.match_indices(&format!("owned by {b}")).any(|(i, m)| !text[i + m.len()..].starts_with(name))
+                || text.match_indices(&format!("{b}/")).any(|(i, _)| !text[..i].ends_with(name))
+        });
+        graph.insert(a.clone(), cited.cloned().collect());
+    }
+    graph
+}
+
+/// A skill's citing text: the `SKILL.md` body and every `references/**/*.md`,
+/// backticks removed and each whitespace run collapsed to one space.
+fn citing_text(dir: &Path) -> String {
+    let skill_md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
+    let mut parts = vec![strip_frontmatter(&skill_md).to_string()];
+    let mut stack = vec![dir.join("references")];
+    let mut refs = Vec::new();
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "md") {
+                refs.push(p);
+            }
+        }
+    }
+    refs.sort();
+    parts.extend(refs.iter().filter_map(|p| std::fs::read_to_string(p).ok()));
+    parts.join(" ").replace('`', "").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The text after the closing `---` of a leading frontmatter block; the whole
+/// text when there is none.
+fn strip_frontmatter(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n")) else {
+        return text;
+    };
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        offset += line.len();
+        if line.trim_end_matches(['\n', '\r']) == "---" {
+            return &rest[offset..];
+        }
+    }
+    text
+}
+
+/// When the skill was first committed to the source repo (following renames of
+/// its `SKILL.md`), or None when it has no commit (SPEC F3 `new`).
+pub fn first_commit(source: &Path, skill: &str) -> Option<jiff::Timestamp> {
+    let out = git(source, &["log", "--follow", "--format=%ct", "--", &format!("{skill}/SKILL.md")])?;
+    let secs: i64 = out.lines().last()?.trim().parse().ok()?;
+    jiff::Timestamp::from_second(secs).ok()
+}
