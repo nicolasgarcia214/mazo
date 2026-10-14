@@ -1,22 +1,30 @@
 # skima: specification
 
-skima is a personal skill manager for one person's coding agents. It answers
-three questions from files already on disk:
+skima is a skill manager for one person's coding agents. Anyone on Linux or
+macOS with a skills directory and Claude Code, Codex or Pi can use it. It
+answers five questions from files already on disk:
 
 1. Which of my skills actually load, on which agent, through which channel, and when?
 2. Which skills are dead weight?
 3. Does every agent home see exactly the canonical skill set, with the invocation policy intact?
+4. What is each skill for, how do I use it in practice, and how has it changed?
+5. How well does each skill work in real sessions, and how should it improve?
 
 It is inspired by [MoltenBase](https://www.moltenbase.com/), which offers usage
 tracking, cross-agent sync, team policy and local-first storage. skima keeps
 usage tracking, sync and local-first storage, and drops teams. It adds what one
 person with a git-tracked skills repo needs: a durable usage ledger, provenance
-for every number, and a join with the existing `grade` and `retro` skills.
+for every number, a join with `.grades/` and `.retros/`, a per-skill card, an
+HTML report, lifecycle commands, and an on-demand audit of real use.
 
-This spec merges six independent plans written on 2026-10-12, each based on
-read-only inspection of this machine. §12 lists every fact the design rests
-on, numbered E1–E15, and how each was observed. Other sections cite those numbers instead of
-repeating them.
+Version 1 (§3 F1–F6) merged six independent plans written on 2026-10-12, each
+based on read-only inspection of the author's machine, and shipped on
+2026-10-13. Version 2 (§3 F11–F19) was settled in a design interview on
+2026-10-14, after four independent audits scored version 1 at 5.5 of 10: sound
+ingest, but no progress feedback, thin per-skill insight and personal rules
+hardcoded as errors. §12 lists every fact the design rests on, numbered
+E1–E18, and how each was observed. Other sections cite those numbers instead
+of repeating them.
 
 ---
 
@@ -26,12 +34,17 @@ repeating them.
 |---|---|---|
 | D1 | **Transcripts are the only telemetry source. skima installs no hooks.** | Claude Code, Codex and Pi each write a structured record when a skill loads (§4). Transcripts cover every load channel, subagents included, and give months of history on the first run. A Claude `PreToolUse:Skill` hook would see one channel on one agent, starting the day it was installed, and would be a second event stream to deduplicate. |
 | D2 | **skima keeps its own append-only ledger.** | Claude Code deletes transcripts after `cleanupPeriodDays`, which defaults to 30 and is unset here (E2). skima does not ask for longer retention. A transcript only has to survive until the next scan, and the ledger is the record that survives any retention setting and any future change to the harness's cleanup. |
-| D3 | **Every usage report scans first (`usage`, `unused`, `show`, `runs`). No timer, no daemon.** | A usage report is never stale. `status` and `sync` read links and settings, not transcripts, so they do not scan. Data is lost only if no scan runs for a whole retention window. `status` and every usage report warn before that happens (§5.4). |
-| D4 | **skima absorbs `skills/install.sh` and deletes it in the same change.** | Two tools managing the same links would drift. The hard-coded target list in `install.sh` already caused a real bug (E1). The user's rules forbid keeping a legacy path beside its replacement. |
-| D5 | **Symlinks only. No copy mode, no frontmatter transforms.** | All three hosts read the same `SKILL.md` and follow symlinks. Per-host differences already live in configuration: `skillOverrides` for Claude, `agents/openai.yaml` for Codex, `pi-explicit-skills.ts` for Pi. skima validates those and generates nothing. |
-| D6 | **Rust, one binary, with clap. CLI only. JSONL storage, no SQLite.** | §8 gives the reasons. |
+| D3 | **Every command that reads usage scans first (`usage`, `unused`, `show`, `report`, `audit`, `retire`). No timer, no daemon.** | A usage report is never stale. `status` and `sync` read links and settings, not transcripts, so they do not scan. Data is lost only if no scan runs for a whole retention window. `status` and every usage report warn before that happens (§5.4). |
+| D4 | **skima absorbed `skills/install.sh`, which was deleted in the same change.** | Two tools managing the same links would drift. The hard-coded target list in `install.sh` already caused a real bug (E1). Done on 2026-10-13 (§5.7). |
+| D5 | **Symlinks only. No copy mode, no frontmatter transforms.** | All three hosts read the same `SKILL.md` and follow symlinks. Per-host differences already live in configuration: `skillOverrides` for Claude, `agents/openai.yaml` for Codex, `pi-explicit-skills.ts` for Pi. `sync` validates those and generates nothing; only `skima new` writes skill files, once, at creation. |
+| D6 | **Rust, one binary, with clap. A CLI plus one static HTML report. JSONL storage, no SQLite.** | §8 gives the reasons. The report is a file, not a server, so D3's "no daemon" holds. |
 | D7 | **Every count traces to a `file:line` in a transcript.** | This follows the user's rule that every claim carries its evidence. `skima show` prints the locators, and `retro` can open them. |
 | D8 | **"Unused" is reported with its coverage window.** | "Unused since 2026-09-10 on Claude and since 2026-03-29 on Codex" is a different claim from "never used". Reports say which one they mean. |
+| D9 | **Personal conventions are configuration, off by default.** | Version 1 hardcoded the author's rules (`openai.yaml` policy, Claude `name-only`, the authoring skills), so `sync` refused a plain Agent Skills directory: three of four auditors reproduced the failure. The rules move to a `[policy]` table (§5.4); the author's config turns them all on and behaves exactly as before. |
+| D10 | **Judging runs only when the user types `skima audit`.** | It spends model quota. `scan`, `usage`, `show` and `report` never call a model. Every audit has a budget cap and a `--dry-run` (F18). |
+| D11 | **No prompt text is stored, with one named exception.** | Real examples are read from transcripts at display time and vanish when the transcript does (F15). Audit records hold the judge's paraphrase and verdicts, never quoted prompts (§6.4). The exception is `report.html` (F16): a derived view, overwritten on every run, mode `0600`, under the data directory by default. The ledger and audits may describe client work under NDA. |
+| D12 | **One data model, three renderers.** | Each report builds one struct; text, `--json` and HTML render it. The HTML report shows nothing the JSON lacks, so agents (`grade`, `retro`) and people see the same facts. |
+| D13 | **skima's own audit runs never count as usage.** | An audit is an agent session that reads the skill. Audits run ephemerally where the agent allows it (E16) and in a working directory the scanner skips (F18). |
 
 ## 2. Scope
 
@@ -44,12 +57,13 @@ repeating them.
 - plain local files
 
 **Dropped:**
-- Team policy, accounts, cloud sync and sharing. Multi-machine sync is git's job.
-- A web dashboard or TUI. About 30 skills fit one terminal table, and the other
-  consumers are agents (`retro`, `grade`) that want `--json`.
+- Team policy, accounts and cloud sync. Multi-machine sync is git's job. The
+  tool is shareable; each user runs it on their own skills.
+- A web server, live dashboard or TUI. The HTML report (F16) is one static file.
 - Copy-based sync and per-agent transforms (D5).
-- Adapters for agents that are not installed (E13). An adapter is written only
-  against real transcripts it can be tested on.
+- Adapters for agents beyond Claude Code, Codex and Pi. An adapter is written
+  only against real transcripts it can be tested on (E13); §9 documents the
+  adapter interface for contributors.
 
 **Added:**
 - the durable ledger (D2), plus a one-time backfill of typed `/name` commands
@@ -59,16 +73,20 @@ repeating them.
 - coverage windows (D8)
 - reference awareness, so a hub skill that live skills depend on is never
   offered for retirement (§5.3)
-- a join with `.grades/` and `.retros/` frontmatter (§6.3)
+- a join with `.grades/` and `.retros/` frontmatter, every grade and not only
+  the latest (§6.3)
+- a per-skill card with description, history, examples and audit (F14, F15)
+- an on-demand audit of how a skill performs in real sessions (F18)
+- `init`, `new` and `prune` (F11, F17)
 
 **Non-goals:**
-- Writing harness settings files. skima prints the edits they need, as
-  `install.sh` does today.
-- Judging skill quality, or whether a loaded skill was executed well. `grade`
-  and `retro` own that; skima counts loads.
-- Storing prompt text, command arguments or skill bodies.
+- Writing harness settings files. skima prints the edits they need.
+- Grading the text of a skill. `grade` owns that; skima shows every grade,
+  says when one is stale, and feeds `grade` usage evidence (F19). skima's
+  judging is about real use (F18).
+- Storing prompt text, command arguments or skill bodies (D11).
 - Managing project-scope skills (`<repo>/.claude/skills`).
-- Windows, macOS and network access.
+- Windows. Network access other than the judge agent an audit calls.
 
 ## 3. Features
 
@@ -98,12 +116,14 @@ Every acceptance criterion is proven by a run (§10), not by reading the code.
   - `slash`, `tool`, `typed`, `read`, `ref`: collapsed counts per channel (§4.1)
   - `agents`: the agents with any event, as letters (`C` Claude, `X` Codex,
     `P` Pi)
-  - `last`: the time of the last strong event
-  - `30d`: a sparkline of strong events per day
-  - `grade`: the latest grade score, with `*` if the skill changed after that
-    grade (§6.3)
+  - `last`: the time of the last strong event in the window, `-` when there is
+    none (the all-time last use is in `show`)
+  - `30d`: a sparkline of strong events per day; a day with none prints `·`
+  - `grade`: the latest grade score, followed by `+N` when N commits changed
+    the skill after it, or `+wip` when only uncommitted changes did (§6.3)
 - Strong and weak channels (§4.1) get separate columns and are never summed.
-- A footer prints the coverage window for each home.
+- A footer prints the coverage window for each home and a one-line legend for
+  the agent letters, `·`, `+N` and `+wip` (F12).
 - `--json` emits the same rows.
 
 **F3. `skima unused`: the never-called report.**
@@ -136,13 +156,14 @@ Every acceptance criterion is proven by a run (§10), not by reading the code.
 - Exits 0 when clean and 1 on any error-level finding.
 - Writes nothing. A test proves this by comparing tree snapshots before and after
   a run.
-- On today's machine, it reports exactly one error:
+- On 2026-10-13, before the first `sync`, it reported exactly one error:
   `claude-work: missing break-invariants` (E1).
 
 **F6. `skima sync`: replaces `install.sh`.**
 - Builds the whole plan, policy checks included, before the first write. Any
   conflict or policy failure aborts with zero writes in every home.
-- A second run prints nothing.
+- A second run prints one line, `in sync: <homes> homes, <skills> skills`
+  (F12).
 - Prunes only owned dangling links: absolute links equal to
   `<source>/<basename>` whose target is gone.
 - Links the loose files and each home's `links` entries.
@@ -154,22 +175,174 @@ Every acceptance criterion is proven by a run (§10), not by reading the code.
 - After the first real `sync`, `status` exits 0 and `~/.claude-work/skills`
   contains `break-invariants`.
 
+### Version 2
+
+Settled in the design interview of 2026-10-14. Each item's acceptance criteria are
+proven by a run, like the MVP's.
+
+**F11. `skima init` and the config location.**
+- skima reads `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml`, with
+  `XDG_CONFIG_HOME` defaulting to `~/.config` on Linux and macOS alike. There is
+  no other default (§6.1).
+- With no config, every command except `init` exits 2 with
+  `ERROR: no config at <path>; run skima init --source <skills dir>`.
+- `skima init --source <dir>` writes that file. It lists one home for each of
+  `~/.claude`, `~/.codex` and `~/.pi/agent` that exists, `source` as an
+  absolute path, every `[policy]` boolean `false`, `authoring_skills = []`,
+  and an empty `loose`. It refuses to overwrite an existing file.
+- A fresh `HOME` holding one plain skill (a `SKILL.md` with `name` and
+  `description`, nothing else) and an empty `~/.claude/settings.json`: `init`,
+  then `sync`, exits 0 and links the skill. This is the test three auditors
+  failed on version 1.
+
+**F12. Progress and plain output.**
+- **Progress.** When stderr is a TTY and a scan has run for more than 1 s,
+  skima rewrites one stderr line per home: `scanning codex 1,204/6,111 files`.
+  The line is cleared when the scan ends. Nothing is printed when stderr is not
+  a TTY. No progress crate.
+- **Sync and status.** `sync` with nothing to do prints
+  `in sync: <homes> homes, <skills> skills`; `sync --dry-run` with nothing to
+  do prints the same line. `status` prints one line per home: `<home>: in sync
+  (<n> skills)` when it has no error-level finding, otherwise one plain line
+  per error, such as `claude-work: break-invariants is not linked (missing)`.
+  Info-level findings follow on their own lines in either case, such as
+  `claude: synced is not from the source; left alone (foreign)`. A rule that
+  belongs to a skill rather than a home prints `ERROR: <skill dir>: <reason>`
+  on stderr (§5.5); homes with no error of their own still print `in sync`.
+  Exit codes do not change.
+- **Legend.** `usage` and `unused` end with a legend line (F2).
+- **Paths.** `show` prints `$HOME` as `~` and a transcript as
+  `<agent>:<file name>:<line>` with the full path in `--json`.
+- **Reparse.** `scan --reparse` prints `<home> <n> events (was <m>)`, since
+  `+N` is meaningless after a rewrite.
+
+**F13. Portability.**
+- Policy rules are configuration, off by default (D9, §5.4).
+- `strict_yaml.rs`, its PyYAML differential test and `tests/policy_loader.py`
+  are deleted (§5.4). Every
+  real skill's files pass the replacement, proven by a run of `status` against
+  the author's config, before the deletion lands.
+- The authoring skill names are configuration (§4.1, §6.1).
+- The repository is private on GitHub at first, MIT-licensed, with CI running
+  `cargo test` and `cargo clippy` on Linux and macOS. It installs with
+  `cargo install --git`. The first push is confirmed with the owner.
+- The README opens with a newcomer path: install, `init`, `sync`, `usage`.
+  While the repository is private it says so: only invited users can install
+  from it.
+
+**F14. The skill card: `show <skill>`.** F4's histogram and events stay; the
+card adds, in this order:
+- the `description` from the frontmatter and the skill's path;
+- **history:** the first commit, the last commit touching the skill with its
+  date and subject, and whether the working tree has uncommitted changes;
+- **grades:** every grade, newest first, with date and score, and how many
+  commits changed the skill after the latest one (§6.3);
+- **retros:** every retro with date, score and verdict, and the strong events
+  since the latest;
+- **links:** the skills it cites and the skills that cite it (§5.3), with
+  `held` status;
+- **usage:** strong events by agent and channel, all-time last use, and the
+  top three projects by distinct sessions;
+- **examples** (F15);
+- **audit:** the latest skill-level audit's verdict, rates and top three
+  improvements, with its date and how many sessions it covered (F18).
+- `--json` emits the whole card. It is the contract `grade` reads (F19).
+
+**F15. Examples.**
+- **Written:** the invocation for each configured agent (`/name` on Claude,
+  `$name` on Codex, `/skill:name` on Pi) and `interface.default_prompt` from
+  `agents/openai.yaml` when it exists (E17).
+- **Real:** up to three prompts that loaded the skill, read from transcripts at
+  display time and never stored (D11). Only strong events with actor `main`
+  qualify. skima takes the most recent event per project (cwd), then the three
+  most recent projects. The text is the user prompt that caused the load
+  (§4.7), cut to 300 characters. A candidate whose text, after stripping, is
+  only the invocation or shorter than 20 characters ("yes", "go on") is
+  skipped for the next most recent event in the same project. A `typed` event uses its `history.jsonl`
+  display text, which outlives the transcript.
+- **Curated:** up to three from the latest audit (F18).
+- When a transcript has expired, its example is skipped, not marked.
+
+**F16. `skima report`: the HTML report.**
+- Scans first, then writes one self-contained HTML file: inline CSS, inline
+  SVG charts, no script loaded from anywhere and no network access. Light and
+  dark themes follow `prefers-color-scheme`.
+- Content: the coverage footer, the `usage --all` table (canonical,
+  non-inventory and `other` rows) with each skill's latest audit verdict, a list of stale or missing grades with the command to run
+  (`/grade <skill>`), and one section per skill holding its card (F14).
+- The default output is `<data dir>/report.html`, outside any git repository,
+  written with mode `0600` and overwritten on every run, because the page
+  shows cwds and prompt excerpts (D11). `--out <path>` writes elsewhere and
+  warns when the target is inside a git worktree; `--open` opens it with
+  `xdg-open` or `open`.
+- It renders the same structs as `--json` (D12). A test asserts that every
+  skill in `usage --all --json` appears in the HTML, and that no `src` or `href`
+  attribute points outside the file.
+
+**F17. Lifecycle: `new`, `retire`, `prune`.**
+- **`skima new <name> --description <text>`** validates the name and the
+  description (§5.4),
+  refuses an existing entry, and writes `<source>/<name>/SKILL.md` with
+  frontmatter and a heading. With `codex_manifest` on, it also writes
+  `agents/openai.yaml` with `allow_implicit_invocation: false` and a
+  `default_prompt` naming `$<name>`. With `claude_name_only` on, it prints the
+  `"<name>": "name-only"` line for each Claude home. It never runs `sync`.
+- **`skima retire <name> [--force]`** scans first (D3). It refuses when the
+  skill is `held` (§5.3) or has a strong event in the last 30 days; `--force`
+  overrides both. It then builds the `sync` plan as if the skill were already
+  archived, and aborts with zero writes if that plan has any conflict or
+  policy error. Only then does it move `<source>/<name>` to
+  `<source>/.archive/<name>` (`git mv` when the skill is tracked, so the move
+  is staged) and apply the plan, which prunes the now-dangling links. It prints
+  the settings lines that can go. It never commits.
+- **`skima prune [<name>] [--yes] [--force]`** permanently deletes
+  `<source>/.archive/<name>`, or every entry in `.archive/` without a name. It
+  lists what it will delete and asks for confirmation on a TTY; with no TTY it
+  requires `--yes`, else exits 2. In a git repository it refuses an archived
+  skill holding any file whose content is in no commit, because that work
+  exists nowhere else, unless `--force`. A file is safe when its blob
+  (`git hash-object`) equals the blob at `HEAD:./<name>/<file>` or
+  `HEAD:./.archive/<name>/<file>`, resolved with `git -C <source>` so a
+  source below the repository root works, so a skill moved by `retire` and not yet
+  committed is safe, and a `.gitignore` cannot hide an edit. Outside a git
+  repository it deletes after confirmation. Ledger events, audits, grades and
+  retros of a pruned skill are kept; it is no longer canonical, so `usage`
+  shows it only under `--all`, as a non-inventory row.
+
+**F18. `skima audit <skill>`: judged performance in real use.** §6.4 has the
+design. The audit reports and suggests; it never edits `SKILL.md` or any other
+file in the source. The Claude and Pi judges run with tools disabled; the
+Codex judge, which has no such flag, runs in a read-only sandbox in an empty
+directory. Acceptance:
+- `--dry-run` lists the sessions it would judge, their projects and condensed
+  sizes, and the judge command, and calls nothing.
+- A run judges at most `--limit` sessions (default 20) not yet audited, then
+  writes the skill-level report. A second run with no new sessions calls only
+  the skill-level stage, and only with `--resynth`.
+- Every rate in the report is computed by skima from session records and
+  printed as `n of N` with session sources.
+- The audit's own sessions add no event to the ledger (D13): a scan after an
+  audit appends 0 lines.
+- With the Claude judge, stage-1 calls share 75% of `--max-budget-usd`
+  (default 1) and stage 2 gets the rest (§6.4); no call starts with a cap
+  under $0.01, and a budget under $0.04 is a usage error (exit 2). Stage 2 is
+  skipped only when the last stage-1 call overshot so far that less than
+  $0.01 remains; the run
+  then says so and exits 1. Worst-case spend is the budget plus one call's
+  overshoot.
+- `--json` prints the new skill record, the number of session records written
+  and dropped, and the spend.
+
+**F19. `grade` integration.**
+- skima's side is F2's `+N` and F16's stale-grade list.
+- The `grade` skill gains one step, made in the skills repo through the normal
+  skill-editing flow, not by skima: when `skima` is on `PATH`, run
+  `skima show <skill> --json` and weigh the usage, examples and latest audit as
+  evidence.
+
 ### Later
 
 Each of these is built only when a real need shows up.
-
-**F7. `skima retire <skill>`.**
-- Runs `git mv <skill> .archive/<skill>`. Hidden entries are never installed.
-- Then runs `sync`, which prunes the now-dangling links.
-- Prints the `skillOverrides` keys and the `SKILLS_USAGE.md` lines to remove.
-- Refuses when the skill is `held`, when it has a strong event in the last 60
-  days, or when its path has uncommitted changes. `--force` overrides the first
-  two refusals, never the third.
-- Never commits.
-
-**F8. `skima runs <skill> --json`.** Emits transcript locators for the `retro`
-skill's cross-session mode. The pointer to it is added to `retro/SKILL.md`
-through the user's normal skill-editing flow, not by skima.
 
 **F9. Policy-leak report.** Classifies each `tool` or `read` load by its cause.
 `requested` means the user's prompt for that turn names the skill. `chain` means
@@ -179,9 +352,6 @@ This would replace the hand-run probes behind the README line "loaded 10 of 14
 unprompted runs". It is deferred because the classification is lexical: a
 paraphrased request lands in `unprompted`. It ships only after its precision is
 measured on real sessions.
-
-**F10. Adapters for other agents** (Gemini CLI, Cursor, Amp, Windsurf, Kiro).
-Each is built against fixtures taken from a real session on this machine.
 
 ## 4. Invocation detection
 
@@ -254,11 +424,14 @@ Reports show only `canonical` unless `--all` is given. Each event keeps its raw
 `path`, so a finer split can be computed later without a re-ingest.
 
 **Authoring tag.** A `read` or `ref` event gets `authoring = true` when:
-- the event's cwd is inside the dotfiles worktree that contains the source
-  root, or inside any configured home's skills directory (grading or editing
-  skills from `~/.codex/skills` is authoring too), or
-- its root session holds a strong event for `grade`, `retro`,
-  `writing-for-agents` or `skill-creator`, anywhere in the ledger.
+- the event's cwd is inside the git worktree that contains the source root
+  (the source root itself when it is not in a repository), or inside any
+  configured home's skills directory (grading or editing skills from
+  `~/.codex/skills` is authoring too), or
+- its root session holds a strong event for a skill named in
+  `policy.authoring_skills` (§6.1), anywhere in the ledger. The list is empty
+  by default; the author's config names `grade`, `retro`, `writing-for-agents`
+  and `skill-creator`.
 
 The first condition is stored at ingest, because the cwd travels with the
 event. The second is evaluated at report time over the whole ledger, so it does
@@ -274,7 +447,8 @@ events stay in the ledger.
 
 ### 4.2 Claude Code
 
-**Homes:** `~/.claude`, and `~/.claude-work`, which the `cw` alias selects with
+**Homes:** every configured home with `agent = "claude"`; the author's are
+`~/.claude` and `~/.claude-work`, which the `cw` alias selects with
 `CLAUDE_CONFIG_DIR`. Transcripts live at
 `<home>/projects/<cwd-slug>/<sessionId>.jsonl` and at
 `<home>/projects/<cwd-slug>/<sessionId>/subagents/agent-*.jsonl`. The fields
@@ -328,8 +502,9 @@ home, during the scan that creates the home's `coverage.json` entry:
   moment of backfill, and `other` otherwise. History has no path to check, and
   a name such as `argus` was a skill until 2026-04-01 and a plugin command
   after it; both kinds of line read `/argus`.
-- After that, `history.jsonl` is never read again. Every later session is
-  recorded from its own transcript, well inside retention.
+- After that, `history.jsonl` is never ingested again. Every later session is
+  recorded from its own transcript, well inside retention. F15 reads a
+  `typed` event's line at display time, which creates no event.
 
 The two sources are therefore disjoint by construction. A `typed` event can
 include an aborted prompt, and reports label the channel. `scan --reparse`
@@ -479,14 +654,44 @@ These are printed by `skima usage --help` and in the README.
      (`Base directory for this skill`, `<skill>`, `<skill name=`) and yields no
      event. That warning is the canary for a broken parser.
 
+### 4.7 The prompt behind a load
+
+F15's real examples and F18's session selection need the user-authored text
+that caused a strong event. Each adapter has `prompt_at(src) -> Option<String>`,
+evaluated at display time against the transcript, never stored (D11):
+- **`slash`:** the arguments the user typed with the command, prefixed by the
+  invocation (`/name`, `$name`, `/skill:name`). A bare invocation with no
+  arguments takes the `tool` rule instead, because the request is then in the
+  message before it.
+- **`tool`** (a channel only Claude has, §4.1, and the fallback for a bare
+  invocation on any agent): the most recent user-authored message before the
+  load in the same session file.
+- **`typed`:** the `display` text of the `history.jsonl` line.
+- Injected skill bodies, `<system-reminder>` blocks and pasted-content blocks
+  are stripped before the 300-character cut.
+
+A user-authored message is, per agent: on Claude, a `user` record that is
+neither a `tool_result` nor `isMeta`, whose content is a string or holds
+`text` blocks (an attached image does not disqualify it); on Codex, an
+`event_msg` of type `user_message`; on Pi, a `message` entry with role `user`.
+Skill injections, which Codex and Pi also record as user turns, are excluded
+by the same markers §4.3 and §4.4 detect.
+
+Each agent's rule is pinned by a fixture taken from a real session (§10.1).
+`None` (an expired transcript, or no user turn found) skips the example.
+
+**Audit runs.** Every session whose cwd is inside `<data dir>/audit-runs/` is
+skipped at ingest: its records produce no event (D13).
+
 ## 5. Sync, drift and policy
 
 ### 5.1 Source of truth
 
-The source is `~/dotfiles/skills/`. A skill is any non-hidden child directory
-that contains `SKILL.md`, which is the rule `install.sh` uses. Hidden entries
-(`.grades`, `.retros`, `.dev`, `.archive`) are never installed. The loose files
-`SKILLS_USAGE.md` and `GOAL_SKILLS_USAGE.md` are linked next to the skills.
+The source is the `source` directory of the config (§6.1); the author's is
+`~/dotfiles/skills/`. A skill is any non-hidden child directory that contains
+`SKILL.md`. Hidden entries (`.grades`, `.retros`, `.dev`, `.archive`) are never
+installed. The `loose` files, the author's `SKILLS_USAGE.md` and
+`GOAL_SKILLS_USAGE.md`, are linked next to the skills.
 
 ### 5.2 Drift states
 
@@ -543,7 +748,7 @@ citation can break across lines: `review-audit-fixes/SKILL.md:80-81` reads
 "owned by the" / "`blast-radius` skill". After that, A → B is an edge when A's
 body contains `the B skill`, `owned by B`, or `B/` as a path component.
 
-F3 and F7 use the graph only through "held", which is non-static: a citation
+F3 and F17's `retire` use the graph only through "held", which is non-static: a citation
 protects B only while A is itself used (F3). On 2026-10-12 the rules produce
 these edges:
 - Into `blast-radius`, seven of them (E4).
@@ -558,52 +763,42 @@ shows up as a diff.
 
 ### 5.4 Policy
 
-`validate_policy` from `install.sh` moves into `policy.rs`. Its strict
-`PolicyLoader` (`install.sh:106-132`) is rewritten as `strict_yaml.rs`, a small
-loader over `saphyr-parser` events that keeps the same contract:
-- A plain scalar resolves as PyYAML's `SafeLoader` resolves it (null, int,
-  float, timestamp, string), except that only the exact plain scalars `true`
-  and `false` become booleans. `yes`, `on`, `True` and the like stay strings.
-- An explicit `!!bool` tag on anything other than `true` or `false` is an
-  error.
-- A duplicate key, or a merge key `<<`, is an error. Keys are compared after
-  resolution, as Python compares them: `1` and `1.0` collide, `true` and `1`
-  collide, `~` and `null` collide.
-- A plain `=` (the YAML 1.1 value tag) is an error, as are unknown tags and
-  more than one document.
-- A quoted scalar without an explicit tag is a string. (`!!bool "true"` is a
-  boolean, as in PyYAML.)
-- Everything else follows PyYAML's `SafeLoader`, and the differential test is
-  the arbiter. Its corpus includes at least: anchors and aliases (accepted),
-  non-scalar keys (rejected), `!!binary`, `!!set` and `!!omap` (accepted), a
-  tab inside a plain scalar (`a: b\tc`, rejected), two `.nan` keys
-  (duplicates), an integer above 2^64 (accepted), and `a: <<` (rejected).
+**YAML.** Frontmatter and `agents/openai.yaml` are parsed with `saphyr` (YAML
+1.2 core schema), plus one check over `saphyr-parser` events: a duplicate key
+in any mapping is an error. Version 1's `strict_yaml.rs` reproduced the PyYAML
+loader of the deleted `install.sh` in 984 lines plus a 664-line differential
+test; with `install.sh` gone that fidelity serves nothing, and it is deleted
+(F13). The strictness that matters is kept where a value is used:
+- `allow_implicit_invocation` must be the plain scalar `false`. A quoted
+  `"false"`, `no`, `False` or a tag is an error.
+- `description` must be a string scalar.
+- `date` in grades and retros is read as a string and must match
+  `YYYY-MM-DD` at its start (§6.3).
 
-A permanent differential test runs both loaders over the same corpus of inputs
-(§10.5), keeping a verbatim copy of the Python loader as the reference. The rules come in two scopes.
-
-**Per-skill rules** run on every `sync` and `status`, whatever `--agent` says:
+**Always-on rules**, from the Agent Skills format, run on every `sync` and
+`status`, whatever `--agent` says:
 - `name` equals the directory name, matches `[a-z0-9]+(-[a-z0-9]+)*`, and is at
   most 64 characters.
-- `description` is a string, non-empty after trimming, and at most 1024
-  characters. Characters are Unicode code points (`chars().count()`), as in
-  Python's `len()`, not bytes.
-- The frontmatter is extracted as `install.sh:141-145` does: a leading BOM is
-  dropped, the text is split into lines on every separator Python's
-  `splitlines()` accepts (`\n`, `\r\n`, `\r`, `\v`, `\f`, `\x1c`–`\x1e`,
-  `\x85`, U+2028, U+2029), line 1 must be exactly `---`, and the frontmatter
-  ends at the next line that is exactly `---`. A missing closing line is an
-  error. The YAML text is the lines between them joined with `\n`.
-- The frontmatter has no `disable-model-invocation` key.
-- `agents/openai.yaml` sets `policy.allow_implicit_invocation: false`.
+- `description` is non-empty after trimming and at most 1024 characters,
+  counted in Unicode code points.
+- The frontmatter is the text between a first line that is exactly `---` and
+  the next line that is exactly `---`, after dropping a leading BOM; lines
+  split on `\n` and `\r\n`. A missing closing line is an error.
+- **Any home with `links`:** every entry resolves to its source file. This
+  rule applies to the homes `--agent` selects.
 
-**Per-home rules** apply to the homes selected by `--agent`:
-- **Claude:** `<home>/settings.json` exists. A missing file is an error and
-  `sync` aborts before any write. This is stricter than `install.sh`, which
-  skips a missing profile and fails only when none exists (`install.sh:87-92`).
-- **Claude:** `<home>/settings.json` maps every canonical skill to `"name-only"`
-  in `skillOverrides`.
-- **Any home with `links`:** every entry resolves to its source file.
+**Configurable rules**, each a boolean in `[policy]` (§6.1), off by default:
+
+| Key | Scope | Rule |
+|---|---|---|
+| `no_disable_model_invocation` | every skill | the frontmatter has no `disable-model-invocation` key |
+| `codex_manifest` | every skill | `agents/openai.yaml` exists and sets `policy.allow_implicit_invocation: false` |
+| `claude_name_only` | Claude homes selected by `--agent` | `<home>/settings.json` exists and maps every canonical skill to `"name-only"` in `skillOverrides`; a missing file is an error |
+
+Every-skill rules run whatever `--agent` says, as the always-on rules do. With
+`claude_name_only` off, a Claude home needs no `settings.json` at all. When a
+setting is missing, skima prints the exact JSON line to add and leaves the
+file alone.
 
 **Scan freshness**, a warning rather than a rule, printed by `status` and by
 every usage report. For each Claude home, skima warns that transcripts will
@@ -624,13 +819,9 @@ without an I/O error, so after a clean scan the warning stays off unless
 retention is 7 days or less. Codex and Pi do not clean up
 rollouts, so they get no warning.
 
-The rules are code, not configuration: there is one user and one policy. When a
-setting is missing, skima prints the exact JSON line to add and leaves the file
-alone.
-
 ### 5.5 Conflicts
 
-skima never overwrites, never backs up and has no `--force`. It prints every
+`sync` never overwrites, never backs up and has no `--force`. It prints every
 conflicting path with the `mv` or `rm` that would resolve it, then exits 1
 without writing anything.
 
@@ -641,7 +832,7 @@ message, skima keeps its wording, because the ported tests match on it:
 |---|---|
 | A path conflicts with a canonical entry | `ERROR: <path> conflicts with a canonical entry; preserved (resolve manually)`, then the `mv`/`rm` hint |
 | A home or `links` directory, or its first existing ancestor, is not a directory | `ERROR: <path> is not a directory` |
-| A Claude home has no `settings.json` | `ERROR: <home path>: no Claude settings profile` |
+| A Claude home has no `settings.json`, with `claude_name_only` on | `ERROR: <home path>: no Claude settings profile` |
 | A settings file fails a check | `ERROR: <settings path>: <reason>`, with the missing `"name": "name-only"` lines when that is the reason |
 | A skill fails a per-skill rule | `ERROR: <skill dir>: <reason>`, naming the file (`SKILL.md` or `agents/openai.yaml`) |
 | A `links` source is missing | `ERROR: <source path> is missing` |
@@ -677,105 +868,49 @@ has to remember.
    against the cwd with `.` and `..` removed, no symlinks followed.
 
 Every error aborts before any write, with the message `ERROR: invalid
-PI_CODING_AGENT_DIR: <reason>` (§5.5). The cases in `test_install.py:294-359` are the
-acceptance tests, and a one-shot parity check (§10.5) runs the Node snippet and
-`config.rs` over the same inputs before the snippet is deleted along with
-`install.sh`. Those inputs include every case above.
+PI_CODING_AGENT_DIR: <reason>` (§5.5). This matches how Pi itself resolves the
+variable, so it stays after `install.sh`; the ported cases in
+`tests/sync_port.rs` are its acceptance tests.
 
-### 5.7 Migration from `install.sh`
+### 5.7 Migration from `install.sh` (done)
 
-The migration is one dotfiles commit, made after F6's tests pass:
-1. **Prove parity.** Run the one-shot checks in §10.5 and paste their output into
-   the commit message.
-2. **Delete** `skills/install.sh`.
-3. **Port the tests.** Each of the 18 cases in `skills/tests/test_install.py`
-   becomes a Rust integration test in `tests/sync_port.rs` that runs the built
-   `skima` binary; then the Python file is deleted. The port follows four
-   rules:
-   - **Fixture.** Each test writes a `skima.toml` next to the fixture skills
-     and points `SKIMA_CONFIG` at it. It lists four homes with `~`-relative
-     paths, so a subtest that changes `HOME` moves them too: `claude`
-     (`~/.claude`), `claude-work` (`~/.claude-work`), `codex` (`~/.codex`) and
-     `pi` (`~/.pi/agent`, overridden by `PI_CODING_AGENT_DIR` as today, with the
-     `extensions/pi-explicit-skills.ts` entry in `links`).
-   - Valid `settings.json` files are written into both Claude homes before
-     each run, including in every subtest of
-     `test_conflict_in_any_harness_aborts_all_destinations` (`:268-284`), so a
-     run fails for the reason the test names and not for missing settings.
-     That port also asserts the `conflicts with a canonical entry` needle. The
-     one exception is the case that deletes a profile to provoke
-     `no Claude settings profile` (`:125`). `add_skill` updates
-     `skillOverrides` in both homes. Tests that break a settings file break
-     `<home>/settings.json`, so the needle `settings.work.json` (`:118`)
-     becomes `.claude-work/settings.json`.
-   - The skill list (`SKILLS`, `PI_SKILLS`) is read at test time from the
-     skills directory named by `SKIMA_TEST_SKILLS`, defaulting to
-     `~/dotfiles/skills`, as the Python test reads its own parent (`:12-16`).
-   - **Arguments.** `--pi` becomes `--agent pi`. No arguments stays plain
-     `sync`. `--unknown` and `--pi extra` become `--unknown` and
-     `--agent pi extra`; clap's error output contains `Usage:` (`:291`).
-   - **"Nothing was written"** is asserted as equality of a snapshot of `$HOME`
-     and the Pi directory (every path, file type, link text and the SHA-1 of
-     every regular file) taken before and after the run. This replaces the assertions that a directory is empty
-     or absent, because the fixture's settings files now live inside `$HOME`:
-     `:81-82` (for `--agent pi`, the `.claude` and `.codex` homes are
-     unchanged), `:107`, `:247` and `:283-284`. Assertions on the Pi directory
-     not existing (`:63`, `:108`, `:246`, `:292`, `:321`) are kept,
-     because the fixture creates nothing there.
-   - **Alias.** `test_installing_through_a_directory_alias_still_links_canonical_source`
-     (`:130-139`) points `SKIMA_CONFIG` at `<alias>/skima.toml`, where the
-     alias is a symlink to the fixture skills directory, and runs from a cwd
-     outside both. Links must still name the physical source, so an
-     implementation that skips the realpath of `source` fails it.
-   - **Output.** A run with nothing to do prints nothing, so `"done.\n"`
-     (`:86`, `:265`) becomes `""`. skima's error lines keep the wording the
-     tests look for (§5.5), so every other `stderr` needle stays as it is.
-   - `test_pi_integration.py` stays in dotfiles. Its calls to
-     `install.sh --pi` (`test_pi_integration.py:123, 188, 241, 258`) become
-     `skima sync --agent pi`; plain `sync` would also touch the real or
-     temporary Claude and Codex homes. It imports `PI_SKILLS` and `SKILLS` from
-     `test_install` today (`:18`), so those two constants move into it. It sets
-     `HOME` to a temporary directory (`:186`), so it also sets `SKIMA_CONFIG`
-     to the real `skills/skima.toml`.
-4. **Update every reference** to the old installer: `skills/README.md` (the
-   install commands, "Verification", and step 4 of "Adding a skill"),
-   `skills/GOAL_SKILLS_USAGE.md:46`, `skills/tests/test_pi_integration.py`, and
-   `dotfiles/README.md:54`. Done when both commands exit 1:
-   - `rg -n 'install\.sh' ~/dotfiles/skills -g '!.grades' -g '!.retros'`
-   - `rg -n 'skills/install\.sh' ~/dotfiles/README.md`
-
-   The search does not catch prose. These mentions of the installer and its
-   Python, PyYAML and Node requirements are rewritten by hand in the same
-   commit: `skills/README.md:11, 20, 45, 61, 72, 129, 138`,
-   `GOAL_SKILLS_USAGE.md:49`, `SKILLS_USAGE.md:36`,
-   `writing-for-agents/SKILL.md:30, 270` and
-   `writing-for-agents/references/skill-mechanics.md:50, 56`.
-5. **Bootstrap.** Add a step to the top-level dotfiles `install.sh`, which today
-   excludes `skills/` (`~/dotfiles/install.sh:39`). The step:
-   1. clones skima's git remote into `~/projects/skima` if that directory is
-      missing;
-   2. installs it with `cargo install --locked --path ~/projects/skima`;
-   3. runs `skima sync`.
-
-   The "Deliberately NOT in this repo" section of `dotfiles/README.md` gains a
-   skima line.
-
-This is the cost of D4. Today a fresh machine installs skills from the dotfiles
-checkout alone. After the migration it also needs a second repo and a Rust
-toolchain. A tool versioned on its own is worth that. Vendoring it into dotfiles
-would tie its tests and releases to unrelated config churn.
+Done on 2026-10-13. `skima sync` linked the one missing entry
+(`claude-work/skills/break-invariants`, E1), and `status` exited 0. Before the
+switch, a differential run of the old `install.sh` and `skima sync` in
+identical temporary homes produced identical trees in all 6 scenarios. The 18
+cases of `test_install.py` live on as `tests/sync_port.rs`, and
+`test_pi_integration.py` calls `skima sync --agent pi`. `install.sh` and
+`test_install.py` were deleted in dotfiles, and every reference was updated.
+The dotfiles bootstrap installs skima with `cargo install` and runs
+`skima sync`; once the repository is on GitHub (F13), that step installs from
+it.
 
 ## 6. Data model and storage
 
 ### 6.1 Configuration
 
-The configuration lives at `~/dotfiles/skills/skima.toml`, tracked with the
-skills, because the homes are part of the collection's definition. skima looks
-for `$SKIMA_CONFIG` first, then that path, and reads it with the `toml` crate.
+skima reads `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml`
+(`~/.config/skima/config.toml` when the variable is unset, on Linux and macOS
+alike), with the `toml` crate. `skima init` writes it (F11). The config path is
+resolved physically (realpath) before `source` is resolved against its
+directory, so a config symlinked from a skills repo finds that repo. The
+author's `~/.config/skima/config.toml` is a symlink to
+`~/dotfiles/skills/skima.toml`, tracked with the skills because the homes are
+part of the collection's definition. The author's file:
 
 ```toml
-source = "."                      # relative to this file, resolved physically (realpath)
+source = "."                      # relative to the physical config file, resolved physically
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
+
+[policy]                          # every key is optional and off by default (§5.4)
+no_disable_model_invocation = true
+codex_manifest              = true
+claude_name_only            = true
+authoring_skills            = ["grade", "retro", "writing-for-agents", "skill-creator"]
+
+[judge]                           # optional (§6.4)
+agent = "claude"                  # claude (default) | codex | pi
+model = "sonnet"                  # optional; unset means the agent's own default
 
 [[home]]
 name  = "claude"
@@ -806,6 +941,8 @@ links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
   does for Pi itself.
 - `links` lists extra files to link into the home. The keys are relative to the
   home, the values relative to `source`.
+- An unknown key anywhere is an error, so a typo in a policy name never
+  silently turns a rule off.
 
 Each adapter derives everything else from `path`:
 - **Claude:** `skills/`, `settings.json`, `projects/` and `history.jsonl`.
@@ -819,10 +956,11 @@ impossible.
 
 ### 6.2 State
 
-State lives in `${XDG_DATA_HOME:-~/.local/share}/skima/`. It is data, not
-cache: once Claude cleans up a transcript, the ledger holds the only copy of
-its events. It is kept out of git, because event `cwd` values include client
-audit paths under NDA, and the dotfiles repo is pushed to GitHub. Because the
+State lives in `${XDG_DATA_HOME:-~/.local/share}/skima/` on Linux and macOS
+alike. It is data, not cache: once Claude cleans up a transcript, the ledger
+and the audits hold the only copy of what it showed. It is kept out of git,
+because event `cwd` values and audit text can describe client work under NDA,
+and a skills repo is often pushed to GitHub. Because the
 ledger cannot be rebuilt, the directory belongs in the user's existing
 home-directory backup.
 
@@ -830,8 +968,15 @@ home-directory backup.
 events.jsonl     the ledger
 cursors.json     {"<abs path>": {"dev": …, "ino": …, "offset": …, "line": …}}
 coverage.json    {"<home name>": {"first": "<ts>", "last_scan": "<ts>"}}
-scan.lock        flock target
+scan.lock        flock target, also held by audit while it appends
+audits.jsonl     audit records (§6.4)
+report.html      the default output of skima report (F16)
+audit-runs/      one fresh empty subdirectory per judge call; sessions here are never ingested (§4.7)
+codex-judge-home/  the Codex judge's CODEX_HOME: only a symlink to the user's auth.json (§6.4)
 ```
+
+Every path above follows `XDG_DATA_HOME`, so a test or a comparison run
+points a binary at its own copy by setting that variable.
 
 **Event schema v1.** One JSON object per line, with keys in this order:
 
@@ -931,23 +1076,183 @@ skima reads these at report time and never copies or writes them. It reads only
 top-level files such as `.grades/GRADES.md`, and any file without YAML
 frontmatter.
 
-- **Latest.** Frontmatter is read with `strict_yaml.rs`. A file it rejects is
-  skipped with a warning; all 39 current grade and retro files load. `date` is
-  normalised to a `YYYY-MM-DD` string, whether it loaded as a YAML timestamp
-  (38 files) or a quoted string (1 retro). The latest grade or retro has the
-  greatest such string, with ties broken by filename.
+- **Order.** Frontmatter is read with the §5.4 parser. A file it rejects is
+  skipped with a warning. `date` is read as a string, quoted or not, and its
+  first 10 characters must be `YYYY-MM-DD`. Grades and retros are listed
+  newest first by that string, with ties broken by filename. Every one is
+  shown (F14), not only the latest.
 - **Grades.** skima reads the frontmatter `target`, `date` and `score`. Let `G`
   be the last commit that touched the grade file
   (`git log -1 --format=%H -- <grade file>`). The grade is stale when
   `git rev-list G..HEAD -- <skill>` is non-empty, that is, when a later commit
-  changed the skill. An edit committed together with the grade does not count.
+  changed the skill. Its length is the `+N` of F2. An edit committed together with the grade does not count.
   An uncommitted grade is not stale. Uncommitted changes to the skill
   (`git status --porcelain -- <skill>` non-empty) make any grade stale, because
-  the text being used is not the text that was graded.
+  the text being used is not the text that was graded; with no later commit
+  this shows as `+wip`.
+- **Cost.** Version 1 ran two or three `git` processes per skill per report.
+  Version 2 runs one `git log --name-only --format=%H%x00%cI%x00%s` over the
+  source and one `git status --porcelain` per report, and derives first commit,
+  last commit, `+N` and `+wip` for every skill from them.
+- **Not a repository.** When the source is not in a git worktree, history,
+  `+N` and `new` (F3) are omitted, and grades are never marked stale.
 - **`baseline_commit`** is deliberately unused. Only some grades carry it, and
   the current `grade` template no longer writes it (E9).
 - **Retros.** skima reads the frontmatter `skill`, `date`, `score` and
   `verdict`.
+
+### 6.4 Audit
+
+`skima audit <skill>` judges how a skill performs in real sessions, and turns
+that, with everything else skima knows about the skill, into one report. It
+runs in two stages so that cost grows with new use, not with history, and so
+that a session's verdict survives its transcript.
+
+**Stage 1: one record per session.**
+1. **Selection.** The candidates are root sessions with a strong event for the
+   skill, actor `main` or `headless`, whose transcript is still on disk, and
+   with no `session` record for this skill in `audits.jsonl`. Weak-only
+   sessions are skipped; they are mostly authoring (§4.1). `headless` is
+   included because worker agents started with `claude -p` or `codex exec`
+   run skills for real (an `issue-swarm` worker, for example); `probe` is not.
+   Candidates are
+   ordered newest first and taken round-robin across projects (cwd), up to
+   `--limit` (default 20). `--all` removes the limit.
+2. **Condensing.** The window starts at the prompt behind the session's first
+   strong load of the skill (§4.7), in the transcript holding that load. It
+   ends at the earlier of the first strong load of a different skill, the 40th
+   user-authored message (§4.7) after the start, or the end of the file. It keeps user and assistant
+   text, each tool call's name with its first 200 characters of input, and the
+   first 500 characters of each tool result. Injected skill bodies are
+   dropped, because the judge gets the skill separately. Every kept record is
+   prefixed with its line number (`L412:`) so the judge can cite it. Beyond
+   60,000 characters, skima keeps the first 40,000 and the last 20,000 and
+   marks the cut.
+3. **The skill as it was.** The judge gets `SKILL.md` from the last commit
+   before the session started (`git show <commit>:<path>`), or the current
+   file when there is no repository or no earlier commit.
+4. **Judging.** One judge call per session, with the prompt shipped in the
+   binary (`prompts/session.md`). The judge returns JSON with:
+   - `asked`: what the user wanted, paraphrased, at most 240 characters;
+   - `followed`: `yes`, `partly` or `no`;
+   - `outcome`: `achieved`, `partial`, `failed`, `abandoned` or `unclear`;
+   - `redone`: whether the user had to redo or correct the work;
+   - `strengths` and `frictions`: short findings, each citing a line number;
+   - `notes`: at most 400 characters.
+5. **Validation.** skima checks the JSON against the schema, that every cited
+   line is in the condensed text, and that no text field quotes the session
+   (D11): no 40 consecutive characters shared with a user message, an
+   assistant message or a tool result, and no whole user message of 12 to 39
+   characters. Both sides are compared after lowercasing and collapsing
+   whitespace. A record
+   that fails is retried once, then dropped and counted as an error. It is
+   never stored half-valid.
+
+**Stage 2: one record per skill.** Runs after stage 1 when any new session
+record was written, or with `--resynth`. Its input is:
+- the current `SKILL.md`, and the skill's last 30 commits (date and subject);
+- every grade's frontmatter, and the latest grade's body cut to 6,000
+  characters;
+- every retro's frontmatter, and the bodies of the latest three, cut to 4,000
+  characters each;
+- the card's usage section (F14);
+- every `session` record for the skill, from all audits.
+
+The judge (`prompts/skill.md`) returns:
+- `verdict`, at most 400 characters;
+- `patterns`: how the skill is actually used;
+- `works` and `failures`, each citing session ids;
+- `improvements`, ranked, each a concrete change with its reason and the
+  sessions behind it;
+- `versus_grades`: where real use agrees or disagrees with the grades and
+  retros;
+- `examples`: at most three, each a situation, what was asked (paraphrased),
+  what happened and a tip, citing one session.
+
+skima, not the judge, computes the rates from the session records:
+`followed: yes`, `outcome: achieved`, and `abandoned or redone`, each as
+`n of N`. Cited session ids must exist, or the record is retried and then
+dropped.
+
+**The judge.** `[judge] agent` picks the command. Each call runs in a fresh,
+empty subdirectory of `<data dir>/audit-runs/`, which is not a git repository,
+removed after the call. skima writes the
+shipped prompt and the input to files in a fresh temporary directory, and
+passes them as the table says. Every flag below exists today (E16):
+
+| Agent | Command | Structured output | Spend |
+|---|---|---|---|
+| `claude` | `claude -p --safe-mode --tools "" --system-prompt "$(cat prompt)" --output-format json --json-schema <schema> --no-session-persistence --max-budget-usd <cap>`, input on stdin | enforced by `--json-schema` | `total_cost_usd` per call |
+| `codex` | `CODEX_HOME=<data dir>/codex-judge-home codex exec --ephemeral --skip-git-repo-check --sandbox read-only --output-schema <file> -o <result file> --json -`, with prompt and input concatenated on stdin | enforced by `--output-schema`; read from `-o` | not reported; token totals from `--json` |
+| `pi` | `pi -p --no-session --no-tools --no-extensions --no-skills --no-context-files --system-prompt "$(cat prompt)" --mode json @<input file>` | the final message, parsed and validated | not reported; token totals printed |
+
+The Claude judge uses `--safe-mode`, which turns off `CLAUDE.md`, skills,
+plugins, hooks, MCP servers and custom agents while authentication works
+normally, so a subscription login keeps working. `--bare` is not used: it
+reads only `ANTHROPIC_API_KEY`, never the OAuth login (E16). Safe mode keeps
+built-in tools, so `--tools ""` turns them off. Together they keep each call
+cheap and stop the judge from touching files. Codex has
+no flag to disable tools; its read-only sandbox and the empty working
+directory stand in. Codex also has no flag to skip the user's `AGENTS.md` or
+skill list, so the Codex judge runs with `CODEX_HOME` set to a scratch home
+holding only a symlink to the user's `auth.json`. M9 proves the isolation by
+one real call per agent, with a sentinel file telling the model to put the
+word `PELICAN` in every text field, placed where that agent would otherwise
+read user instructions:
+- **Claude:** a `CLAUDE.md` in the call's working directory; `--safe-mode` must
+  suppress it.
+- **Pi:** an `AGENTS.md` and a `CLAUDE.md` in the working directory;
+  `--no-context-files` must suppress them.
+- **Codex:** no flag suppresses an `AGENTS.md` in the working directory, so the
+  guarantee there is construction: every call's directory is created empty, and
+  the test asserts it still is when the call starts. The sentinel goes in
+  `<decoy HOME>/.codex/AGENTS.md`, with `HOME` pointed at the decoy, which
+  proves the scratch `CODEX_HOME` is what Codex reads.
+
+The result must not contain `PELICAN`. Nothing is written into the user's real
+agent homes. The Claude call must also return
+structured output with `--tools ""` set. An agent that fails is not offered as
+a judge until it passes; `[judge] agent` naming it is a config error. `[judge] model` is unset by
+default, which means the agent's own default; when set, it is passed as
+`--model` (`-m` for Codex). The skipped working directory (§4.7) covers any
+agent that writes a session anyway.
+
+**Spend.** Calls run one at a time, with a progress line (F12). Let `B` be
+`--max-budget-usd` (default 1) and `spent` the sum of reported
+`total_cost_usd`, both kept as integer micro-dollars. A reported cost is read
+from its decimal text with `serde_json::value::RawValue` (the `raw_value`
+feature, not `arbitrary_precision`, which §10.5 forbids) and truncated to
+micro-dollars, never parsed through a float. Each stage-1 call gets
+`--max-budget-usd 0.75·B − spent`, and stage 1 starts no call once that is
+under $0.01. Stage 2 then runs on every
+session record that exists, old and new, with `--max-budget-usd B − spent`.
+Caps are passed rounded down to cents. When `B − spent` is under $0.01, stage
+2 is skipped, the output names the skip, and the run exits 1. Claude checks a
+cap between model turns, and a judge call with no tools is one turn, so the
+cap that binds is skima refusing to start a call; a call can exceed its own
+cap by that one turn. Records already written are kept, and the output names
+any session left for the next run. `--dry-run` estimates input tokens as
+condensed characters divided by 4, and, once earlier audits exist, a dollar
+figure from their recorded cost per input character. Codex and Pi report no dollar figure, so with
+those judges `--limit` is the cap, and passing `--max-budget-usd` is a usage
+error (exit 2).
+
+**Records.** `audits.jsonl` is append-only, written under `scan.lock`:
+
+```json
+{"v":1,"kind":"session","skill":"unslop","session":"2e112b1e-…","agent":"claude",
+ "src":"…/2e112b1e-….jsonl:412","session_ts":"2026-09-15T06:15:31Z",
+ "audited_at":"2026-10-15T10:02:11Z","skill_commit":"a1b2c3d",
+ "judge":{"agent":"claude","model":"sonnet","cost_usd":0.031},
+ "prompt":"session-v1","result":{…}}
+{"v":1,"kind":"skill","skill":"unslop","audited_at":"…","sessions":["2e112b1e-…",…],
+ "judge":{…},"prompt":"skill-v1","rates":{"followed":[17,20],"achieved":[15,20],
+ "abandoned_or_redone":[3,20]},"result":{…}}
+```
+
+The latest `skill` record is the one F14 and F16 show. Older ones stay, so a
+skill's trend is visible across audits. `prompt` names the shipped prompt
+version, so a changed prompt can be told apart from a changed skill.
 
 ## 7. Interface
 
@@ -958,42 +1263,52 @@ skima unused  [--since 60d] [--json]
 skima show    <skill> [--since 30d] [--limit 20] [--json]
 skima status  [--agent A] [--json]
 skima sync    [--agent A] [--dry-run]
-skima retire  <skill> [--force]                 # F7
-skima runs    <skill> [--since D] [--json]      # F8
+skima init    --source <dir>                                          # F11
+skima report  [--since 30d] [--out <path>] [--open]                   # F16
+skima new     <name> --description <text>                             # F17
+skima retire  <name> [--force]                                        # F17
+skima prune   [<name>] [--yes] [--force]                              # F17
+skima audit   <skill> [--limit 20 | --all] [--max-budget-usd 1] [--resynth] [--dry-run] [--json]   # F18
 ```
 
-- `usage`, `unused`, `show` and `runs` scan first. Tests call the `report`
+- `usage`, `unused`, `show`, `report`, `audit` and `retire` scan first. Tests call the `report`
   functions of the library crate directly on a fixture ledger, so no flag exists to skip the scan.
-- `--all` adds `other` origins and `probe` actors. `--authoring` adds authoring
+- `--all` adds `other` origins, `probe` actors, and rows for skills no longer in the inventory (retired or pruned). `--authoring` adds authoring
   reads.
 - `scan` prints one summary line, the number of new events for each home.
   `--report` adds the per-channel counts, the unparsed samples and the parser
   canary.
-- Exit codes: 0 for success or clean, 1 for drift, a conflict or a policy
-  failure, 2 for usage errors.
-- Output is plain aligned text, bold only when stdout is a TTY. The sparkline
-  uses `▁▂▃▄▅▆▇█`, one cell per day.
+- Exit codes: 0 for success or clean, 1 for drift, a conflict, a policy
+  failure, a refused `retire` or `prune`, an audit that had candidates and
+  dropped every record (no candidates is exit 0), or an audit whose stage 2
+  was skipped for budget; 2
+  for usage errors, including a missing config (F11).
+- Output is aligned text, bold only when stdout is a TTY. The sparkline uses
+  `▁▂▃▄▅▆▇█`, one cell per day, and `·` for a day with no event. Progress goes
+  to stderr (F12).
 
 Example `usage` layout (the numbers are illustrative, not measured):
 
 ```
 skill                   sess slash tool typed read ref agents last    30d                             grade
-validate-resolve-issue    70    67    0     0   25   3 X      2d ago  ▁▁▃▇▅▂▁▁▁▃▅▇▅▂▁▁▁▁▁▃▅▇▅▂▁▁▁▁▃▅  8.9
-unslop                   120     1   75     0  140   0 CXP    today   ▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇  9.1*
+validate-resolve-issue    70    67    0     0   25   3 X      2d ago  ··▃▇▅▂···▃▅▇▅▂·····▃▅▇▅▂····▃▅  8.9
+unslop                   120     1   75     0  140   0 CXP    today   ▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇▅▇▇▅▇  9.1 +7
+goal-migrate               0     0    0     0    0   0        -       ······························  8.4 +wip
 coverage: claude since 2026-09-10 (typed since 2026-02-24) · claude-work since … · codex since 2026-03-29 · pi since 2026-08-29
+legend: agents C Claude, X Codex, P Pi · · no events that day · +N commits since the grade · +wip uncommitted changes since the grade
 ```
 
 ## 8. Tech stack
 
-**Rust, edition 2024, built with the installed cargo 1.98.1.** One binary,
-installed with `cargo install --locked --path ~/projects/skima`.
+**Rust, edition 2024, built with cargo 1.98.1.** One binary, installed with
+`cargo install --locked --git <repository>` (F13), or `--path` from a clone.
 
 | Crate | Use |
 |---|---|
 | `clap` 4 (derive) | the CLI (§7) |
-| `serde`, `serde_json` | transcript records, the ledger, cursors, `--json` output |
-| `toml` | `skima.toml` |
-| `saphyr-parser` | YAML events for `strict_yaml.rs` (§5.4) and frontmatter |
+| `serde`, `serde_json` (`float_roundtrip`, `raw_value`) | transcript records, the ledger, cursors, `--json` output, exact judge costs (§6.4) |
+| `toml` | the config (§6.1) |
+| `saphyr`, `saphyr-parser` | YAML 1.2 loading, and the event stream for the duplicate-key check (§5.4) |
 | `regex` | the reader grammar, fan-in patterns and record prefixes |
 | `sha1_smol` | Codex event ids (§4.3) |
 | `jiff` | timestamps, day buckets and windows |
@@ -1013,49 +1328,72 @@ installed with `cargo install --locked --path ~/projects/skima`.
   Python prototype already met that bound. It is chosen for a single
   installed binary with no interpreter or package to manage (it links only
   the system `libc` and `libgcc_s`), and for the type checking of the event model.
-- The cost is §5.4: PyYAML's strict loader cannot move over unchanged, so
-  `strict_yaml.rs` is new code with a differential test against it.
+- The HTML report is built with `format!` and one escaping function, and the
+  progress line is a `\r`-rewritten stderr line. Neither needs a crate. The
+  audit calls agents as subprocesses; there is no HTTP client.
 
 ## 9. Architecture
 
 ```
 skima/
-  Cargo.toml  Cargo.lock
+  Cargo.toml  Cargo.lock  LICENSE  .github/workflows/ci.yml   (Linux and macOS)
+  prompts/
+    session.md      stage 1 judge prompt (§6.4), compiled in with include_str!
+    skill.md        stage 2 judge prompt
   src/
     lib.rs          the library crate: every module below except main.rs
     main.rs         clap dispatch, exit codes
-    render.rs       aligned tables, sparklines, --json
-    config.rs       skima.toml → Config { source, loose, homes }; path expansion and Pi normalisation
-    strict_yaml.rs  PolicyLoader port (§5.4)
-    inventory.rs    canonical skills, frontmatter, known names from git history, fan-in graph
-    policy.rs       per-skill and per-home rules (§5.4), scan-freshness warning
-    links.rs        drift classification; plan() (pure) and apply() (the only writer)
-    scan.rs         the scan driver: scan order, cursors, coverage, typed backfill, reparse
+    config.rs       config discovery, [policy], [judge]; path expansion and Pi normalisation; init
+    yaml.rs         saphyr loading, the duplicate-key check, frontmatter extraction (§5.4)
+    inventory.rs    canonical skills, frontmatter, known names, fan-in graph, one-pass git history
+    policy.rs       always-on and configurable rules (§5.4), scan-freshness warning
+    links.rs        drift classification; plan() (pure) and apply() (the only link writer)
+    lifecycle.rs    new, retire, prune (F17)
+    scan.rs         the scan driver: scan order, cursors, coverage, typed backfill, reparse, progress
     tail.rs         incremental JSONL reader: cursors, partial-line safety, byte prefilter
     ledger.rs       Event, append rule, lock, coverage, reparse
     adapters/
-      mod.rs        trait Adapter { files(home) -> Vec<PathBuf>; parse(path, start, line) -> Parsed }; the header line is always read
-      claude.rs     meta records, Skill results, Read/Bash reads, history backfill
-      codex.rs      session_meta, <skill> blocks, exec/function_call reads, parent lookup
-      pi.rs         session header, <skill name location> blocks, read/bash tool calls
+      mod.rs        the Adapter trait, below
+      claude.rs  codex.rs  pi.rs
     readcmd.rs      shared reader grammar (§4.5)
-    classify.rs     origin, actor, root session, authoring tag
-    evals.rs        .grades/.retros frontmatter, grade staleness
-    report.rs       usage, unused, show, runs; collapse, held and cluster
+    classify.rs     origin, actor, root session, authoring tag, audit-run skip
+    evals.rs        .grades/.retros frontmatter, every grade, +N and +wip
+    report.rs       usage, unused, the card (show), the report model; collapse, held, cluster
+    examples.rs     written and real examples (F15)
+    audit.rs        selection, judge calls, validation, rates, audits.jsonl (§6.4)
+    render.rs       aligned tables, sparklines, legend
+    html.rs         the self-contained HTML report (F16)
   tests/
     fixtures/{claude,codex,pi}/   one trimmed real record per positive and negative case
-    policy_loader.py              verbatim PyYAML PolicyLoader, the reference for the YAML differential
-    adapters_{claude,codex,pi}.rs  ingest.rs  reports.rs  strict_yaml_diff.rs  sync_port.rs  sync.rs
+    adapters_{claude,codex,pi}.rs  ingest.rs  reports.rs  sync_port.rs  sync.rs
+    portability.rs  lifecycle.rs  html.rs  audit.rs
 ```
 
-The code splits into three paths:
+The code splits into four paths:
 - **Write:** `tail → adapters → classify → ledger`.
-- **Read:** `ledger + inventory + evals → report`.
-- **Sync:** `config + inventory + policy → links`.
+- **Read:** `ledger + inventory + evals + audits → report → render | html | json`.
+- **Sync:** `config + inventory + policy → links`, and `lifecycle` on top.
+- **Judge:** `ledger + adapters (condense) → audit → audits.jsonl`.
 
-Adapters only turn records into events. Identity, actor, root session and
-authoring are computed once, in `classify.rs`. Adding an agent means one adapter
-module and one `Agent` variant.
+The adapter interface, documented in the README for contributors:
+
+```rust
+pub trait Adapter {
+    /// Transcript files under one home, in scan order (§6.2).
+    fn files(&self, home: &Home) -> Vec<PathBuf>;
+    /// Events from the lines of `chunk`; `header` is line 1 of the file.
+    fn parse(&self, roots: &SkillRoots, path: &Path, header: &str, chunk: Chunk) -> Parsed;
+    /// The user-authored text behind the load at `src` (§4.7).
+    fn prompt_at(&self, src: &Locator) -> Option<String>;
+    /// The judge's view of the session window starting at `src` (§6.4).
+    fn condense(&self, src: &Locator, max_chars: usize) -> Option<Condensed>;
+}
+```
+
+Adapters only turn records into events, prompts and condensed sessions.
+Identity, actor, root session and authoring are computed once, in
+`classify.rs`. Adding an agent means one adapter module and one `Agent`
+variant; the README documents the trait for contributors.
 
 ## 10. Verification
 
@@ -1130,6 +1468,15 @@ and leaves `writing-for-agents` out.
 - a grade committed together with a skill edit: not stale
 - a later skill commit: stale
 - a quoted and an unquoted `date`: compared correctly
+- three grades for one skill: all three listed, newest first
+
+**Prompt behind a load** (§4.7), one real fixture each: a Claude `slash` with
+arguments, a Claude `tool` load after a user message and a `tool_result`, a
+Codex `$name` block, a Pi `/skill:` block, and a `typed` history line. Each
+asserts the exact text returned, with injected bodies stripped.
+
+**Audit runs:** a Claude, a Codex and a Pi session whose cwd is inside
+`<data dir>/audit-runs/`: no event.
 
 ### 10.2 Reconciliation on the real corpus
 
@@ -1149,7 +1496,7 @@ each against its source record. The two then reconcile.
 
 - Strong-channel precision must be at least 95%.
 - Read-channel precision is printed in the README, whatever it is.
-- The same pass counts how many read events the `grade`/`retro` authoring rule
+- The same pass counts how many read events the `authoring_skills` rule
   changes. That count decides whether the rule stays (§4.1).
 
 ### 10.4 Ingest properties
@@ -1171,17 +1518,12 @@ each against its source record. The two then reconcile.
 
 **Permanent tests**, kept in skima's suite:
 - The 18 `test_install.py` cases, ported to `tests/sync_port.rs`, driving
-  `skima sync` against a temporary `HOME` (§5.7 step 3).
-- **Strict YAML differential.** A corpus of frontmatter and `openai.yaml`
-  inputs covering every boolean spelling, duplicate and merge keys, explicit
-  tags, quoted and plain scalars, timestamps and numbers, plus every real
-  skill's files. The test feeds each input to `strict_yaml.rs` and to the
-  Python `PolicyLoader` (copied verbatim into `tests/policy_loader.py`) and
-  requires the same accept/reject verdict and the same value types. The corpus
-  names each case in §5.4: the colliding key pairs, `=`, verbatim
-  `!<tag:yaml.org,2002:bool>` tags, YAML 1.1 octal and sexagesimal numbers. The
-  test fails when `python3` with PyYAML is absent, unless
-  `SKIMA_SKIP_PYDIFF=1` is set.
+  `skima sync` against a temporary `HOME` (§5.7).
+- **YAML rules** (§5.4): a duplicate key at any depth, `allow_implicit_invocation`
+  spelled `"false"`, `no`, `False` or `!!bool false`, and a non-string
+  `description` are each rejected; a plain `false` and quoted and unquoted
+  `date` values load. Every real skill's files load, read from
+  `SKIMA_TEST_SKILLS`.
 - **Golden Codex id.** The pinned value is computed once by an independent
   Python script (`json.dumps(sort_keys=True, separators=(",", ":"),
   ensure_ascii=False)`), not by skima. One fixed payload with nested, unsorted and non-ASCII
@@ -1199,31 +1541,14 @@ each against its source record. The two then reconcile.
   policy-checked.
 - `sync --agent pi` runs the per-skill rules and skips the Claude settings.
 - `last_scan` 24 days old with `cleanupPeriodDays` unset: `status` warns and exits 0; 22 days old: no warning.
+- The fixture config turns every `[policy]` rule on, so the ported cases keep
+  testing the author's rules; `tests/portability.rs` covers them off (§10.8).
 
 `test_pi_integration.py`, pointed at `skima sync`, stays in dotfiles' own suite
-(§5.7 step 3).
+(§5.7).
 
-**One-shot checks**, run once in M3. Their output goes into the migration
-commit, and their code is deleted in that same commit, because it executes
-`install.sh`.
-
-- **Differential.** Runs the old `install.sh` and `skima sync` in two temporary
-  HOMEs built from the same fixture tree, in two modes: the default mode, and
-  `--pi` against `--agent pi`.
-  - **Tree contents, two separate runs.** Run 1 has a foreign link and an owned
-    dangling link, so both tools link and prune and the trees are compared.
-    Run 2 adds an obstruction or a per-skill policy violation, one at a time;
-    both tools must exit non-zero with the trees untouched. One tree cannot test
-    both, because `install.sh` exits in `validate_policy` before linking
-    (`install.sh:235`).
-  - **Policy files:** the tree carries the sibling `.claude/` directory that
-    `install.sh` reads. Each temporary Claude home's `settings.json` is a
-    symlink into that directory, so both tools see the same settings.
-  - **Homes:** the fixture `skima.toml` lists only the homes `install.sh`
-    knows: `~/.claude`, `~/.codex` and the Pi directory.
-  - **Comparison:** the check diffs `find -printf '%p %l\n'` and the exit codes.
-- **Node versus Rust Pi paths** (§5.6). The same inputs go to the Node snippet
-  and the new function, and the outputs must be equal.
+The one-shot checks against `install.sh` ran once in M3 and were deleted with
+it (§5.7).
 
 ### 10.6 Live end-to-end runs
 
@@ -1267,26 +1592,131 @@ emitted no event, or the wrong one, fails.
 
 ### 10.7 Real machine
 
-1. `skima status` reports `claude-work: missing
-   break-invariants` and no other error. Info-level `foreign` lines may appear.
-2. `skima sync`, then `skima status`, exits 0.
-3. `skima sync --dry-run` prints nothing.
+Version 1, passed on 2026-10-13:
+1. `skima status` reported `claude-work: missing break-invariants` and no
+   other error.
+2. `skima sync`, then `skima status`, exited 0.
+3. `skima sync --dry-run` printed nothing.
+
+Version 2, with the author's config (every `[policy]` rule on), run at the
+end of every milestone from M5 on:
+1. `skima status` exits 0 with the same set of findings as version 1: none at
+   error level and the three `foreign` entries. From M6 on, they print in the
+   F12 wording: four `in sync` lines and the three `foreign` lines.
+2. The rules are on: a scratch config with the author's `[policy]`, a copy of
+   the skills and scratch homes runs `sync`, then `status`, which exits 0.
+   Then each violation alone (`allow_implicit_invocation: true` in one
+   manifest, a `disable-model-invocation` key in one `SKILL.md`, one skill
+   missing from a scratch `skillOverrides`) makes `status` exit 1 with that
+   rule's error line.
+3. `skima sync --dry-run` writes nothing; from M6 on it prints only the
+   `in sync` line.
+4. Counts do not change. At the start of M5, the version 1 binary is built
+   from the `v1` tag (placed on the last version-1 commit when M5 starts) and kept with a version-1-shaped copy of the config (no
+   `[policy]`). At each milestone end, the data directory is copied twice;
+   version 1 and version 2 run `usage --all --json` back to back, each on its
+   own copy, and every `sess` and channel count must be equal on every row
+   both emit (version 2 adds rows for retired and pruned skills). When their
+   scans appended different numbers of events, a transcript changed between
+   the runs, and the pair is rerun.
+
+### 10.8 Version 2 tests
+
+**Portability** (`tests/portability.rs`):
+- A fresh `HOME` with one plain skill and an empty `~/.claude/settings.json`:
+  `init --source`, then `sync`, exits 0 and links the skill (F11). Without a
+  config, `usage` exits 2 and names `skima init`.
+- Each `[policy]` rule, turned on alone, rejects its own violation and nothing
+  else; all off, the same tree passes.
+- An unknown key under `[policy]` is an error.
+- A config symlinked from another directory resolves `source` against the
+  physical file.
+- CI runs the whole suite on Linux and macOS.
+
+**Lifecycle** (`tests/lifecycle.rs`):
+- `new` with every rule on writes files that pass the per-skill rules; after
+  the test adds the printed `name-only` line to each Claude home and runs
+  `sync`, `status` exits 0. With every rule off, `new` writes only `SKILL.md`,
+  and `sync` then `status` exits 0. `new` without `--description` exits 2.
+- `retire` refuses a held skill and a skill used in the last 30 days, and
+  `--force` overrides both; after it, `status` exits 0 and the links are gone.
+- `prune` without a TTY and without `--yes` exits 2 and deletes nothing.
+  `prune <name> --yes` deletes one archived skill. In a git fixture it refuses
+  an archived skill with uncommitted changes, and `--force` overrides that.
+  The ledger is byte-identical before and after.
+
+**Output** (`tests/reports.rs`, `tests/html.rs`):
+- `+N` and `+wip` on fixture repositories with known commit histories.
+- `last` is `-` for a skill whose only event is older than the window.
+- The progress decision is a pure function of "stderr is a TTY" and elapsed
+  time, unit-tested at both edges; an integration test checks that a scan with
+  stderr redirected to a file writes no progress. M6 records one run under
+  `script(1)` showing the line on a cold scan.
+- The legend line ends `usage` and `unused`; `show` prints `~` for `$HOME` and
+  `<agent>:<file>:<line>` locators, with full paths in `--json`;
+  `scan --reparse` prints `(was <m>)` for each home.
+- `status` prints `in sync` for a home whose only findings are `foreign`, with
+  those lines after it.
+- The HTML report holds every skill in the JSON, has no `src` or `href`
+  attribute pointing outside the file, and is written under the data
+  directory by default with mode `0600`.
+- Real examples: actor `subagent` and `probe` events never appear; the three
+  examples come from three different projects; an expired transcript yields no
+  example; text over 300 characters is cut; a bare `/name` with a one-word
+  previous message is skipped for an older event in the same project.
+
+**Audit** (`tests/audit.rs`). A stub `claude` on `PATH` returns canned JSON
+and records its arguments, so no test spends money:
+- Selection takes at most `--limit` sessions, round-robin across projects, and
+  skips sessions already audited and weak-only sessions.
+- The stub receives `--safe-mode`, `--tools ""`, never `--bare`,
+  `--no-session-persistence`, `--json-schema`, and `--max-budget-usd` of
+  `0.75·B − spent` in stage 1. With 12 candidate sessions, a stub that reports
+  $0.10 per call and a $1 budget, stage 1 passes exactly the caps 0.75, 0.65,
+  0.55, 0.45, 0.35, 0.25, 0.15 and 0.05, judges 8 sessions, and stage 2 runs
+  with a cap of 0.20. With 30 candidate sessions, `--all` and a stub that
+  reports $0.031, stage 1 makes exactly 24 calls, the last cap is 0.03, no cap
+  is 0.00, and stage 2 runs with 0.25. With a stub that reports $0.50, stage 1
+  passes 0.75 and 0.25, spends $1.00, stage 2 is skipped, and the run exits 1. With a stub that reports $0.30
+  per call, stage 1 judges 3 sessions, spends $0.90, and stage 2 runs with
+  $0.10.
+- An invalid record (a cited line outside the condensed text, an unknown
+  session id, 40 characters copied from a user message or a tool result) is
+  retried once and then dropped.
+- Rates are computed from session records, not taken from the judge.
+- D13: the stub writes a Claude transcript with a Skill load into a project
+  directory whose cwd is under `audit-runs/`; a scan after the audit appends
+  0 events.
+- `--dry-run` never starts the stub. The judge never writes inside the source:
+  a tree snapshot of the fixture source is equal before and after an audit.
+
+**Audit precision**, a live check run once on the real corpus in M9, opt-in
+and capped at $3: `skima audit --limit 10 --max-budget-usd 1.5` runs on
+`unslop` and `grade`, each picked because it has more than 10 candidate
+sessions (checked with `--dry-run` first; another skill with enough
+candidates replaces one that has fewer). Two
+validator agents work separately, each judging the same 10 session records,
+5 from each skill, against their transcripts, then reconcile. `followed` and
+`outcome` must match the validators' verdict in at least 8 of 10 records, and
+at most 2 of the 20 candidate sessions may have been dropped by validation.
+The result goes in the README, as §10.3's precision does.
 
 ## 11. Milestones
 
-The ledger ships first, because Claude history is still expiring: each day
-before the first real scan loses the oldest day of Claude transcripts (E2).
-Typed `/name` commands from those days are still recovered from
-`history.jsonl` (§4.2). skima never edits settings, so retention stays at the
-default 30 days.
+Version 1 (M0–M3) shipped on 2026-10-13, with the §10.6 live runs still
+pending. Version 2 starts with portability, because the `[policy]` table and
+the config shape are what `new`, `init` and the tests build on. The card comes
+before the audit, because the audit's report is shown inside the card.
 
 | M | Scope | Done when |
 |---|---|---|
-| M0 (2–3 days) | `config`, the git known-names part of `inventory`, fixtures, the three adapters, `readcmd`, `tail`, `ledger`, `classify`, `scan` with history backfill; the first real scan | §10.1 (detection fixtures), §10.2 and §10.4 pass, and the ledger holds the current Claude window |
-| M1 (2 days) | `strict_yaml` (needed by `evals`), `usage`, `unused`, `show`, `evals`, the fan-in graph with held and cluster, `scan --report` | §10.1 (fan-in, held, evals fixtures) and §10.3 pass, with the precision recorded; the §10.6 gating runs pass and the model-dependent runs are recorded |
-| M2 (1 day) | `policy`, the drift part of `links`, `status`, all read-only | §10.7 step 1 passes |
-| M3 (2 days) | `sync`, the test port, the one-shot checks, deleting `install.sh`, the references and the bootstrap (§5.7) | §10.5, then §10.7 steps 2 and 3, pass; one dotfiles commit deletes `install.sh` |
-| M4 (on demand) | F7 `retire`, F8 `runs` with the `retro` pointer, F9 leak report, F10 adapters | Each item's acceptance criteria are met |
+| M0–M3 | Version 1: ingest, reports, status, sync, the `install.sh` migration | Done 2026-10-13 |
+| M5 | F11 `init` and config discovery, F13 `[policy]`, `authoring_skills`, `yaml.rs` replacing `strict_yaml.rs`, README newcomer path, CI, private repository; on the author's machine, add `[policy]` to `skills/skima.toml` and symlink it to `~/.config/skima/config.toml` | §10.8 portability passes; §10.7 version 2 steps 1 to 4 pass with the author's config (step 1 without the F12 wording); the first push is confirmed with the owner |
+| M6 | F12 progress, legend, `+N`/`+wip`, `last` within the window, plain `status` and `sync` lines, short paths, the reparse summary | §10.8 output checks (except HTML and examples) pass; §10.7 version 2 steps 1 to 4 pass, wording included |
+| M7 | F14 card, F15 examples with `prompt_at`, F16 HTML report, the one-pass git history | §10.1 `prompt_at` fixtures and §10.8 HTML and examples checks pass; the report renders the author's 29 skills |
+| M8 | F17 `new`, `retire`, `prune` | §10.8 lifecycle passes |
+| M9 | F18 audit, then F19's change to the `grade` skill | §10.8 audit and audit precision pass |
+| Later | F9 leak report | Its acceptance criteria are met |
 
 ## 12. Evidence and open questions
 
@@ -1313,6 +1743,9 @@ independent runs that day.
 | E13 | `~/.cursor`, `~/.windsurf`, `~/.kiro` and `~/.config/amp` do not exist; `~/.gemini` holds only `settings.json` | `ls` |
 | E14 | Codex forks re-stamp copied records but keep their payloads: of 186 `function_call` records copied from a parent (matched by `call_id`), 0 keep the parent's timestamp and 186 have an identical payload; the same holds for all 14 copied `$name` blocks | a script comparing each forked rollout with its parent over `~/.codex/sessions` |
 | E15 | `~/.claude/history.jsonl` holds 105 bare `/argus` lines and 13 `/argus:<cmd>` plugin lines; `skills/argus` existed in git only from 2026-03-13 to 2026-04-01. The skills repo's history also holds `SKILL.md` paths nested under `claude/`, `codex/` and `shared/` | `jq -r .display` with `grep -oE '^/argus[^ ]*'`; `git log --name-only -- skills` |
+| E16 | Each agent has a headless flag that writes no session file: `claude --no-session-persistence`, `codex exec --ephemeral`, `pi --no-session`. Claude also has `--json-schema`, `--max-budget-usd`, `--tools ""`, `--system-prompt` and `--safe-mode` (customizations off, auth unchanged), and its `--bare` reads only `ANTHROPIC_API_KEY`, never OAuth; `codex exec` has `--output-schema`, `-o`, `--json`, `--sandbox`, `--skip-git-repo-check` and `--ignore-user-config`, and no system-prompt flag; `pi` takes input as `@file`, and has `--mode json`, `--system-prompt`, `--no-tools`, `--no-extensions`, `--no-skills` and `--no-context-files`, and no schema or budget flag | `--help` of each CLI on 2026-10-14 |
+| E17 | All 29 skills carry `interface.default_prompt` in `agents/openai.yaml`; 4 have an examples section in `SKILL.md` (`## Examples` or `## Worked example`) | `grep` over `~/dotfiles/skills` on 2026-10-14 |
+| E18 | Version 1 audit: four independent auditors scored 6, 5, 6 and 5 of 10. All four found no progress output on a 10 s cold scan, no description or history in `show`, and the hardcoded policy; three reproduced `sync` refusing a plain skill | the four audit reports of 2026-10-14 |
 
 ### 12.2 Open questions
 
@@ -1325,3 +1758,8 @@ Each will be settled by a run, not by reading.
 - **Q2. Work-profile rule file.** Does the work profile need its own `CLAUDE.md`
   for the `AGENTS.md` rule to apply? This is outside skima, which does not
   report it.
+- **Q3. Cross-vendor judging.** With `[judge] agent = "claude"`, auditing a
+  skill sends condensed Codex and Pi sessions to Anthropic, and a Codex judge
+  sends Claude sessions to OpenAI. This is a consent decision for the owner,
+  settled before M9. `--dry-run` prints each session's agent and the judge's,
+  whatever the answer.
