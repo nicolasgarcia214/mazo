@@ -205,6 +205,9 @@ proven by a run, like the MVP's.
   do prints the same line. `status` prints one line per home: `<home>: in sync
   (<n> skills)` when it has no error-level finding, otherwise one plain line
   per error, such as `claude-work: break-invariants is not linked (missing)`.
+  The other error states read `<home>: <skill> link target is gone
+  (dangling)`, `<home>: <skill> links somewhere else (wrong-link)` and
+  `<home>: <skill> is a real file, not a link (obstructed)`.
   Info-level findings follow on their own lines in either case, such as
   `claude: synced is not from the source; left alone (foreign)`. A rule that
   belongs to a skill rather than a home prints `ERROR: <skill dir>: <reason>`
@@ -213,8 +216,9 @@ proven by a run, like the MVP's.
 - **Legend.** `usage` and `unused` end with a legend line (F2).
 - **Paths.** `show` prints `$HOME` as `~` and a transcript as
   `<agent>:<file name>:<line>` with the full path in `--json`.
-- **Reparse.** `scan --reparse` prints `<home> <n> events (was <m>)`, since
-  `+N` is meaningless after a rewrite.
+- **Reparse.** `scan --reparse` prints `<home> <n> events (was <m>)` in
+  place of the `scan:` summary line, since `+N` is meaningless after a
+  rewrite.
 
 **F13. Portability.**
 - Policy rules are configuration, off by default (D9, §5.4).
@@ -1126,8 +1130,8 @@ that a session's verdict survives its transcript.
    first 500 characters of each tool result. Injected skill bodies are
    dropped, because the judge gets the skill separately. Every kept record is
    prefixed with its line number (`L412:`) so the judge can cite it. Beyond
-   60,000 characters, skima keeps the first 40,000 and the last 20,000 and
-   marks the cut.
+   60,000 characters (`max_chars`), skima keeps the first two thirds and the
+   last third (40,000 and 20,000) and marks the cut.
 3. **The skill as it was.** The judge gets `SKILL.md` from the last commit
    before the session started (`git show <commit>:<path>`), or the current
    file when there is no repository or no earlier commit.
