@@ -29,6 +29,18 @@ impl State {
         }
     }
 
+    /// What the state means, for `status`: `<home>: <name> <finding>`.
+    pub fn finding(self) -> &'static str {
+        match self {
+            State::Ok => unreachable!("status prints no line for an ok entry"),
+            State::Missing => "is not linked (missing)",
+            State::Dangling => "link target is gone (dangling)",
+            State::WrongLink => "links somewhere else (wrong-link)",
+            State::Obstructed => "is a real file, not a link (obstructed)",
+            State::Foreign => "is not from the source; left alone (foreign)",
+        }
+    }
+
     pub fn is_error(self) -> bool {
         !matches!(self, State::Ok | State::Foreign)
     }
@@ -52,8 +64,9 @@ pub enum Action {
 pub struct Plan {
     pub entries: Vec<Entry>,
     pub actions: Vec<Action>,
-    /// `ERROR: …` lines (with resolution hints); any conflict means no writes.
-    pub conflicts: Vec<String>,
+    /// `(home, "ERROR: …")` pairs, each line with its resolution hint; any
+    /// conflict means no writes.
+    pub conflicts: Vec<(String, String)>,
 }
 
 /// One directory skima links into, with the canonical entries it should hold.
@@ -64,7 +77,7 @@ struct Target {
     entries: Vec<(String, PathBuf)>,
 }
 
-fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<String>) -> Vec<Target> {
+fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<(String, String)>) -> Vec<Target> {
     let mut common: Vec<(String, PathBuf)> = inv.skills.iter().map(|s| (s.clone(), cfg.source.join(s))).collect();
     for loose in &cfg.loose {
         let src = cfg.source.join(loose);
@@ -80,18 +93,21 @@ fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<S
             let path = home.path.join(key);
             let src = cfg.source.join(value);
             if !src.exists() {
-                conflicts.push(format!("ERROR: {} is missing", src.display()));
+                conflicts.push((home.name.clone(), format!("ERROR: {} is missing", src.display())));
                 continue;
             }
             let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { continue };
             let name = name.to_string_lossy().into_owned();
             match out.iter_mut().find(|t: &&mut Target| t.home == home.name && t.dir == dir) {
                 Some(t) => match t.entries.iter().find(|(n, _)| *n == name) {
-                    Some((_, other)) => conflicts.push(format!(
-                        "ERROR: {} is claimed by two sources: {} and {}",
-                        path.display(),
-                        other.display(),
-                        src.display()
+                    Some((_, other)) => conflicts.push((
+                        home.name.clone(),
+                        format!(
+                            "ERROR: {} is claimed by two sources: {} and {}",
+                            path.display(),
+                            other.display(),
+                            src.display()
+                        ),
                     )),
                     None => t.entries.push((name, src)),
                 },
@@ -119,7 +135,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
         }
         planned.push(physical);
         if let Err(bad) = check_dir(&t.dir) {
-            plan.conflicts.push(format!("ERROR: {} is not a directory", bad.display()));
+            plan.conflicts.push((t.home.clone(), format!("ERROR: {} is not a directory", bad.display())));
             continue;
         }
         let exists = fs::symlink_metadata(&t.dir).is_ok();
@@ -139,10 +155,13 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
             match state {
                 State::Missing => plan.actions.push(Action::Link { source: src.clone(), path: path.clone() }),
                 State::WrongLink | State::Obstructed => {
-                    plan.conflicts.push(format!(
-                        "ERROR: {} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
-                        path.display(),
-                        hint(&path, state)
+                    plan.conflicts.push((
+                        t.home.clone(),
+                        format!(
+                            "ERROR: {} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
+                            path.display(),
+                            hint(&path, state)
+                        ),
                     ));
                 }
                 _ => {}

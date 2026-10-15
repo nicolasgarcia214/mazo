@@ -210,37 +210,43 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
 }
 
-/// Per-skill rules always; per-home rules for the selected homes (SPEC §5.4).
-fn policy_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<String> {
-    let mut errors = policy::per_skill(cfg, inv);
-    for h in homes {
-        errors.extend(policy::per_home(&cfg.policy, inv, h));
-    }
-    errors
+/// Per-home rules for the selected homes (SPEC §5.4), as `(home, line)`.
+fn home_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<(String, String)> {
+    homes.iter().flat_map(|h| policy::per_home(&cfg.policy, inv, h).into_iter().map(|e| (h.name.clone(), e))).collect()
 }
 
 fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
-    let errors = policy_errors(cfg, inv, &homes);
+    let skill_errors = policy::per_skill(cfg, inv);
     let plan = links::plan(cfg, inv, &homes);
+    let policy_errors = home_errors(cfg, inv, &homes);
+    let home_errors = || policy_errors.iter().chain(&plan.conflicts);
     let data = ledger::data_dir()?;
     let warnings = policy::freshness(cfg, &ledger::load_coverage(&data)?, jiff::Timestamp::now());
     let drift: Vec<&links::Entry> = plan.entries.iter().filter(|e| e.state != links::State::Ok).collect();
-    let failed = !errors.is_empty() || drift.iter().any(|e| e.state.is_error()) || !plan.conflicts.is_empty();
+    let failed = !skill_errors.is_empty() || home_errors().next().is_some() || drift.iter().any(|e| e.state.is_error());
     if json {
         let entries: Vec<serde_json::Value> = drift
             .iter()
             .map(|e| serde_json::json!({"home": e.home, "path": e.path, "state": e.state.label(), "error": e.state.is_error()}))
             .collect();
-        let v =
-            serde_json::json!({"drift": entries, "policy": errors, "conflicts": plan.conflicts, "warnings": warnings});
+        let policy: Vec<&String> = skill_errors.iter().chain(policy_errors.iter().map(|(_, e)| e)).collect();
+        let conflicts: Vec<&String> = plan.conflicts.iter().map(|(_, e)| e).collect();
+        let v = serde_json::json!({"drift": entries, "policy": policy, "conflicts": conflicts, "warnings": warnings});
         println!("{v}");
     } else {
-        for e in &drift {
-            let name = e.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-            println!("{}: {} {name}", e.home, e.state.label());
+        for h in &homes {
+            let (errors, info): (Vec<&links::Entry>, Vec<&links::Entry>) =
+                drift.iter().filter(|e| e.home == h.name).partition(|e| e.state.is_error());
+            if errors.is_empty() && !home_errors().any(|(home, _)| *home == h.name) {
+                println!("{}: in sync ({} skills)", h.name, inv.skills.len());
+            }
+            for e in errors.into_iter().chain(info) {
+                let name = e.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                println!("{}: {name} {}", e.home, e.state.finding());
+            }
         }
-        for e in errors.iter().chain(&plan.conflicts) {
+        for e in skill_errors.iter().chain(home_errors().map(|(_, e)| e)) {
             eprintln!("{e}");
         }
         for w in &warnings {
@@ -252,14 +258,20 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -
 
 fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
-    let mut errors = policy_errors(cfg, inv, &homes);
     let plan = links::plan(cfg, inv, &homes);
-    errors.extend(plan.conflicts.iter().cloned());
+    let errors: Vec<String> = policy::per_skill(cfg, inv)
+        .into_iter()
+        .chain(home_errors(cfg, inv, &homes).into_iter().chain(plan.conflicts.iter().cloned()).map(|(_, e)| e))
+        .collect();
     if !errors.is_empty() {
         for e in &errors {
             eprintln!("{e}");
         }
         return Ok(ExitCode::from(1));
+    }
+    if plan.actions.is_empty() {
+        println!("in sync: {} homes, {} skills", homes.len(), inv.skills.len());
+        return Ok(ExitCode::SUCCESS);
     }
     if dry_run {
         for a in &plan.actions {

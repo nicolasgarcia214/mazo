@@ -112,7 +112,7 @@ fn status_warns_when_a_claude_home_nears_retention() {
     write_coverage(&fx, &[("claude", 24), ("claude-work", 22)]);
     let r = fx.skima(&["status"]);
     r.assert_ok();
-    assert_eq!(r.stdout(), "");
+    assert_eq!(r.stdout(), in_sync(&fx, &["claude", "claude-work", "codex", "pi"]));
     assert!(r.stderr().contains("warning: claude: last scanned"), "{}", r.stderr());
     assert!(r.stderr().contains("after 30 days"), "{}", r.stderr());
     assert!(!r.stderr().contains("warning: claude-work"), "22 days is fresh: {}", r.stderr());
@@ -137,8 +137,8 @@ fn status_writes_nothing() {
     let before = fx.snapshot();
     let r = fx.skima(&["status"]);
     assert_eq!(r.code(), 1, "missing links are drift");
-    assert!(r.stdout().contains(&format!("codex: missing {}", fx.skills[0])), "{}", r.stdout());
-    assert!(r.stdout().contains("codex: dangling gone"), "{}", r.stdout());
+    assert!(r.stdout().contains(&format!("codex: {} is not linked (missing)", fx.skills[0])), "{}", r.stdout());
+    assert!(r.stdout().contains("codex: gone link target is gone (dangling)"), "{}", r.stdout());
     assert_eq!(fx.snapshot(), before);
 
     fs::remove_file(fx.home.join(".codex/skills/gone")).unwrap();
@@ -148,20 +148,81 @@ fn status_writes_nothing() {
     assert_eq!(fx.snapshot(), before);
 }
 
+/// `<home>: in sync (<n> skills)` for each of `homes`, in order.
+fn in_sync(fx: &Fixture, homes: &[&str]) -> String {
+    homes.iter().map(|h| format!("{h}: in sync ({} skills)\n", fx.skills.len())).collect()
+}
+
 #[test]
-fn a_second_sync_prints_nothing() {
+fn status_prints_one_plain_line_per_finding() {
+    let fx = fixture();
+    fx.skima(&["sync"]).assert_ok();
+    let codex = fx.home.join(".codex/skills");
+    let [missing, wrong, obstructed] = [&fx.skills[0], &fx.skills[1], &fx.skills[2]];
+    fs::remove_file(codex.join(missing)).unwrap();
+    fs::remove_file(codex.join(wrong)).unwrap();
+    std::os::unix::fs::symlink(&fx.home, codex.join(wrong)).unwrap();
+    fs::remove_file(codex.join(obstructed)).unwrap();
+    common::write(&codex.join(obstructed), "local");
+    std::os::unix::fs::symlink(fx.source.join("gone"), codex.join("gone")).unwrap();
+    fs::create_dir(fx.home.join(".claude/skills/synced")).unwrap();
+
+    let r = fx.skima(&["status"]);
+    assert_eq!(r.code(), 1);
+    let expected = format!(
+        "{}claude: synced is not from the source; left alone (foreign)\n{}\
+         codex: {missing} is not linked (missing)\n\
+         codex: {wrong} links somewhere else (wrong-link)\n\
+         codex: {obstructed} is a real file, not a link (obstructed)\n\
+         codex: gone link target is gone (dangling)\n{}",
+        in_sync(&fx, &["claude"]),
+        in_sync(&fx, &["claude-work"]),
+        in_sync(&fx, &["pi"]),
+    );
+    assert_eq!(r.stdout(), expected);
+
+    // A home whose only finding is foreign is in sync, and status exits 0.
+    for name in [wrong.as_str(), obstructed, "gone"] {
+        fs::remove_file(codex.join(name)).unwrap();
+    }
+    fx.skima(&["sync"]).assert_ok();
+    let r = fx.skima(&["status"]);
+    r.assert_ok();
+    let expected = format!(
+        "{}claude: synced is not from the source; left alone (foreign)\n{}",
+        in_sync(&fx, &["claude"]),
+        in_sync(&fx, &["claude-work", "codex", "pi"]),
+    );
+    assert_eq!(r.stdout(), expected);
+}
+
+#[test]
+fn a_skill_rule_errors_on_stderr_while_homes_stay_in_sync() {
+    let fx = fixture();
+    fx.skima(&["sync"]).assert_ok();
+    let skill = fx.source.join(&fx.skills[0]);
+    fs::write(skill.join("agents/openai.yaml"), "policy:\n  allow_implicit_invocation: true\n").unwrap();
+    let r = fx.skima(&["status"]);
+    assert_eq!(r.code(), 1);
+    assert_eq!(r.stdout(), in_sync(&fx, &["claude", "claude-work", "codex", "pi"]));
+    assert!(r.stderr().starts_with(&format!("ERROR: {}: ", skill.display())), "{}", r.stderr());
+    assert_eq!(fx.skima(&["status", "--agent", "nope"]).code(), 2, "usage error");
+}
+
+#[test]
+fn a_second_sync_prints_in_sync() {
     let fx = fixture();
     let first = fx.skima(&["sync"]);
     first.assert_ok();
     assert!(first.stdout().contains("linked    "), "{}", first.stdout());
     let second = fx.skima(&["sync"]);
     second.assert_ok();
-    assert_eq!(second.stdout(), "");
+    assert_eq!(second.stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
     assert_eq!(second.stderr(), "");
 }
 
 #[test]
-fn dry_run_on_a_clean_tree_prints_nothing() {
+fn dry_run_on_a_clean_tree_prints_in_sync() {
     let fx = fixture();
     let before = fx.snapshot();
     let dirty = fx.skima(&["sync", "--dry-run"]);
@@ -172,8 +233,10 @@ fn dry_run_on_a_clean_tree_prints_nothing() {
     fx.skima(&["sync"]).assert_ok();
     let clean = fx.skima(&["sync", "--dry-run"]);
     clean.assert_ok();
-    assert_eq!(clean.stdout(), "");
+    assert_eq!(clean.stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
     assert_eq!(clean.stderr(), "");
+    let pi = fx.skima(&["sync", "--dry-run", "--agent", "pi"]);
+    assert_eq!(pi.stdout(), format!("in sync: 1 homes, {} skills\n", fx.skills.len()));
 }
 
 // Regression tests for the code-review findings.
@@ -198,7 +261,7 @@ fn two_homes_sharing_a_directory_sync_once() {
     let codex = fx.home.join(".codex");
     fx.set_env("PI_CODING_AGENT_DIR", Some(&codex));
     fx.skima(&["sync"]).assert_ok();
-    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), "");
+    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
 }
 
 #[test]
@@ -254,7 +317,7 @@ fn a_directory_shared_through_a_symlink_is_synced_once() {
     fx.set_env("PI_CODING_AGENT_DIR", Some(&alias));
     let r = fx.skima(&["sync"]);
     r.assert_ok();
-    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), "");
+    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
 }
 
 #[test]
