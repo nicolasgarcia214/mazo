@@ -1,4 +1,4 @@
-//! `skima.toml` (SPEC §6.1) and path expansion, including the Pi directory
+//! `skima.toml` (SPEC §6.1) with its `[policy]` table, and path expansion, including the Pi directory
 //! normalisation that `install.sh` did in Node (SPEC §5.6).
 
 use std::collections::BTreeMap;
@@ -16,6 +16,18 @@ pub struct Config {
     pub source: PathBuf,
     pub loose: Vec<String>,
     pub homes: Vec<Home>,
+    pub policy: Policy,
+}
+
+/// The `[policy]` table (SPEC §5.4): every rule off and no authoring skill by default.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Policy {
+    pub no_disable_model_invocation: bool,
+    pub codex_manifest: bool,
+    pub claude_name_only: bool,
+    /// Skills whose strong load marks a root session as authoring (SPEC §4.1).
+    pub authoring_skills: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +69,8 @@ struct RawConfig {
     loose: Vec<String>,
     #[serde(default, rename = "home")]
     homes: Vec<RawHome>,
+    #[serde(default)]
+    policy: Policy,
 }
 
 #[derive(Deserialize)]
@@ -103,7 +117,7 @@ fn load_from(path: &Path) -> Result<Config> {
         };
         homes.push(Home { name: h.name, agent: h.agent, path, links: h.links });
     }
-    Ok(Config { source, loose: raw.loose, homes })
+    Ok(Config { source, loose: raw.loose, homes, policy: raw.policy })
 }
 
 pub(crate) fn home_dir() -> Result<String> {
@@ -195,6 +209,24 @@ mod tests {
 
     fn pi(v: &str) -> std::result::Result<PathBuf, String> {
         pi_agent_dir(v, "/r/home", Path::new("/r/cwd"))
+    }
+
+    fn policy(table: &str) -> std::result::Result<Policy, String> {
+        toml::from_str::<RawConfig>(&format!("source = \".\"\n{table}")).map(|r| r.policy).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn policy_keys_are_optional_and_off_by_default() {
+        for table in ["", "[policy]\n"] {
+            let p = policy(table).unwrap();
+            assert!(!p.no_disable_model_invocation && !p.codex_manifest && !p.claude_name_only, "{table:?}");
+            assert!(p.authoring_skills.is_empty(), "{table:?}");
+        }
+        let p = policy("[policy]\ncodex_manifest = true\nauthoring_skills = [\"grade\"]\n").unwrap();
+        assert!(p.codex_manifest && !p.no_disable_model_invocation && !p.claude_name_only);
+        assert_eq!(p.authoring_skills, ["grade"]);
+        let p = policy("[policy]\nno_disable_model_invocation = true\nclaude_name_only = true\n").unwrap();
+        assert!(p.no_disable_model_invocation && p.claude_name_only && !p.codex_manifest);
     }
 
     #[test]

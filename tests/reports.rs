@@ -8,7 +8,7 @@ use std::path::Path;
 
 use common::{copy_tree, git, write};
 use serde_json::Value;
-use skima::config::Config;
+use skima::config::{Config, Policy};
 use skima::evals;
 use skima::inventory::{self, Inventory};
 use skima::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
@@ -68,6 +68,10 @@ fn world(source: &Path) -> World {
         source: source.into(),
         loose: vec![],
         homes: vec![home("claude", Agent::Claude), home("codex", Agent::Codex)],
+        policy: Policy {
+            authoring_skills: ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into(),
+            ..Policy::default()
+        },
     };
     let skills = inventory::canonical_skills(source).unwrap();
     let inv = Inventory { source: source.into(), known: skills.clone(), skills, worktree: None };
@@ -288,6 +292,11 @@ fn usage_collapses_and_applies_default_filters() {
 
     let authoring = report::usage(&input, &UsageArgs { authoring: true, ..args() }, true, false);
     assert_eq!(counts(&row(&authoring, "unslop")), [3, 1, 3, 0, 4, 1], "--authoring adds sessions C and D");
+
+    let mut plain = world(repo.path());
+    plain.cfg.policy.authoring_skills.clear();
+    let out = report::usage(&plain.input(&events), &args(), true, false);
+    assert_eq!(counts(&row(&out, "unslop")), [3, 1, 3, 0, 3, 1], "no authoring_skills: only the cwd rule tags C");
 
     let since_all = report::usage(&input, &UsageArgs { since: Since::All, ..args() }, true, false);
     assert_eq!(counts(&row(&since_all, "unslop")), [5, 1, 4, 1, 2, 1]);

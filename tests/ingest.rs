@@ -86,7 +86,7 @@ impl Env {
         fs::copy(fixture("history.jsonl"), homes[0].path.join("history.jsonl")).unwrap();
         let skills: BTreeSet<String> = ["unslop", "gitmoji-conventional-commit", "grade"].map(String::from).into();
         let inv = Inventory { source: source.clone(), skills: skills.clone(), known: skills, worktree: None };
-        let cfg = Config { source, loose: vec![], homes };
+        let cfg = Config { source, loose: vec![], homes, policy: Default::default() };
         let env = Env { data: tmp.path().join("data/skima"), tmp, cfg, inv };
         for (dest, src) in files {
             env.put(dest, &fs::read(fixture(src)).unwrap());

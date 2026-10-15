@@ -1,16 +1,16 @@
-//! Policy rules moved from `install.sh`'s `validate_policy` (SPEC §5.4), and
-//! the scan-freshness warning.
+//! Always-on and configurable policy rules (SPEC §5.4), and the
+//! scan-freshness warning.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::config::{Config, Home};
+use crate::config::{Config, Home, Policy};
 use crate::inventory::Inventory;
 use crate::ledger::{Agent, Coverage};
 use crate::strict_yaml::{self, Yaml};
 
-/// Per-skill rules: run on every `sync` and `status`, whatever `--agent` says.
-/// Returns `ERROR: …` lines.
+/// Per-skill rules, always-on then the configured ones: run on every `sync`
+/// and `status`, whatever `--agent` says. Returns `ERROR: …` lines.
 pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
     if inv.skills.is_empty() {
         return vec![format!("ERROR: no canonical skills found in {}", cfg.source.display())];
@@ -19,20 +19,34 @@ pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
         .iter()
         .filter_map(|name| {
             let dir = cfg.source.join(name);
-            check_skill(&dir, name).err().map(|e| format!("ERROR: {}: {e}", dir.display()))
+            check_skill(&cfg.policy, &dir, name).err().map(|e| format!("ERROR: {}: {e}", dir.display()))
         })
         .collect()
 }
 
-fn check_skill(dir: &Path, name: &str) -> crate::Result<()> {
+fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
     let skill_md = dir.join("SKILL.md");
     let text = std::fs::read_to_string(&skill_md).map_err(|e| format!("{}: {e}", skill_md.display()))?;
     let meta = strict_yaml::frontmatter(&text)?;
+    always_on(&meta, name)?;
+    if policy.no_disable_model_invocation && meta.get("disable-model-invocation").is_some() {
+        return Err("SKILL.md must omit disable-model-invocation; Claude invocation lives in skillOverrides".into());
+    }
+    if policy.codex_manifest {
+        let manifest_path = dir.join("agents/openai.yaml");
+        let text = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        let manifest = strict_yaml::load(&text)?;
+        if manifest.get("policy").and_then(|p| p.get("allow_implicit_invocation")) != Some(&Yaml::Bool(false)) {
+            return Err("agents/openai.yaml must set policy.allow_implicit_invocation: false".into());
+        }
+    }
+    Ok(())
+}
+
+/// The Agent Skills format rules on a parsed frontmatter.
+fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
     if !matches!(meta, Yaml::Map(_)) {
         return Err("SKILL.md frontmatter must be a mapping".into());
-    }
-    if meta.get("disable-model-invocation").is_some() {
-        return Err("SKILL.md must omit disable-model-invocation; Claude invocation lives in skillOverrides".into());
     }
     let description = match meta.get("description") {
         Some(Yaml::Str(d)) if !d.trim_matches(python_space).is_empty() => d,
@@ -44,13 +58,7 @@ fn check_skill(dir: &Path, name: &str) -> crate::Result<()> {
     if name.chars().count() > 64 || !valid_name(name) || description.chars().count() > 1024 {
         return Err("skill name or description exceeds the Agent Skills format limits".into());
     }
-    let manifest_path = dir.join("agents/openai.yaml");
-    let text = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    let manifest = strict_yaml::load(&text)?;
-    match manifest.get("policy") {
-        Some(policy @ Yaml::Map(_)) if policy.get("allow_implicit_invocation") == Some(&Yaml::Bool(false)) => Ok(()),
-        _ => Err("agents/openai.yaml must set policy.allow_implicit_invocation: false".into()),
-    }
+    Ok(())
 }
 
 /// Python's `str.isspace()`: Unicode whitespace plus the separators U+001C–U+001F.
@@ -64,9 +72,9 @@ fn valid_name(name: &str) -> bool {
     name.split('-').all(ok)
 }
 
-/// Per-home rules for the selected homes. Returns `ERROR: …` lines.
-pub fn per_home(inv: &Inventory, home: &Home) -> Vec<String> {
-    if home.agent != Agent::Claude {
+/// Per-home configurable rules for the selected homes. Returns `ERROR: …` lines.
+pub fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
+    if !policy.claude_name_only || home.agent != Agent::Claude {
         return Vec::new();
     }
     let path = home.settings();
@@ -149,7 +157,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home =
             Home { name: "claude".into(), agent: Agent::Claude, path: dir.path().into(), links: Default::default() };
-        let cfg = Config { source: dir.path().into(), loose: vec![], homes: vec![home] };
+        let cfg = Config { source: dir.path().into(), loose: vec![], homes: vec![home], policy: Default::default() };
         let now: jiff::Timestamp = "2026-10-31T00:00:00Z".parse().unwrap();
         let at = |days: i64| {
             let t = now.checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap();

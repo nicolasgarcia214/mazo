@@ -1,6 +1,7 @@
 //! Shared fixture for `tests/sync_port.rs` and `tests/sync.rs` (SPEC §5.7 step 3):
-//! a temporary skills source with a `skima.toml` listing four `~`-relative homes,
-//! a temporary `HOME`, a Pi directory, and a private `XDG_DATA_HOME`.
+//! a temporary skills source with a `skima.toml` turning every `[policy]` rule on
+//! and listing four `~`-relative homes, a temporary `HOME`, a Pi directory, and
+//! a private `XDG_DATA_HOME`.
 
 #![allow(dead_code)]
 
@@ -16,6 +17,12 @@ pub const PI_EXTENSION: &str = "pi-explicit-skills.ts";
 
 const SKIMA_TOML: &str = r#"source = "."
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
+
+[policy]
+no_disable_model_invocation = true
+codex_manifest              = true
+claude_name_only            = true
+authoring_skills            = ["grade", "retro", "writing-for-agents", "skill-creator"]
 
 [[home]]
 name  = "claude"

@@ -180,7 +180,7 @@ impl ForkMachine {
             .into();
         let skills: BTreeSet<String> = ["argus".to_string()].into();
         let inv = Inventory { source: source.clone(), known: skills.clone(), skills, worktree: None };
-        let cfg = Config { source, loose: vec![], homes: vec![home(&codex_home)] };
+        let cfg = Config { source, loose: vec![], homes: vec![home(&codex_home)], policy: Default::default() };
         ForkMachine { tmp, cfg, inv, day, lines }
     }
 

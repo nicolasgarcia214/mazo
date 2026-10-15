@@ -196,11 +196,11 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
 }
 
-/// Per-skill rules always; per-home rules for the selected homes.
+/// Per-skill rules always; per-home rules for the selected homes (SPEC §5.4).
 fn policy_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<String> {
     let mut errors = policy::per_skill(cfg, inv);
     for h in homes {
-        errors.extend(policy::per_home(inv, h));
+        errors.extend(policy::per_home(&cfg.policy, inv, h));
     }
     errors
 }

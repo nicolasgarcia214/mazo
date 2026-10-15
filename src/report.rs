@@ -53,10 +53,6 @@ pub struct UsageArgs {
     pub authoring: bool,
 }
 
-/// Skills whose strong load marks a root session as authoring (SPEC §4.1).
-/// Matched on the name after the last `:`, so a plugin's `skill-creator:skill-creator` counts.
-const AUTHORING_SKILLS: [&str; 4] = ["grade", "retro", "writing-for-agents", "skill-creator"];
-
 /// Days in the `30d` sparkline.
 const SPARK_DAYS: i64 = 30;
 
@@ -89,10 +85,13 @@ impl<'a> View<'a> {
         let today = input.now.to_zoned(tz.clone()).date();
         let events: Vec<(&Event, Timestamp)> =
             input.events.iter().filter_map(|e| Some((e, e.ts.parse::<Timestamp>().ok()?))).collect();
+        // `policy.authoring_skills` matched on the name after the last `:`, so a
+        // plugin's `skill-creator:skill-creator` counts.
+        let authoring = &input.cfg.policy.authoring_skills;
         let authoring_sessions = input
             .events
             .iter()
-            .filter(|e| e.channel.strong() && AUTHORING_SKILLS.contains(&e.skill.rsplit(':').next().unwrap_or("")))
+            .filter(|e| e.channel.strong() && authoring.iter().any(|s| e.skill.rsplit(':').next() == Some(s.as_str())))
             .map(|e| (e.agent, e.session.as_str()))
             .collect();
         View { input, tz, today, events, authoring_sessions }
