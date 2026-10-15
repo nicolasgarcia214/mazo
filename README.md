@@ -3,8 +3,7 @@
 skima counts how your coding agents use your skills and keeps every agent home
 linked to one skills directory. It reads the session logs that Claude Code,
 Codex and Pi already write, stores each skill load in its own ledger, and
-replaces `skills/install.sh` for linking. SPEC.md is the design;
-`how-skima-works.html` explains it in plain English.
+replaces `skills/install.sh` for linking. SPEC.md is the design.
 
 ## Get started
 
