@@ -6,11 +6,24 @@ Codex and Pi already write, stores each skill load in its own ledger, and
 replaces `skills/install.sh` for linking. SPEC.md is the design;
 `how-skima-works.html` explains it in plain English.
 
-## Install
+## Get started
+
+skima runs on Linux and macOS and needs a Rust toolchain, a skills directory
+(one subdirectory per skill, each holding a `SKILL.md`) and at least one of
+Claude Code, Codex or Pi.
+
+The repository is private: only users invited to it can install skima. Cargo
+fetches it with your git credentials when `CARGO_NET_GIT_FETCH_WITH_CLI=true`.
 
 ```
-cargo install --locked --path ~/projects/skima
+CARGO_NET_GIT_FETCH_WITH_CLI=true \
+  cargo install --locked --git https://github.com/nicolasgarcia214/skima
+skima init --source <skills dir>   # write the config
+skima sync                         # link every skill into every agent home
+skima usage                        # see which skills your agents load
 ```
+
+## Configuration
 
 skima reads `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml`
 (`~/.config/skima/config.toml` when `XDG_CONFIG_HOME` is unset). Without one,
@@ -70,9 +83,9 @@ Measured on 2026-10-13 against this machine's logs (SPEC §10.2, §10.3):
   correct. Missed loads among the 40 near misses: none.
 - **Reads are weak evidence.** In those samples, 19 of 40 reads were authoring:
   editing or grading the skill rather than following it. skima tags authoring
-  when the session runs inside the dotfiles repo or a home's skills directory,
-  or when the same session loaded `grade`, `retro`, `writing-for-agents` or
-  `skill-creator`. The sampled ledger predates the skills-directory part of the
+  when the session runs inside the git repository that holds the skills
+  directory or inside a home's skills directory, or when the same session
+  loaded a skill named in `[policy] authoring_skills`. The sampled ledger predates the skills-directory part of the
   rule and tagged 13 of the 19; that part covers 5 of the other 6, all run
   from `~/.codex/skills`. Reads are never added to the headline `sess` column.
 

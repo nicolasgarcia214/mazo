@@ -3,6 +3,7 @@ name = "skima"
 version = "0.1.0"
 edition = "2024"
 description = "Personal skill manager: usage from agent transcripts, sync of skill links"
+license = "MIT"
 publish = false
 
 [lib]
