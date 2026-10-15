@@ -86,7 +86,7 @@ pub fn fan_in(source: &Path, skills: &BTreeSet<String>) -> Graph {
 /// backticks removed and each whitespace run collapsed to one space.
 fn citing_text(dir: &Path) -> String {
     let skill_md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
-    let mut parts = vec![crate::strict_yaml::split_frontmatter(&skill_md).map_or(skill_md, |(_, body)| body)];
+    let mut parts = vec![crate::yaml::split_frontmatter(&skill_md).map_or(skill_md, |(_, body)| body)];
     let mut stack = vec![dir.join("references")];
     let mut refs = Vec::new();
     while let Some(d) = stack.pop() {

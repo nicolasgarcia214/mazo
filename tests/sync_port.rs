@@ -123,6 +123,8 @@ fn pi_policy_requires_codex_false_and_unique_keys() {
         "policy:\n  allow_implicit_invocation: true\n",
         "policy:\n  allow_implicit_invocation: \"false\"\n",
         "policy:\n  allow_implicit_invocation: no\n",
+        "policy:\n  allow_implicit_invocation: False\n",
+        "policy:\n  allow_implicit_invocation: !!bool false\n",
         "policy:\n  allow_implicit_invocation: off\n",
         "policy:\n  allow_implicit_invocation: 0\n",
         "policy:\n  allow_implicit_invocation: false\n  allow_implicit_invocation: true\n",
@@ -147,6 +149,9 @@ fn invalid_skill_metadata_fails_before_writes() {
         original.replace("name: goal-smart", "name: different-name"),
         original.replace("description: Test skill.", "description: ''"),
         original.replace("description: Test skill.", "description: 1"),
+        original.replace("description: Test skill.", "description: true"),
+        original.replace("description: Test skill.", "description: [Test skill.]"),
+        original.replace("description: Test skill.", "description: Test skill.\nmetadata:\n  k: 1\n  'k': 2"),
     ] {
         fs::write(&path, content).unwrap();
         fx.assert_rejected_before_writes();

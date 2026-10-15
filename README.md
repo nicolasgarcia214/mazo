@@ -78,9 +78,7 @@ missed; `skima scan --report` counts them and prints samples.
 cargo test
 ```
 
-The suite includes the 18 ported `install.sh` tests, a differential test of the
-YAML policy loader against PyYAML (needs `python3` with PyYAML, or set
-`SKIMA_SKIP_PYDIFF=1`), and ingest properties such as "a fresh scan equals an
-incremental one". The tests read the synthetic skills tree in
-`tests/fixtures/skills`; set `SKIMA_TEST_SKILLS` to run them against a real
-skills directory instead.
+The suite includes the 18 ported `install.sh` tests and ingest properties such
+as "a fresh scan equals an incremental one". The tests read the synthetic
+skills tree in `tests/fixtures/skills`; set `SKIMA_TEST_SKILLS` to run them
+against a real skills directory instead.

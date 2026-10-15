@@ -776,7 +776,7 @@ cannot break them (§10.1).
 ### 5.4 Policy
 
 **YAML.** Frontmatter and `agents/openai.yaml` are parsed with `saphyr` (YAML
-1.2 core schema), plus one check over `saphyr-parser` events: a duplicate key
+1.2 core schema), whose loader compares keys by resolved value: a duplicate key
 in any mapping is an error. Version 1's `strict_yaml.rs` reproduced the PyYAML
 loader of the deleted `install.sh` in 984 lines plus a 664-line differential
 test; with `install.sh` gone that fidelity serves nothing, and it is deleted

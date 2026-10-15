@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::config::{Config, Home, Policy};
 use crate::inventory::Inventory;
 use crate::ledger::{Agent, Coverage};
-use crate::strict_yaml::{self, Yaml};
+use crate::yaml::{self, Yaml};
 
 /// Per-skill rules, always-on then the configured ones: run on every `sync`
 /// and `status`, whatever `--agent` says. Returns `ERROR: …` lines.
@@ -27,16 +27,17 @@ pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
 fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
     let skill_md = dir.join("SKILL.md");
     let text = std::fs::read_to_string(&skill_md).map_err(|e| format!("{}: {e}", skill_md.display()))?;
-    let meta = strict_yaml::frontmatter(&text)?;
+    let meta = yaml::frontmatter(&text)?;
     always_on(&meta, name)?;
-    if policy.no_disable_model_invocation && meta.get("disable-model-invocation").is_some() {
+    if policy.no_disable_model_invocation && yaml::get(&meta, "disable-model-invocation").is_some() {
         return Err("SKILL.md must omit disable-model-invocation; Claude invocation lives in skillOverrides".into());
     }
     if policy.codex_manifest {
         let manifest_path = dir.join("agents/openai.yaml");
         let text = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-        let manifest = strict_yaml::load(&text)?;
-        if manifest.get("policy").and_then(|p| p.get("allow_implicit_invocation")) != Some(&Yaml::Bool(false)) {
+        let manifest = yaml::load(&text)?;
+        let value = yaml::get(&manifest, "policy").and_then(|p| yaml::get(p, "allow_implicit_invocation"));
+        if !value.is_some_and(yaml::is_plain_false) {
             return Err("agents/openai.yaml must set policy.allow_implicit_invocation: false".into());
         }
     }
@@ -45,14 +46,14 @@ fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
 
 /// The Agent Skills format rules on a parsed frontmatter.
 fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
-    if !matches!(meta, Yaml::Map(_)) {
+    if !meta.is_mapping() {
         return Err("SKILL.md frontmatter must be a mapping".into());
     }
-    let description = match meta.get("description") {
-        Some(Yaml::Str(d)) if !d.trim_matches(python_space).is_empty() => d,
+    let description = match yaml::get(meta, "description").and_then(yaml::string) {
+        Some(d) if !d.trim_matches(python_space).is_empty() => d,
         _ => return Err("SKILL.md must declare its skill name and a nonempty description".into()),
     };
-    if !matches!(meta.get("name"), Some(Yaml::Str(n)) if n == name) {
+    if yaml::get(meta, "name").and_then(yaml::string) != Some(name) {
         return Err("SKILL.md must declare its skill name and a nonempty description".into());
     }
     if name.chars().count() > 64 || !valid_name(name) || description.chars().count() > 1024 {

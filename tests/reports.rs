@@ -391,6 +391,8 @@ fn evals_latest_date_and_staleness() {
     write(&src.join(".retros/s/r0.md"), "---\nskill: s\ndate: 2026-03-05\n---\n");
     write(&src.join(".retros/s/r1.md"), "---\nskill: s\ndate: \"2026-03-05\"\n---\n");
     write(&src.join(".retros/s/r2.md"), "---\nskill: s\ndate: 2026-03-04\n---\n");
+    write(&src.join(".retros/s/r3.md"), "---\nskill: s\ndate: 2026-03-06T09:00:00Z\n---\n");
+    write(&src.join(".retros/s/r4.md"), "---\nskill: s\ndate: 20260307\n---\n");
     git(src, &["add", "."], NOW);
     git(src, &["commit", "-q", "-m", "skill and grades"], "2026-02-01T00:00:00Z");
 
@@ -403,7 +405,8 @@ fn evals_latest_date_and_staleness() {
     assert_eq!(g.eval.score.as_deref(), Some("8.5"));
     assert!(!g.stale, "a grade committed together with the skill edit is not stale");
     let retros: Vec<&str> = e.retros.iter().map(|r| r.file.file_name().unwrap().to_str().unwrap()).collect();
-    assert_eq!(retros, ["r2.md", "r0.md", "r1.md"], "by date, ties by filename");
+    assert_eq!(retros, ["r2.md", "r0.md", "r1.md", "r3.md"], "by date, ties by filename; r4.md has no YYYY-MM-DD");
+    assert_eq!(e.retros[3].date, "2026-03-06", "a timestamp is read as a string, its first 10 characters the date");
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
     git(src, &["commit", "-q", "-am", "edit skill"], "2026-03-01T00:00:00Z");

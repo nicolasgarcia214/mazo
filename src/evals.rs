@@ -4,13 +4,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::inventory::git;
-use crate::strict_yaml::{self, Yaml};
+use crate::yaml;
 
 /// One loaded grade or retro file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Eval {
     pub file: PathBuf,
-    /// The frontmatter `date`, normalised to `YYYY-MM-DD`.
+    /// The first 10 characters of the frontmatter `date`, a `YYYY-MM-DD`.
     pub date: String,
     /// The frontmatter `score` as written (`8.6`, `9`), if any.
     pub score: Option<String>,
@@ -55,25 +55,29 @@ fn read_dir(dir: &Path) -> Vec<Eval> {
         if !text.trim_start_matches('\u{feff}').starts_with("---") {
             continue; // no frontmatter: not an evaluation artifact
         }
-        let fm = match strict_yaml::frontmatter(&text) {
+        let fm = match yaml::frontmatter(&text) {
             Ok(fm) => fm,
             Err(e) => {
                 eprintln!("warning: {}: {e}; skipped", file.display());
                 continue;
             }
         };
-        let Some(date) = fm.get("date").and_then(Yaml::as_date) else {
+        let Some(date) = yaml::get(&fm, "date").and_then(yaml::text).and_then(date) else {
             eprintln!("warning: {}: no YYYY-MM-DD date; skipped", file.display());
             continue;
         };
-        let score = fm.get("score").map(|s| match s {
-            Yaml::Str(s) => s.clone(),
-            other => other.to_string(),
-        });
+        let score = yaml::get(&fm, "score").and_then(yaml::text).map(str::to_string);
         out.push(Eval { file, date, score });
     }
     out.sort_by(|a, b| (&a.date, &a.file).cmp(&(&b.date, &b.file)));
     out
+}
+
+/// The leading `YYYY-MM-DD` of a date scalar, quoted or not (SPEC §6.3).
+fn date(text: &str) -> Option<String> {
+    let d = text.get(..10)?;
+    let shape = d.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
+    shape.then(|| d.to_string())
 }
 
 /// SPEC §6.3: uncommitted changes to the skill make any grade stale; otherwise
