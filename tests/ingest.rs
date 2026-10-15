@@ -650,3 +650,32 @@ fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
         assert_eq!(counts, if audit { [0, 0, 0] } else { [1, 1, 1] }, "audit run: {audit}");
     }
 }
+
+/// SPEC D11, F15: `show` prints a real example read from the transcript and
+/// writes its text nowhere outside the agent's home.
+#[test]
+fn show_writes_no_example_text() {
+    let env = Env::new(&TRANSCRIPTS, &[]);
+    let xdg = env.tmp.path().join("xdg");
+    let out = env.cli(&xdg).args(["show", "gitmoji-conventional-commit"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let prompt = "/gitmoji-conventional-commit [scrubbed]";
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains(&format!(": {prompt}\n")), "{stdout}");
+    let home = env.tmp.path().join("claude");
+    let mut stack = vec![env.tmp.path().to_path_buf()];
+    let mut files = 0;
+    while let Some(dir) = stack.pop() {
+        for e in fs::read_dir(&dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() && p != home {
+                stack.push(p);
+            } else if p.is_file() {
+                files += 1;
+                let text = String::from_utf8_lossy(&fs::read(&p).unwrap()).into_owned();
+                assert!(!text.contains("[scrubbed]"), "{} holds prompt text", p.display());
+            }
+        }
+    }
+    assert!(xdg.join("skima/events.jsonl").is_file() && files > 3);
+}

@@ -12,6 +12,7 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::evals::{self, Eval, Evals, Grade};
+use crate::examples::{self, Examples};
 use crate::history::Commit;
 use crate::inventory::{self, Inventory};
 use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin, name};
@@ -493,8 +494,7 @@ struct Card<'a> {
     cites: Vec<Link>,
     cited_by: Vec<Link>,
     usage: CardUsage,
-    /// F15, empty until examples land.
-    examples: Vec<serde_json::Value>,
+    examples: Examples,
     /// F18, empty until the audit lands.
     audit: Option<serde_json::Value>,
 }
@@ -576,12 +576,16 @@ fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> C
         projects.into_iter().map(|(cwd, s)| Project { cwd: cwd.to_string(), sessions: s.len() }).collect();
     projects.sort_by_key(|p| std::cmp::Reverse(p.sessions));
     projects.truncate(3);
-    let last_use = view.select(&f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
+    let mut ledger: Vec<_> = view.select(&f, Some(skill), None).collect();
+    ledger.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    let last_use = ledger.iter().find(|(e, _)| e.channel.strong()).map(|(_, t)| *t);
     let usage = CardUsage {
         strong: by.into_iter().map(|((agent, channel), s)| ByChannel { agent, channel, events: s.len() }).collect(),
         last_use: last_use.map(|t| t.to_string()),
         projects,
     };
+    let agents = view.input.cfg.homes.iter().map(|h| h.agent);
+    let examples = examples::examples(agents, &path, skill, ledger.iter().map(|(e, _)| *e));
 
     Card {
         skill,
@@ -598,7 +602,7 @@ fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> C
         cites,
         cited_by,
         usage,
-        examples: Vec::new(),
+        examples,
         audit: None,
     }
 }
@@ -725,5 +729,22 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
     let projects: Vec<String> =
         card.usage.projects.iter().map(|p| format!("{} {}", tilde(&p.cwd), p.sessions)).collect();
     out.push_str(&format!("projects: {}\n", if projects.is_empty() { "none".into() } else { projects.join(", ") }));
+
+    let ex = &card.examples;
+    let invoke: Vec<String> = ex.written.iter().map(|i| format!("{} {}", name(i.agent), i.text)).collect();
+    out.push_str(&format!("invoke: {}\n", invoke.join(", ")));
+    if let Some(p) = &ex.default_prompt {
+        out.push_str(&format!("default prompt: {p}\n"));
+    }
+    if ex.real.is_empty() {
+        out.push_str("examples: none\n");
+    } else {
+        out.push_str("examples:\n");
+        for r in &ex.real {
+            let date = r.ts.parse::<Timestamp>().map_or(r.ts.clone(), |t| view.date(t).to_string());
+            let text = r.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            out.push_str(&format!("  {date} {}: {text}\n", r.cwd.as_deref().map_or("-".into(), tilde)));
+        }
+    }
     Ok(out)
 }

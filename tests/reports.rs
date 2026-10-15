@@ -482,6 +482,8 @@ fn show_prints_the_card() {
         "strong: claude slash 2, claude tool 2, codex tool 1\n".into(),
         "last use: 2026-10-12 (1d ago)\n".into(),
         "projects: ~/work 2, /srv/a 1, /srv/b 1\n".into(),
+        "invoke: claude /unslop, codex $unslop\n".into(),
+        "examples: none\n".into(),
     ];
     assert_eq!(tail, expected.concat(), "{text}");
     assert!(text.contains("~/work") && !text.contains(&format!("{home}/work")), "{text}");
@@ -525,7 +527,7 @@ fn show_prints_the_card() {
     assert_eq!(v["cited_by"], serde_json::json!([{"skill": "citer", "held": false}]));
     assert_eq!(v["usage"]["last_use"], ago(1));
     assert_eq!(v["usage"]["projects"][0], serde_json::json!({"cwd": format!("{home}/work"), "sessions": 2}));
-    assert_eq!(v["examples"], serde_json::json!([]));
+    assert_eq!(v["examples"]["real"], serde_json::json!([]), "every transcript expired");
     assert_eq!(v["audit"], Value::Null);
 }
 
@@ -546,6 +548,121 @@ fn show_outside_a_git_worktree_omits_history() {
     assert_eq!(v["history"], Value::Null);
     assert_eq!(v["grades"][0]["since"], 0);
     assert_eq!(v["grades"][0]["stale"], false);
+}
+
+// ---------------------------------------------------------------- examples
+
+/// SPEC F15 and §10.8 Real examples, on Claude transcripts whose line `n` is
+/// the user message `msgs[n - 1]`.
+#[test]
+fn show_lists_written_and_real_examples() {
+    let repo = fixture_repo();
+    let src = repo.path();
+    write(&src.join("unslop/agents/openai.yaml"), "interface:\n  default_prompt: \"Use $unslop on this draft.\"\n");
+    let long = "Tighten this paragraph. ".repeat(20);
+    let msgs = [
+        "/unslop",
+        "yes",
+        long.as_str(),
+        "Tighten the release notes for the launch.",
+        "A subagent asked for this one, not the user.",
+        "A probe asked for this one, not the user.",
+        "Older prompt from the same project, never shown.",
+        "A fourth project is never read.",
+        "/a-skill-with-a-long-name",
+        "Run the long-named skill on this file.",
+    ];
+    let transcript = src.join("t.jsonl");
+    let lines: String = msgs
+        .iter()
+        .map(|m| format!("{}\n", serde_json::json!({"type": "user", "message": {"role": "user", "content": m}})))
+        .collect();
+    write(&transcript, &lines);
+    write(&src.join("a-skill-with-a-long-name/SKILL.md"), "---\nname: a-skill-with-a-long-name\n---\n");
+
+    let w = world(src);
+    let of = |skill: &str, id: &str, line: usize, days, cwd: &str| {
+        let mut e = ev(id, skill, Channel::Tool, id, &ago(days));
+        e.cwd = Some(cwd.into());
+        e.src = format!("{}:{line}", transcript.display());
+        e
+    };
+    let at = |id: &str, line, days, cwd: &str| of("unslop", id, line, days, cwd);
+    let mut sub = at("sub", 5, 0, "/b");
+    sub.actor = Actor::Subagent;
+    let mut probe = at("probe", 6, 0, "/p");
+    probe.actor = Actor::Probe;
+    let mut weak = at("weak", 4, 0, "/w");
+    weak.channel = Channel::Read;
+    let gone = ev("gone", "unslop", Channel::Slash, "gone", &ago(5));
+    let events = vec![
+        sub,
+        probe,
+        weak,
+        at("bare", 1, 1, "/a"),
+        at("yes", 2, 2, "/a"),
+        at("long", 3, 3, "/a"),
+        at("notes", 4, 4, "/b"),
+        Event { cwd: Some("/c".into()), ..gone },
+        at("older", 7, 6, "/a"),
+        at("fourth", 8, 7, "/d"),
+        of("a-skill-with-a-long-name", "invoked", 9, 1, "/g"),
+        of("a-skill-with-a-long-name", "asked", 10, 2, "/g"),
+    ];
+    let input = w.input(&events);
+
+    let v: Value =
+        serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    let ex = &v["examples"];
+    assert_eq!(
+        ex["written"],
+        serde_json::json!([{"agent": "claude", "text": "/unslop"}, {"agent": "codex", "text": "$unslop"}])
+    );
+    assert_eq!(ex["default_prompt"], "Use $unslop on this draft.");
+    let real: Vec<(&str, &str)> = ex["real"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["cwd"].as_str().unwrap(), r["text"].as_str().unwrap()))
+        .collect();
+    let cut: String = long.chars().take(300).collect();
+    // /a skips the bare invocation and "yes" for the cut long prompt; /c's
+    // transcript expired; /d is the fourth project.
+    assert_eq!(real, [("/a", cut.as_str()), ("/b", msgs[3])]);
+    assert_eq!(ex["real"][0]["ts"], ago(3));
+
+    let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
+    assert!(
+        text.contains("invoke: claude /unslop, codex $unslop\ndefault prompt: Use $unslop on this draft.\n"),
+        "{text}"
+    );
+    assert!(text.contains(&format!(" /a: {}\n", cut.trim_end())), "{text}");
+    assert!(text.ends_with(&format!(" /b: {}\n", msgs[3])), "{text}");
+    for m in &msgs[4..] {
+        assert!(!text.contains(m), "{m}: {text}");
+    }
+
+    // A 25-character prompt that is only the invocation gives way too.
+    let v: Value = serde_json::from_str(
+        &report::show(&input, "a-skill-with-a-long-name", Since::Days(30), 20, true, false).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(v["examples"]["real"][0]["text"], msgs[9]);
+    assert_eq!(v["examples"]["real"].as_array().unwrap().len(), 1);
+}
+
+/// No events, no manifest: the invocations alone.
+#[test]
+fn show_without_events_has_no_real_examples() {
+    let repo = fixture_repo();
+    let w = world(repo.path());
+    let input = w.input(&[]);
+    let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
+    assert!(text.ends_with("invoke: claude /unslop, codex $unslop\nexamples: none\n"), "{text}");
+    let v: Value =
+        serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    assert_eq!(v["examples"]["default_prompt"], Value::Null);
+    assert_eq!(v["examples"]["real"], serde_json::json!([]));
 }
 
 // ---------------------------------------------------------------- evals
