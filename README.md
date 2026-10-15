@@ -48,7 +48,7 @@ path  = "~/.pi/agent"
 links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 
 [judge]                           # optional: the agent skima audit calls
-agent = "claude"                  # claude (default); codex and pi are not available yet
+agent = "claude"                  # claude (default), codex or pi
 model = "sonnet"                  # optional; unset means the agent's own default
 ```
 
@@ -70,7 +70,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry. Does not sync. |
 | `skima retire <name>` | Moves a skill to `.archive/` (`git mv` when tracked) and prunes its links. Refuses a skill used, or held by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
-| `skima audit <skill>` | Judges how a skill performs in real sessions: each session not yet audited (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) goes to one Claude call with tools off, run in an empty directory under the data directory, and each answer that cites real lines and quotes nothing is appended to `audits.jsonl`. Calls share 75% of `--max-budget-usd` (default 1, at least 0.04) and none starts with less than a cent left; the output names sessions left for the next run. Never writes inside the source. `--dry-run` lists the sessions with their agent, project and condensed size, the judge command, an input-token estimate and, once records exist, a dollar estimate, and starts no judge. The skill-level report is not available yet. |
+| `skima audit <skill>` | Judges how a skill performs in real sessions: each session not yet audited (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) goes to one call of the `[judge]` agent (Claude or Pi with tools off, Codex in a read-only sandbox with a scratch `CODEX_HOME`), run in an empty directory under the data directory, and each answer that cites real lines and quotes nothing is appended to `audits.jsonl`. With the Claude judge, calls share 75% of `--max-budget-usd` (default 1, at least 0.04) and none starts with less than a cent left; the output names sessions left for the next run. Codex and Pi report no cost, so `--limit` is their only cap and `--max-budget-usd` is a usage error. Never writes inside the source. `--dry-run` lists the sessions with their agent, project and condensed size, the judge command, an input-token estimate and, once records exist, a dollar estimate, and starts no judge. The skill-level report is not available yet. |
 
 `usage`, `unused`, `show`, `report` and `audit` scan first, so their numbers are current. Every
 report prints how far back each home's logs go: "unused since 2026-09-10" is not

@@ -1,12 +1,14 @@
 //! `skima audit` (SPEC §6.4, F18) stage 1: selection, the judge's input, one
-//! Claude judge call per session inside the budget, validation of its answer,
+//! Claude, Codex or Pi judge call per session, validation of its answer,
 //! and the session records in `audits.jsonl`. `--dry-run` shows what a run
 //! would judge and calls nothing.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::fs;
+use std::ffi::OsString;
+use std::fs::{self, DirBuilder};
 use std::io::{ErrorKind, IsTerminal, Write};
-use std::path::Path;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
@@ -18,7 +20,7 @@ use serde_json::value::RawValue;
 
 use crate::Result;
 use crate::adapters;
-use crate::config::Judge;
+use crate::config::{Home, Judge};
 use crate::inventory::git;
 use crate::ledger::{self, Actor, Agent, Event, name};
 use crate::render::{self, Align};
@@ -240,32 +242,77 @@ pub fn input(source: &Path, c: &Candidate) -> Result<(SkillText, String)> {
     Ok((skill, text))
 }
 
-/// The judge's argv (SPEC §6.4, D33) with the shipped prompt and schema; each
-/// call appends `--max-budget-usd <cap>`. Only the Claude judge exists so far.
-pub fn command(judge: &Judge) -> Result<Vec<String>> {
-    if judge.agent != Agent::Claude {
-        return Err(format!("the {} judge is not available yet; set [judge] agent = \"claude\"", name(judge.agent)));
+/// Stand-ins in [`command`]'s argv for the files each call writes in its own
+/// temporary directory: the answer schema, Codex's result and Pi's input.
+pub const SCHEMA_FILE: &str = "<schema file>";
+pub const RESULT_FILE: &str = "<result file>";
+pub const INPUT_FILE: &str = "@<input file>";
+
+/// The judge's argv (SPEC §6.4, D33) with the shipped prompt and schema; a
+/// Claude call appends `--max-budget-usd <cap>`.
+pub fn command(judge: &Judge) -> Vec<String> {
+    let (argv, model): (&[&str], _) = match judge.agent {
+        Agent::Claude => (
+            &[
+                "claude",
+                "-p",
+                "--safe-mode",
+                "--tools",
+                "",
+                "--system-prompt",
+                SESSION_PROMPT,
+                "--output-format",
+                "json",
+                "--json-schema",
+                &SESSION_SCHEMA,
+                "--no-session-persistence",
+            ],
+            "--model",
+        ),
+        Agent::Codex => (
+            &[
+                "codex",
+                "exec",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "--output-schema",
+                SCHEMA_FILE,
+                "-o",
+                RESULT_FILE,
+                "--json",
+            ],
+            "-m",
+        ),
+        Agent::Pi => (
+            &[
+                "pi",
+                "-p",
+                "--no-session",
+                "--no-tools",
+                "--no-extensions",
+                "--no-skills",
+                "--no-context-files",
+                "--system-prompt",
+                SESSION_PROMPT,
+                "--mode",
+                "json",
+            ],
+            "--model",
+        ),
+    };
+    let mut argv: Vec<String> = argv.iter().map(|a| a.to_string()).collect();
+    if let Some(m) = &judge.model {
+        argv.extend([model.to_string(), m.clone()]);
     }
-    let mut argv: Vec<String> = [
-        "claude",
-        "-p",
-        "--safe-mode",
-        "--tools",
-        "",
-        "--system-prompt",
-        SESSION_PROMPT,
-        "--output-format",
-        "json",
-        "--json-schema",
-        &SESSION_SCHEMA,
-        "--no-session-persistence",
-    ]
-    .map(String::from)
-    .into();
-    if let Some(model) = &judge.model {
-        argv.extend(["--model".to_string(), model.clone()]);
+    // Codex reads prompt and input from stdin; Pi reads the input file.
+    match judge.agent {
+        Agent::Claude => {}
+        Agent::Codex => argv.push("-".into()),
+        Agent::Pi => argv.push(INPUT_FILE.into()),
     }
-    Ok(argv)
+    argv
 }
 
 /// A non-negative dollar amount from its decimal text (`0.031`, `1`, `3.1e-5`),
@@ -423,10 +470,10 @@ pub fn validate(answer: Value, condensed: &str) -> std::result::Result<Verdict, 
     Ok(v)
 }
 
-/// What one judge call returned: its reported cost, and the answer or why
-/// there is none.
+/// What one judge call returned: its reported cost, none from a judge that
+/// reports none, and the answer or why there is none.
 struct Reply {
-    cost: u64,
+    cost: Option<u64>,
     answer: std::result::Result<Value, String>,
 }
 
@@ -441,44 +488,154 @@ struct ClaudeOutput<'a> {
     structured_output: Option<Value>,
 }
 
-/// One judge call (D33): `argv` with `--max-budget-usd <cap>`, `input` on
-/// stdin, run in a fresh empty directory under `runs` that is removed after.
-/// A call that ran but reported no cost is counted at its cap, the most it
-/// could have spent short of one turn's overshoot, so the budget still binds.
-fn call(argv: &[String], cap: u64, input: &str, runs: &Path) -> Result<Reply> {
-    let dir = runs.join(format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond()));
-    fs::create_dir_all(runs).and_then(|()| fs::create_dir(&dir)).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let output = Command::new(&argv[0])
-        .args(&argv[1..])
-        .args(["--max-budget-usd", &cents(cap)])
-        .current_dir(&dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            let mut stdin = child.stdin.take().expect("piped stdin");
-            std::thread::scope(|s| {
-                // A judge that exits without reading its input closes the pipe;
-                // its output says why.
-                s.spawn(move || stdin.write_all(input.as_bytes()));
-                child.wait_with_output()
-            })
-        });
+/// One judge call (D33): [`command`]'s argv run in a fresh empty directory
+/// under `<data>/audit-runs/`, with the files it names in a fresh temporary
+/// directory, both removed after. Claude gets `--max-budget-usd <cap>` and the
+/// input on stdin; Codex gets the prompt and the input on stdin and the scratch
+/// `CODEX_HOME`; Pi reads the input file. A Claude call that ran but reported
+/// no cost is counted at its cap, the most it could have spent short of one
+/// turn's overshoot, so the budget still binds.
+fn call(a: &Audit, cap: Option<u64>, input: &str) -> Result<Reply> {
+    let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
+    let runs = a.data.join("audit-runs");
+    let dir = runs.join(&unique);
+    fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let scratch = if a.judge.agent == Agent::Codex { Some(codex_home(a)?) } else { None };
+    let files = std::env::temp_dir().join(format!("skima-judge-{unique}"));
+    let result = files.join("result.json");
+    let output = DirBuilder::new().mode(0o700).create(&files).and_then(|()| {
+        let mut args: Vec<OsString> = Vec::new();
+        for arg in &a.argv[1..] {
+            args.push(match arg.as_str() {
+                SCHEMA_FILE => {
+                    let path = files.join("schema.json");
+                    fs::write(&path, &*SESSION_SCHEMA)?;
+                    path.into()
+                }
+                RESULT_FILE => result.clone().into(),
+                INPUT_FILE => {
+                    let path = files.join("input.md");
+                    fs::write(&path, input)?;
+                    format!("@{}", path.display()).into()
+                }
+                _ => arg.into(),
+            });
+        }
+        let stdin = match a.judge.agent {
+            Agent::Claude => Some(input.to_string()),
+            Agent::Codex => Some(format!("{SESSION_PROMPT}\n{input}")),
+            Agent::Pi => None,
+        };
+        let mut cmd = Command::new(&a.argv[0]);
+        cmd.args(args)
+            .current_dir(&dir)
+            .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(cap) = cap {
+            cmd.args(["--max-budget-usd", &cents(cap)]);
+        }
+        if let Some(home) = &scratch {
+            cmd.env("CODEX_HOME", home);
+        }
+        let mut child = cmd.spawn()?;
+        let pipe = child.stdin.take();
+        std::thread::scope(|s| {
+            // A judge that exits without reading its input closes the pipe;
+            // its output says why.
+            if let (Some(mut pipe), Some(stdin)) = (pipe, stdin) {
+                s.spawn(move || pipe.write_all(stdin.as_bytes()));
+            }
+            child.wait_with_output()
+        })
+    });
+    let written = fs::read(&result);
     let removed = fs::remove_dir_all(&dir);
-    let output = output.map_err(|e| format!("{}: {e}", argv[0]))?;
+    let cleaned = fs::remove_dir_all(&files);
+    let output = output.map_err(|e| format!("{}: {e}", a.argv[0]))?;
     removed.map_err(|e| format!("{}: {e}", dir.display()))?;
-    let Ok(out) = serde_json::from_slice::<ClaudeOutput>(&output.stdout) else {
+    cleaned.map_err(|e| format!("{}: {e}", files.display()))?;
+    if scratch.is_some() {
+        codex_home(a)?;
+    }
+    let failed = || {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let why = stderr.lines().next().unwrap_or_default();
-        return Ok(Reply { cost: cap, answer: Err(format!("unreadable judge output ({}): {why}", output.status)) });
+        format!("({}): {}", output.status, stderr.lines().next().unwrap_or_default())
     };
-    let cost = out.total_cost_usd.map(|c| parse_usd(c.get())).transpose()?.unwrap_or(cap);
-    let answer = match out.structured_output {
-        Some(v) if !out.is_error => Ok(v),
-        _ => Err(format!("no answer ({})", out.subtype.as_deref().unwrap_or("error"))),
+    Ok(match a.judge.agent {
+        Agent::Claude => {
+            let cap = cap.unwrap_or_default();
+            let Ok(out) = serde_json::from_slice::<ClaudeOutput>(&output.stdout) else {
+                return Ok(Reply { cost: Some(cap), answer: Err(format!("unreadable judge output {}", failed())) });
+            };
+            let cost = out.total_cost_usd.map(|c| parse_usd(c.get())).transpose()?.unwrap_or(cap);
+            let answer = match out.structured_output {
+                Some(v) if !out.is_error => Ok(v),
+                _ => Err(format!("no answer ({})", out.subtype.as_deref().unwrap_or("error"))),
+            };
+            Reply { cost: Some(cost), answer }
+        }
+        Agent::Codex => Reply {
+            cost: None,
+            answer: written
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .ok_or_else(|| format!("no answer in the -o file {}", failed())),
+        },
+        Agent::Pi => Reply { cost: None, answer: pi_answer(&output.stdout).map_err(|e| format!("{e} {}", failed())) },
+    })
+}
+
+/// The user's Codex `auth.json`: in the configured Codex home, else `~/.codex`.
+pub fn codex_auth(homes: &[Home]) -> Result<PathBuf> {
+    let home = match homes.iter().find(|h| h.agent == Agent::Codex) {
+        Some(h) => h.path.clone(),
+        None => PathBuf::from(crate::config::home_dir()?).join(".codex"),
     };
-    Ok(Reply { cost, answer })
+    Ok(home.join("auth.json"))
+}
+
+/// `<data>/codex-judge-home` holding only a symlink to the user's `auth.json`
+/// (D33), made afresh so nothing an earlier call left there survives.
+fn codex_home(a: &Audit) -> Result<PathBuf> {
+    let home = a.data.join("codex-judge-home");
+    if !a.codex_auth.exists() {
+        return Err(format!("{}: no Codex login for the Codex judge", a.codex_auth.display()));
+    }
+    match fs::remove_dir_all(&home) {
+        Err(e) if e.kind() != ErrorKind::NotFound => return Err(format!("{}: {e}", home.display())),
+        _ => {}
+    }
+    fs::create_dir_all(&home)
+        .and_then(|()| std::os::unix::fs::symlink(a.codex_auth, home.join("auth.json")))
+        .map_err(|e| format!("{}: {e}", home.display()))?;
+    Ok(home)
+}
+
+/// Pi's answer: the text of the last assistant `message_end` in its
+/// `--mode json` stream, parsed as JSON once a code fence around it is dropped.
+fn pi_answer(stdout: &[u8]) -> std::result::Result<Value, String> {
+    let message = String::from_utf8_lossy(stdout)
+        .lines()
+        .rev()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|e| e["type"] == "message_end" && e["message"]["role"] == "assistant")
+        .map(|mut e| e["message"].take())
+        .ok_or("no assistant message")?;
+    if message["stopReason"] != "stop" {
+        let why = message["errorMessage"].as_str().or(message["stopReason"].as_str()).unwrap_or("error");
+        return Err(format!("no answer ({why})"));
+    }
+    let text: String = message["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["type"] == "text")
+        .filter_map(|c| c["text"].as_str())
+        .collect();
+    let text = text.trim();
+    let bare = text.strip_prefix("```json").or_else(|| text.strip_prefix("```")).and_then(|t| t.strip_suffix("```"));
+    serde_json::from_str(bare.unwrap_or(text).trim()).map_err(|e| format!("the final message is not JSON: {e}"))
 }
 
 #[derive(Serialize)]
@@ -502,7 +659,7 @@ struct SessionRecord<'a> {
 struct JudgeRecord<'a> {
     agent: Agent,
     model: Option<&'a str>,
-    cost_usd: Box<RawValue>,
+    cost_usd: Option<Box<RawValue>>,
 }
 
 /// One audit run's settings.
@@ -513,39 +670,42 @@ pub struct Audit<'a> {
     pub judge: &'a Judge,
     /// [`command`]'s argv.
     pub argv: &'a [String],
-    /// `--max-budget-usd` in micro-dollars.
-    pub budget: u64,
+    /// `--max-budget-usd` in micro-dollars; the Claude judge's only.
+    pub budget: Option<u64>,
+    /// The user's Codex `auth.json`, which the Codex judge's home links to.
+    pub codex_auth: &'a Path,
 }
 
-/// Stage 1 (SPEC §6.4): judges `candidates` one at a time, each call capped at
-/// 75% of the budget minus what is spent, stopping once that is under a cent.
+/// Stage 1 (SPEC §6.4): judges `candidates` one at a time; with a budget,
+/// each call is capped at 75% of it minus what is spent, stopping once that is
+/// under a cent.
 /// Each valid answer is appended to `audits.jsonl` under `scan.lock` at once;
 /// an invalid one is retried once, then dropped. Returns the run's summary.
 pub fn run(a: &Audit, candidates: &[Candidate]) -> Result<String> {
     if candidates.is_empty() {
         return Ok(format!("{}: no session to judge\n", a.skill));
     }
-    let pool = a.budget / 4 * 3;
-    let runs = a.data.join("audit-runs");
+    let pool = a.budget.map(|b| b / 4 * 3);
     let progress = std::io::stderr().is_terminal();
     let (mut spent, mut judged, mut dropped) = (0u64, 0usize, 0usize);
     let mut left: &[Candidate] = &[];
     'sessions: for (i, c) in candidates.iter().enumerate() {
         let (skill, input) = input(a.source, c)?;
-        let mut cost = 0;
+        let mut cost = None;
         let mut why = String::new();
         for _ in 0..2 {
-            let cap = pool.saturating_sub(spent);
-            if cap < CENT {
+            let cap = pool.map(|p| p.saturating_sub(spent));
+            if cap.is_some_and(|cap| cap < CENT) {
                 left = &candidates[i..];
                 break 'sessions;
             }
             if progress {
-                eprintln!("judging {}/{} {} (cap ${})", i + 1, candidates.len(), c.event.session, cents(cap));
+                let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
+                eprintln!("judging {}/{} {}{cap}", i + 1, candidates.len(), c.event.session);
             }
-            let reply = call(a.argv, cap, &input, &runs)?;
-            spent += reply.cost;
-            cost += reply.cost;
+            let reply = call(a, cap, &input)?;
+            spent += reply.cost.unwrap_or_default();
+            cost = reply.cost.map(|r| r + cost.unwrap_or_default());
             match reply.answer.and_then(|v| validate(v, &c.condensed)) {
                 Ok(verdict) => {
                     let record = SessionRecord {
@@ -562,7 +722,7 @@ pub fn run(a: &Audit, candidates: &[Candidate]) -> Result<String> {
                         judge: JudgeRecord {
                             agent: a.judge.agent,
                             model: a.judge.model.as_deref(),
-                            cost_usd: RawValue::from_string(exact(cost)).expect("a decimal is JSON"),
+                            cost_usd: cost.map(|c| RawValue::from_string(exact(c)).expect("a decimal is JSON")),
                         },
                         prompt: SESSION_PROMPT_VERSION,
                         result: &verdict,
@@ -579,8 +739,8 @@ pub fn run(a: &Audit, candidates: &[Candidate]) -> Result<String> {
         eprintln!("warning: {}: judge answer dropped after one retry: {why}", c.event.session);
         dropped += 1;
     }
-    let mut out =
-        format!("{}: {judged} judged, {dropped} dropped, ${} spent of ${}\n", a.skill, cents(spent), cents(a.budget));
+    let spend = a.budget.map(|b| format!(", ${} spent of ${}", cents(spent), cents(b))).unwrap_or_default();
+    let mut out = format!("{}: {judged} judged, {dropped} dropped{spend}\n", a.skill);
     if !left.is_empty() {
         out.push_str(&format!("budget used up; left for the next run: {}\n", left.len()));
         for c in left {
@@ -651,19 +811,24 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
             "" => "\"\"".into(),
             s => s.into(),
         })
-        .chain(["--max-budget-usd".into(), "<cap>".into()])
         .collect();
+    let judge = match a.judge.agent {
+        Agent::Claude => format!("{} --max-budget-usd <cap> < <input>", quoted.join(" ")),
+        Agent::Codex => {
+            format!("CODEX_HOME={} {} < <prompt + input>", a.data.join("codex-judge-home").display(), quoted.join(" "))
+        }
+        Agent::Pi => quoted.join(" "),
+    };
     let total: usize = candidates.iter().map(chars).sum();
     let n = candidates.len();
     let mut out = format!(
-        "{skill}: {n} session{} to judge with the {} judge\n\n{}\njudge: {} < <input>\ninput: {total} condensed characters, about {} tokens\n",
+        "{skill}: {n} session{} to judge with the {} judge\n\n{}\njudge: {judge}\ninput: {total} condensed characters, about {} tokens\n",
         if n == 1 { "" } else { "s" },
         name(a.judge.agent),
         render::table(&header, &rows, tty),
-        quoted.join(" "),
         estimate_tokens(total),
     );
-    if let Some((cost, records)) = estimate_cost(a.data, total)? {
+    if let (Some(_), Some((cost, records))) = (a.budget, estimate_cost(a.data, total)?) {
         out.push_str(&format!(
             "cost: about ${}, at the rate of {records} earlier session record{}\n",
             cents(cost),

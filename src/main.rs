@@ -127,9 +127,9 @@ enum Cmd {
         /// Judge every candidate session.
         #[arg(long)]
         all: bool,
-        /// The most the run may spend, in dollars; at least 0.04.
-        #[arg(long, default_value = "1", value_parser = audit::parse_usd)]
-        max_budget_usd: u64,
+        /// The most the run may spend, in dollars (default 1); at least 0.04. Claude judge only.
+        #[arg(long, value_parser = audit::parse_usd)]
+        max_budget_usd: Option<u64>,
         /// List the sessions, the judge command and the input estimate; call nothing.
         #[arg(long)]
         dry_run: bool,
@@ -215,7 +215,7 @@ fn cmd_audit(
     inv: &Inventory,
     skill: &str,
     limit: Option<usize>,
-    budget: u64,
+    budget: Option<u64>,
     dry_run: bool,
     tty: bool,
 ) -> skima::Result<ExitCode> {
@@ -226,18 +226,35 @@ fn cmd_audit(
     if !inv.skills.contains(skill) {
         return usage(format!("not a skill in the source: {skill}"));
     }
-    if budget < 4 * audit::CENT {
+    // Codex and Pi report no dollar figure, so `--limit` is their only cap (D34).
+    let budget = match (cfg.judge.agent, budget) {
+        (Agent::Claude, budget) => Some(budget.unwrap_or(1_000_000)),
+        (agent, Some(_)) => {
+            return usage(format!(
+                "--max-budget-usd needs the claude judge; the {} judge is capped by --limit",
+                ledger::name(agent)
+            ));
+        }
+        (_, None) => None,
+    };
+    if budget.is_some_and(|b| b < 4 * audit::CENT) {
         return usage("--max-budget-usd must be at least 0.04".into());
     }
-    let argv = match audit::command(&cfg.judge) {
-        Ok(argv) => argv,
-        Err(e) => return usage(e),
-    };
+    let argv = audit::command(&cfg.judge);
+    let codex_auth = audit::codex_auth(&cfg.homes)?;
     let data = ledger::data_dir()?;
     scan::scan(cfg, inv, &data, false)?.warn_io_errors();
     let ledger = Ledger::load(&data)?;
     let candidates = audit::select(ledger.events(), skill, &audit::audited(&data, skill)?, limit);
-    let a = audit::Audit { skill, source: &cfg.source, data: &data, judge: &cfg.judge, argv: &argv, budget };
+    let a = audit::Audit {
+        skill,
+        source: &cfg.source,
+        data: &data,
+        judge: &cfg.judge,
+        argv: &argv,
+        budget,
+        codex_auth: &codex_auth,
+    };
     print!("{}", if dry_run { audit::dry_run(&a, &candidates, tty)? } else { audit::run(&a, &candidates)? });
     Ok(ExitCode::SUCCESS)
 }

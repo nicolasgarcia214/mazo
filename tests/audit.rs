@@ -221,10 +221,14 @@ fn an_expired_session_takes_no_turn_in_the_round_robin() {
 }
 
 /// A private home with a skills source, a ledger of `events`, a Claude home
-/// with no transcripts, and a stub `claude` on `PATH`. Every call of the stub
-/// leaves `calls/<n>/` with its argv, working directory, that directory's
-/// listing and stdin, then prints `replies/<n>`, else `replies/default` with
-/// `LINE` set to the first line its input cites.
+/// with no transcripts, Codex and Pi logins, and stub `claude`, `codex` and
+/// `pi` on `PATH`. Every call of a stub leaves `calls/<n>/` with its argv,
+/// working directory, that directory's listing, stdin and the schema and
+/// input files its argv names, then writes `replies/<n>`, else
+/// `replies/default` with `LINE` set to the first line its input cites, to
+/// stdout or the `-o` file. The Codex stub also leaves its `CODEX_HOME`, that
+/// home's listing and where its `auth.json` points, then writes a session and
+/// a log into that home, as Codex would.
 struct Fixture {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -274,17 +278,38 @@ for a in "$@"; do printf '%s\0' "$a"; done > "$c/argv"
 pwd > "$c/pwd"
 ls -A > "$c/ls"
 cat > "$c/stdin"
+in="$c/stdin"
+out=/dev/stdout
+prev=
+for a in "$@"; do
+  case $prev in -o) out=$a ;; --output-schema) cp "$a" "$c/schema" ;; esac
+  case $a in @*) in=${{a#@}}; cp "$in" "$c/input" ;; esac
+  prev=$a
+done
+case $0 in */codex)
+  h=${{CODEX_HOME:-$HOME/.codex}}
+  printf '%s' "$CODEX_HOME" > "$c/codex_home"
+  ls -A "$h" > "$c/codex_home_ls"
+  readlink "$h/auth.json" > "$c/auth"
+  mkdir -p "$h/sessions"
+  echo session > "$h/sessions/rollout.jsonl"
+  echo log > "$h/log"
+esac
 if [ -f {r}/transcript ]; then
   mkdir -p "$HOME/.claude/projects/run"
   sed "s|CWD|$PWD|g; s|SID|run-$n|g" {r}/transcript > "$HOME/.claude/projects/run/$n.jsonl"
 fi
-if [ -f {r}/replies/$n ]; then cat {r}/replies/$n; exit; fi
-line=$(grep -o '^L[0-9]*:' "$c/stdin" | head -n 1 | tr -d 'L:')
-sed "s/\"LINE\"/$line/g" {r}/replies/default
+if [ -f {r}/replies/$n ]; then cat {r}/replies/$n > "$out"; exit; fi
+line=$(grep -o '^L[0-9]*:' "$in" | head -n 1 | tr -d 'L:')
+sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
 "#
         );
-        common::write(&root.join("bin/claude"), &stub);
-        Command::new("chmod").arg("+x").arg(root.join("bin/claude")).status().unwrap();
+        for agent in ["claude", "codex", "pi"] {
+            common::write(&root.join("bin").join(agent), &stub);
+            Command::new("chmod").arg("+x").arg(root.join("bin").join(agent)).status().unwrap();
+        }
+        common::write(&root.join("home/.codex/auth.json"), "{\"token\":\"t\"}\n");
+        common::write(&root.join("home/.pi/agent/auth.json"), "{}\n");
         let fx = Fixture { _temp: temp, root };
         fx.reply("default", "0.1", &answer("LINE"));
         fx
@@ -292,7 +317,17 @@ sed "s/\"LINE\"/$line/g" {r}/replies/default
 
     /// Sets the stub's `n`-th (or `default`) reply.
     fn reply(&self, n: &str, cost: &str, answer: &serde_json::Value) {
-        common::write(&self.root.join("replies").join(n), &reply(cost, answer));
+        self.raw_reply(n, &reply(cost, answer));
+    }
+
+    /// Sets the stub's `n`-th (or `default`) output to `text`.
+    fn raw_reply(&self, n: &str, text: &str) {
+        common::write(&self.root.join("replies").join(n), text);
+    }
+
+    /// File `f` that stub call `call` left.
+    fn left(&self, call: &Call, f: &str) -> Option<String> {
+        fs::read_to_string(self.root.join(format!("calls/{}/{f}", call.n))).ok()
     }
 
     fn skima(&self, args: &[&str]) -> Output {
@@ -318,6 +353,7 @@ sed "s/\"LINE\"/$line/g" {r}/replies/default
         (1..)
             .map_while(|n| {
                 Some(Call {
+                    n,
                     argv: read(n, "argv")?.split_terminator('\0').map(String::from).collect(),
                     pwd: read(n, "pwd")?.trim_end().into(),
                     ls: read(n, "ls")?,
@@ -335,6 +371,7 @@ sed "s/\"LINE\"/$line/g" {r}/replies/default
 }
 
 struct Call {
+    n: usize,
     argv: Vec<String>,
     pwd: String,
     ls: String,
@@ -449,11 +486,17 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
     }
     assert!(stderr(&fx.skima(&["audit", "unslop", "--max-budget-usd", "0.039"])).contains("at least 0.04"));
     assert!(fx.calls().is_empty());
+    // Codex and Pi report no dollar figure: `--limit` is their only cap (D34).
     for agent in ["codex", "pi"] {
         let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\n"), three_agents);
-        let out = fx.skima(&["audit", "unslop"]);
-        assert_eq!(out.status.code(), Some(2), "{agent}");
-        assert!(stderr(&out).contains(&format!("the {agent} judge is not available yet")), "{}", stderr(&out));
+        for args in [
+            &["audit", "unslop", "--max-budget-usd", "1"][..],
+            &["audit", "unslop", "--max-budget-usd", "5", "--dry-run"],
+        ] {
+            let out = fx.skima(args);
+            assert_eq!(out.status.code(), Some(2), "{agent}");
+            assert!(stderr(&out).contains(&format!("the {agent} judge is capped by --limit")), "{}", stderr(&out));
+        }
         assert!(fx.calls().is_empty());
     }
     let typo = Fixture::new("[judge]\nmodle = \"sonnet\"\n", three_agents).skima(&["audit", "unslop", "--dry-run"]);
@@ -497,6 +540,132 @@ fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
     }
     assert_eq!(fs::read_dir(&runs).unwrap().count(), 0);
     assert_eq!(snapshot(&fx.root.join("skills")), source, "the audit wrote inside the source");
+}
+
+/// The fake `~/.codex` and `~/.pi` with every file's bytes.
+fn agent_homes(fx: &Fixture) -> Vec<(PathBuf, Vec<u8>)> {
+    [".codex", ".pi"].iter().flat_map(|h| snapshot(&fx.root.join("home").join(h))).collect()
+}
+
+#[test]
+fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
+    let fx = Fixture::new("[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\n", three_agents);
+    fx.raw_reply("default", &answer("LINE").to_string());
+    let homes = agent_homes(&fx);
+    let scratch = fx.data().join("codex-judge-home");
+
+    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let judge = format!(
+        "judge: CODEX_HOME={} codex exec --ephemeral --skip-git-repo-check --sandbox read-only \
+         --output-schema <schema file> -o <result file> --json -m gpt-5 - < <prompt + input>\n",
+        scratch.display()
+    );
+    assert!(dry.contains(&judge), "{dry}");
+    assert!(!dry.contains("cost:"), "{dry}");
+    assert!(!scratch.exists(), "--dry-run made the scratch home");
+
+    let out = fx.skima(&["audit", "unslop", "--limit", "2"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "unslop: 2 judged, 0 dropped\n");
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 2, "--limit bounds the calls");
+    let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
+    let auth = fx.root.join("home/.codex/auth.json");
+    for (call, c) in calls.iter().zip(&candidates) {
+        let mut want = vec!["exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only"];
+        want.extend(["--output-schema", call.arg("--output-schema").unwrap(), "-o", call.arg("-o").unwrap()]);
+        want.extend(["--json", "-m", "gpt-5", "-"]);
+        assert_eq!(call.argv, want);
+        assert_eq!(fx.left(call, "schema").unwrap(), *audit::SESSION_SCHEMA);
+        let files = Path::new(call.arg("-o").unwrap()).parent().unwrap();
+        assert_eq!(Path::new(call.arg("--output-schema").unwrap()).parent(), Some(files));
+        assert!(!files.exists(), "the call's files are left");
+        assert_eq!(
+            call.stdin,
+            format!("{}\n{}", audit::SESSION_PROMPT, audit::input(&fx.root.join("skills"), c).unwrap().1)
+        );
+        assert_eq!(call.ls, "", "the call's directory was not empty");
+        assert!(Path::new(&call.pwd).starts_with(fx.data().join("audit-runs")), "{}", call.pwd);
+        // What the first call wrote into the scratch home is gone by the second.
+        assert_eq!(fx.left(call, "codex_home").unwrap(), scratch.display().to_string());
+        assert_eq!(fx.left(call, "codex_home_ls").unwrap(), "auth.json\n");
+        assert_eq!(fx.left(call, "auth").unwrap().trim_end(), auth.display().to_string());
+    }
+    let records = fx.records();
+    assert_eq!(records.len(), 2);
+    for r in &records {
+        assert_eq!(r["judge"], serde_json::json!({"agent": "codex", "model": "gpt-5", "cost_usd": null}));
+    }
+    let left: Vec<_> = fs::read_dir(&scratch).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(left, ["auth.json"]);
+    assert_eq!(fs::read_link(scratch.join("auth.json")).unwrap(), auth);
+    assert_eq!(agent_homes(&fx), homes, "the audit wrote into ~/.codex or ~/.pi");
+
+    // A call that writes no result file is retried, then dropped.
+    let fx = Fixture::new("[judge]\nagent = \"codex\"\n", claude_sessions(1));
+    fx.raw_reply("default", "");
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "unslop: 0 judged, 1 dropped\n");
+    assert!(stderr(&out).contains("no answer in the -o file"), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 2);
+}
+
+/// Pi's `--mode json` stream ending in an assistant message with `text`.
+fn pi_stream(text: &str, stop: &str) -> String {
+    let lines = [
+        serde_json::json!({"type": "session", "version": 3, "id": "j", "cwd": "/x"}),
+        serde_json::json!({"type": "message_end", "message": {"role": "user", "content": "input"}}),
+        serde_json::json!({"type": "message_end", "message": {"role": "assistant", "stopReason": stop,
+            "errorMessage": "overloaded", "content": [{"type": "thinking", "thinking": "{}"}, {"type": "text", "text": text}]}}),
+        serde_json::json!({"type": "agent_end", "messages": [], "willRetry": false}),
+    ];
+    lines.iter().map(|l| format!("{l}\n")).collect()
+}
+
+#[test]
+fn the_pi_judge_reads_its_input_file_and_its_final_message_is_validated() {
+    let fx = Fixture::new("[judge]\nagent = \"pi\"\nmodel = \"sonnet\"\n", three_agents);
+    fx.raw_reply("default", &pi_stream(&format!("```json\n{}\n```", answer("LINE")), "stop"));
+    // Codex's session first: an error, then a message that is no JSON; dropped.
+    fx.raw_reply("1", &pi_stream("", "error"));
+    fx.raw_reply("2", &pi_stream("Here is my verdict.", "stop"));
+    let homes = agent_homes(&fx);
+
+    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let judge = "judge: pi -p --no-session --no-tools --no-extensions --no-skills --no-context-files \
+                 --system-prompt \"$(cat <prompt>)\" --mode json --model sonnet @<input file>\n";
+    assert!(dry.contains(judge), "{dry}");
+
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "unslop: 2 judged, 1 dropped\n");
+    let err = stderr(&out);
+    assert!(err.contains("warning: x: judge answer dropped after one retry: the final message is not JSON"), "{err}");
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 4);
+    let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
+    let source = fx.root.join("skills");
+    for (call, c) in calls.iter().zip([&candidates[0], &candidates[0], &candidates[1], &candidates[2]]) {
+        let file = call.argv.last().unwrap().strip_prefix('@').unwrap();
+        let mut want = vec!["-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills"];
+        want.extend(["--no-context-files", "--system-prompt", audit::SESSION_PROMPT, "--mode", "json"]);
+        want.extend(["--model", "sonnet", call.argv.last().unwrap()]);
+        assert_eq!(call.argv, want);
+        assert_eq!(fx.left(call, "input").unwrap(), audit::input(&source, c).unwrap().1);
+        assert!(!Path::new(file).exists(), "the input file is left");
+        assert_eq!(call.stdin, "");
+        assert_eq!(call.ls, "", "the call's directory was not empty");
+    }
+    let records = fx.records();
+    let sessions: Vec<&str> = records.iter().map(|r| r["session"].as_str().unwrap()).collect();
+    assert_eq!(sessions, ["c", "p"]);
+    for r in &records {
+        assert_eq!(r["judge"], serde_json::json!({"agent": "pi", "model": "sonnet", "cost_usd": null}));
+        assert_eq!(r["result"]["outcome"], "achieved");
+    }
+    assert!(!fx.data().join("codex-judge-home").exists());
+    assert_eq!(agent_homes(&fx), homes, "the audit wrote into ~/.codex or ~/.pi");
 }
 
 #[test]
