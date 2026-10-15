@@ -337,7 +337,7 @@ directory. Acceptance:
   then says so and exits 1. Worst-case spend is the budget plus one call's
   overshoot.
 - `--json` prints the new skill record, the number of session records written
-  and dropped, and the spend.
+  and dropped, the spend, and the sessions left for the next run.
 
 **F19. `grade` integration.**
 - skima's side is F2's `+N` and F16's stale-grade list.
@@ -1191,8 +1191,9 @@ The judge (`prompts/skill.md`) returns:
 
 skima, not the judge, computes the rates from the session records:
 `followed: yes`, `outcome: achieved`, and `abandoned or redone`, each as
-`n of N`. Cited session ids must exist, or the record is retried and then
-dropped.
+`n of N` with the sessions counted in `n`. Cited session ids must exist, or
+the record is retried and then dropped. A dropped skill record fails the run
+(exit 1), as a skipped stage 2 does.
 
 **The judge.** `[judge] agent` picks the command. Each call runs in a fresh,
 empty subdirectory of `<data dir>/audit-runs/`, which is not a git repository,
@@ -1257,7 +1258,8 @@ any session left for the next run. `--dry-run` estimates input tokens as
 condensed characters divided by 4, and, once earlier audits exist, a dollar
 figure from their recorded cost per input character. Codex and Pi report no dollar figure, so with
 those judges `--limit` is the cap, and passing `--max-budget-usd` is a usage
-error (exit 2).
+error (exit 2). Their calls get no cap, stage 2 is never skipped for budget,
+their records carry `cost_usd: null`, and `--json` prints a null spend.
 
 **Records.** `audits.jsonl` is append-only, written under `scan.lock`:
 
@@ -1268,8 +1270,9 @@ error (exit 2).
  "judge":{"agent":"claude","model":"sonnet","cost_usd":0.031},
  "prompt":"session-v1","result":{…}}
 {"v":1,"kind":"skill","skill":"unslop","audited_at":"…","sessions":["2e112b1e-…",…],
- "judge":{…},"prompt":"skill-v1","rates":{"followed":[17,20],"achieved":[15,20],
- "abandoned_or_redone":[3,20]},"result":{…}}
+ "judge":{…},"prompt":"skill-v1","rates":{"followed":{"n":17,"of":20,"sessions":[…]},
+ "achieved":{"n":15,"of":20,"sessions":[…]},"abandoned_or_redone":{"n":3,"of":20,"sessions":[…]}},
+ "result":{…}}
 ```
 
 `condensed_chars` is the size of the session as the judge read it; the
@@ -1306,7 +1309,7 @@ skima audit   <skill> [--limit 20 | --all] [--max-budget-usd 1] [--resynth] [--d
 - Exit codes: 0 for success or clean, 1 for drift, a conflict, a policy
   failure, a refused `new`, `retire` or `prune`, an audit that had candidates and
   dropped every record (no candidates is exit 0), or an audit whose stage 2
-  was skipped for budget; 2
+  was skipped for budget or dropped its skill record; 2
   for usage errors, including a missing config (F11).
 - Output is aligned text, bold only when stdout is a TTY. The sparkline uses
   `▁▂▃▄▅▆▇█`, one cell per day, and `·` for a day with no event. Progress goes

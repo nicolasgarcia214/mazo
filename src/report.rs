@@ -10,6 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 use serde_json::json;
 
+use crate::audit::SkillRecord;
 use crate::config::Config;
 use crate::evals::{self, Eval, Evals, Grade};
 use crate::examples::{self, Examples};
@@ -45,6 +46,8 @@ pub struct Input<'a> {
     pub inv: &'a Inventory,
     pub events: &'a [Event],
     pub coverage: &'a BTreeMap<String, Coverage>,
+    /// The latest skill record of each skill ([`crate::audit::latest`]).
+    pub audits: &'a BTreeMap<String, SkillRecord>,
     pub now: jiff::Timestamp,
 }
 
@@ -55,6 +58,12 @@ pub struct UsageArgs {
     pub all: bool,
     pub authoring: bool,
 }
+
+/// The card shows the audit's top improvements, this many (SPEC F14).
+pub const AUDIT_IMPROVEMENTS: usize = 3;
+
+/// `show`'s default window.
+pub const SHOW_SINCE: Since = Since::Days(30);
 
 /// The last line of `usage` and `unused` (SPEC F2).
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade\n";
@@ -504,8 +513,8 @@ struct Card<'a> {
     cited_by: Vec<Link>,
     usage: CardUsage,
     examples: Examples,
-    /// F18, empty until the audit lands.
-    audit: Option<serde_json::Value>,
+    /// The latest skill record (F18).
+    audit: Option<&'a SkillRecord>,
 }
 
 /// A name `show` accepts: any known name (canonical names are known).
@@ -573,28 +582,12 @@ fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> C
     let cites = graph.get(skill).into_iter().flatten().map(|b| link(b)).collect();
     let cited_by = citers(&graph, skill).iter().map(|a| link(a)).collect();
 
-    let mut by: BTreeMap<(Agent, Channel), HashSet<&str>> = BTreeMap::new();
-    let mut projects: BTreeMap<&str, HashSet<(Agent, &str)>> = BTreeMap::new();
-    for (e, _) in window.iter().filter(|(e, _)| e.channel.strong()) {
-        by.entry((e.agent, e.channel)).or_default().insert(&e.session);
-        if let Some(cwd) = &e.cwd {
-            projects.entry(cwd).or_default().insert((e.agent, &e.session));
-        }
-    }
-    let mut projects: Vec<Project> =
-        projects.into_iter().map(|(cwd, s)| Project { cwd: cwd.to_string(), sessions: s.len() }).collect();
-    projects.sort_by_key(|p| std::cmp::Reverse(p.sessions));
-    projects.truncate(3);
     let mut ledger: Vec<_> = view.select(&f, Some(skill), None).collect();
     ledger.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
-    let last_use = ledger.iter().find(|(e, _)| e.channel.strong()).map(|(_, t)| *t);
-    let usage = CardUsage {
-        strong: by.into_iter().map(|((agent, channel), s)| ByChannel { agent, channel, events: s.len() }).collect(),
-        last_use: last_use.map(|t| t.to_string()),
-        projects,
-    };
     let agents = view.input.cfg.homes.iter().map(|h| h.agent);
-    let examples = examples::examples(agents, &path, skill, ledger.iter().map(|(e, _)| *e));
+    let mut examples = examples::examples(agents, &path, skill, ledger.iter().map(|(e, _)| *e));
+    let audit = view.input.audits.get(skill);
+    examples.curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
 
     Card {
         skill,
@@ -610,10 +603,40 @@ fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> C
         strong_since_retro,
         cites,
         cited_by,
-        usage,
+        usage: card_usage(view, skill, start),
         examples,
-        audit: None,
+        audit,
     }
+}
+
+/// The card's usage section for the events of `skill` at or after `start`.
+fn card_usage(view: &View, skill: &str, start: Option<Timestamp>) -> CardUsage {
+    let f = Filter::default();
+    let mut by: BTreeMap<(Agent, Channel), HashSet<&str>> = BTreeMap::new();
+    let mut projects: BTreeMap<&str, HashSet<(Agent, &str)>> = BTreeMap::new();
+    for (e, _) in view.select(&f, Some(skill), start).filter(|(e, _)| e.channel.strong()) {
+        by.entry((e.agent, e.channel)).or_default().insert(&e.session);
+        if let Some(cwd) = &e.cwd {
+            projects.entry(cwd).or_default().insert((e.agent, &e.session));
+        }
+    }
+    let mut projects: Vec<Project> =
+        projects.into_iter().map(|(cwd, s)| Project { cwd: cwd.to_string(), sessions: s.len() }).collect();
+    projects.sort_by_key(|p| std::cmp::Reverse(p.sessions));
+    projects.truncate(3);
+    let last_use = view.select(&f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
+    CardUsage {
+        strong: by.into_iter().map(|((agent, channel), s)| ByChannel { agent, channel, events: s.len() }).collect(),
+        last_use: last_use.map(|t| t.to_string()),
+        projects,
+    }
+}
+
+/// The usage section of `skill`'s card over `show`'s default window, which
+/// the audit's stage 2 reads (SPEC §6.4).
+pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
+    let view = View::new(input);
+    json!(card_usage(&view, skill, view.start(SHOW_SINCE)))
 }
 
 /// `$HOME` as `~` (SPEC F12 Paths).
@@ -753,6 +776,27 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
             let date = r.ts.parse::<Timestamp>().map_or(r.ts.clone(), |t| view.date(t).to_string());
             let text = r.text.split_whitespace().collect::<Vec<_>>().join(" ");
             out.push_str(&format!("  {date} {}: {text}\n", r.cwd.as_deref().map_or("-".into(), tilde)));
+        }
+    }
+    if !ex.curated.is_empty() {
+        out.push_str("curated:\n");
+        for c in &ex.curated {
+            out.push_str(&format!(
+                "  {} Asked: {} Happened: {} Tip: {} ({})\n",
+                c.situation, c.asked, c.happened, c.tip, c.session
+            ));
+        }
+    }
+    match card.audit {
+        None => out.push_str("audit: none\n"),
+        Some(a) => {
+            let date = a.audited_at.parse::<Timestamp>().map_or(a.audited_at.clone(), |t| view.date(t).to_string());
+            out.push_str(&format!("audit: {date}, {} sessions: {}\n", a.sessions.len(), a.result.verdict));
+            let rates: Vec<String> = a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect();
+            out.push_str(&format!("  {}\n", rates.join(", ")));
+            for (i, imp) in a.result.improvements.iter().take(AUDIT_IMPROVEMENTS).enumerate() {
+                out.push_str(&format!("  {}. {} ({})\n", i + 1, imp.change, imp.reason));
+            }
         }
     }
     Ok(out)

@@ -1,7 +1,9 @@
-//! `skima audit` (SPEC §6.4, F18) stage 1: selection, the judge's input, one
-//! Claude, Codex or Pi judge call per session, validation of its answer,
-//! and the session records in `audits.jsonl`. `--dry-run` shows what a run
-//! would judge and calls nothing.
+//! `skima audit` (SPEC §6.4, F18). Stage 1: selection, the judge's input, one
+//! Claude, Codex or Pi judge call per session, validation of its answer, and
+//! the session records in `audits.jsonl`. Stage 2: one call over every
+//! session record of the skill, the rates skima computes, and the skill
+//! record the card shows. `--dry-run` shows what a run would judge and calls
+//! nothing.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsString;
@@ -14,13 +16,15 @@ use std::sync::LazyLock;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::value::RawValue;
+use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters;
 use crate::config::{Home, Judge};
+use crate::evals::Evals;
 use crate::inventory::git;
 use crate::ledger::{self, Actor, Agent, Event, name};
 use crate::render::{self, Align};
@@ -31,6 +35,10 @@ pub const MAX_CHARS: usize = 60_000;
 /// The stage-1 judge prompt, shipped in the binary, and the version records name.
 pub const SESSION_PROMPT: &str = include_str!("../prompts/session.md");
 pub const SESSION_PROMPT_VERSION: &str = "session-v1";
+
+/// The stage-2 judge prompt, and the version skill records name.
+pub const SKILL_PROMPT: &str = include_str!("../prompts/skill.md");
+pub const SKILL_PROMPT_VERSION: &str = "skill-v1";
 
 /// One cent in micro-dollars: no call starts with a smaller cap (SPEC §6.4, D34).
 pub const CENT: u64 = 10_000;
@@ -105,8 +113,9 @@ struct RecordedJudge {
     cost_usd: Option<Box<RawValue>>,
 }
 
-/// Every readable line of `<data>/audits.jsonl`; none when the file is missing.
-fn recorded(data: &Path) -> Result<Vec<Recorded>> {
+/// Every line of `<data>/audits.jsonl` that parses as `T`; none when the file
+/// is missing.
+fn parsed<T: DeserializeOwned>(data: &Path) -> Result<Vec<T>> {
     let path = data.join("audits.jsonl");
     let text = match fs::read_to_string(&path) {
         Ok(t) => t,
@@ -118,7 +127,7 @@ fn recorded(data: &Path) -> Result<Vec<Recorded>> {
 
 /// Sessions that already have a `session` record for `skill` in `<data>/audits.jsonl`.
 pub fn audited(data: &Path, skill: &str) -> Result<HashSet<String>> {
-    Ok(recorded(data)?
+    Ok(parsed::<Recorded>(data)?
         .into_iter()
         .filter(|r| r.kind == "session" && r.skill == skill)
         .filter_map(|r| r.session)
@@ -242,15 +251,25 @@ pub fn input(source: &Path, c: &Candidate) -> Result<(SkillText, String)> {
     Ok((skill, text))
 }
 
+/// A stage's shipped prompt and the JSON schema of its answer.
+pub struct Stage {
+    pub prompt: &'static str,
+    pub schema: &'static LazyLock<String>,
+}
+
+/// Stage 1, one call per session, and stage 2, one call per skill.
+pub static SESSION: Stage = Stage { prompt: SESSION_PROMPT, schema: &SESSION_SCHEMA };
+pub static SKILL: Stage = Stage { prompt: SKILL_PROMPT, schema: &SKILL_SCHEMA };
+
 /// Stand-ins in [`command`]'s argv for the files each call writes in its own
 /// temporary directory: the answer schema, Codex's result and Pi's input.
 pub const SCHEMA_FILE: &str = "<schema file>";
 pub const RESULT_FILE: &str = "<result file>";
 pub const INPUT_FILE: &str = "@<input file>";
 
-/// The judge's argv (SPEC §6.4, D33) with the shipped prompt and schema; a
-/// Claude call appends `--max-budget-usd <cap>`.
-pub fn command(judge: &Judge) -> Vec<String> {
+/// The judge's argv (SPEC §6.4, D33) with a stage's shipped prompt and
+/// schema; a Claude call appends `--max-budget-usd <cap>`.
+pub fn command(judge: &Judge, stage: &Stage) -> Vec<String> {
     let (argv, model): (&[&str], _) = match judge.agent {
         Agent::Claude => (
             &[
@@ -260,11 +279,11 @@ pub fn command(judge: &Judge) -> Vec<String> {
                 "--tools",
                 "",
                 "--system-prompt",
-                SESSION_PROMPT,
+                stage.prompt,
                 "--output-format",
                 "json",
                 "--json-schema",
-                &SESSION_SCHEMA,
+                stage.schema,
                 "--no-session-persistence",
             ],
             "--model",
@@ -295,7 +314,7 @@ pub fn command(judge: &Judge) -> Vec<String> {
                 "--no-skills",
                 "--no-context-files",
                 "--system-prompt",
-                SESSION_PROMPT,
+                stage.prompt,
                 "--mode",
                 "json",
             ],
@@ -495,7 +514,8 @@ struct ClaudeOutput<'a> {
 /// `CODEX_HOME`; Pi reads the input file. A Claude call that ran but reported
 /// no cost is counted at its cap, the most it could have spent short of one
 /// turn's overshoot, so the budget still binds.
-fn call(a: &Audit, cap: Option<u64>, input: &str) -> Result<Reply> {
+fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+    let argv = command(a.judge, stage);
     let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
     let runs = a.data.join("audit-runs");
     let dir = runs.join(&unique);
@@ -505,11 +525,11 @@ fn call(a: &Audit, cap: Option<u64>, input: &str) -> Result<Reply> {
     let result = files.join("result.json");
     let output = DirBuilder::new().mode(0o700).create(&files).and_then(|()| {
         let mut args: Vec<OsString> = Vec::new();
-        for arg in &a.argv[1..] {
+        for arg in &argv[1..] {
             args.push(match arg.as_str() {
                 SCHEMA_FILE => {
                     let path = files.join("schema.json");
-                    fs::write(&path, &*SESSION_SCHEMA)?;
+                    fs::write(&path, stage.schema.as_str())?;
                     path.into()
                 }
                 RESULT_FILE => result.clone().into(),
@@ -523,10 +543,10 @@ fn call(a: &Audit, cap: Option<u64>, input: &str) -> Result<Reply> {
         }
         let stdin = match a.judge.agent {
             Agent::Claude => Some(input.to_string()),
-            Agent::Codex => Some(format!("{SESSION_PROMPT}\n{input}")),
+            Agent::Codex => Some(format!("{}\n{input}", stage.prompt)),
             Agent::Pi => None,
         };
-        let mut cmd = Command::new(&a.argv[0]);
+        let mut cmd = Command::new(&argv[0]);
         cmd.args(args)
             .current_dir(&dir)
             .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
@@ -552,7 +572,7 @@ fn call(a: &Audit, cap: Option<u64>, input: &str) -> Result<Reply> {
     let written = fs::read(&result);
     let removed = fs::remove_dir_all(&dir);
     let cleaned = fs::remove_dir_all(&files);
-    let output = output.map_err(|e| format!("{}: {e}", a.argv[0]))?;
+    let output = output.map_err(|e| format!("{}: {e}", argv[0]))?;
     removed.map_err(|e| format!("{}: {e}", dir.display()))?;
     cleaned.map_err(|e| format!("{}: {e}", files.display()))?;
     if scratch.is_some() {
@@ -650,16 +670,40 @@ struct SessionRecord<'a> {
     audited_at: String,
     skill_commit: Option<&'a str>,
     condensed_chars: usize,
-    judge: JudgeRecord<'a>,
+    judge: JudgeRecord,
     prompt: &'static str,
     result: &'a Verdict,
 }
 
-#[derive(Serialize)]
-struct JudgeRecord<'a> {
-    agent: Agent,
-    model: Option<&'a str>,
-    cost_usd: Option<Box<RawValue>>,
+/// Who judged a record, and the exact reported cost of its calls.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct JudgeRecord {
+    pub agent: Agent,
+    pub model: Option<String>,
+    /// None from a judge that reports no cost (Codex, Pi).
+    pub cost_usd: Option<Box<RawValue>>,
+}
+
+impl JudgeRecord {
+    fn new(judge: &Judge, cost: Option<u64>) -> JudgeRecord {
+        JudgeRecord {
+            agent: judge.agent,
+            model: judge.model.clone(),
+            cost_usd: cost.map(|c| RawValue::from_string(exact(c)).expect("a decimal is JSON")),
+        }
+    }
+}
+
+/// Now, as records write `audited_at`.
+fn stamp() -> String {
+    Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// Appends `record` to `audits.jsonl` under `scan.lock` (D35).
+fn append(data: &Path, record: &impl Serialize) -> Result<()> {
+    let line = serde_json::to_string(record).expect("record serialises") + "\n";
+    let _lock = ledger::lock(data)?;
+    ledger::append_lines(&data.join("audits.jsonl"), line)
 }
 
 /// One audit run's settings.
@@ -668,23 +712,55 @@ pub struct Audit<'a> {
     pub source: &'a Path,
     pub data: &'a Path,
     pub judge: &'a Judge,
-    /// [`command`]'s argv.
-    pub argv: &'a [String],
     /// `--max-budget-usd` in micro-dollars; the Claude judge's only.
     pub budget: Option<u64>,
     /// The user's Codex `auth.json`, which the Codex judge's home links to.
     pub codex_auth: &'a Path,
+    /// The skill's grades and retros, for stage 2.
+    pub evals: &'a Evals,
+    /// The card's usage section (F14), for stage 2.
+    pub usage: &'a Value,
+}
+
+/// What a run did: stage 1's counts and spend, the sessions the budget left
+/// for the next run, and stage 2's result.
+pub struct Run<'c> {
+    pub candidates: usize,
+    pub judged: usize,
+    pub dropped: usize,
+    /// Micro-dollars, both stages; 0 with a judge that reports no cost.
+    pub spent: u64,
+    pub left: &'c [Candidate],
+    pub report: Synthesis,
+}
+
+/// Stage 2's result.
+pub enum Synthesis {
+    /// No new session record and no `--resynth`, or no session record at all.
+    NotDue,
+    Written(Box<SkillRecord>),
+    /// Invalid twice; why the last answer failed.
+    Dropped(String),
+    /// Under a cent of the budget was left (D34); never without a budget.
+    Skipped,
+}
+
+/// Runs stage 1 on `candidates`, then stage 2 when stage 1 wrote a session
+/// record or `resynth` is set (SPEC §6.4, D37).
+pub fn run<'c>(a: &Audit, candidates: &'c [Candidate], resynth: bool) -> Result<Run<'c>> {
+    let mut run = judge_sessions(a, candidates)?;
+    if run.judged > 0 || resynth {
+        run.report = synthesize(a, &mut run.spent)?;
+    }
+    Ok(run)
 }
 
 /// Stage 1 (SPEC §6.4): judges `candidates` one at a time; with a budget,
 /// each call is capped at 75% of it minus what is spent, stopping once that is
 /// under a cent.
 /// Each valid answer is appended to `audits.jsonl` under `scan.lock` at once;
-/// an invalid one is retried once, then dropped. Returns the run's summary.
-pub fn run(a: &Audit, candidates: &[Candidate]) -> Result<String> {
-    if candidates.is_empty() {
-        return Ok(format!("{}: no session to judge\n", a.skill));
-    }
+/// an invalid one is retried once, then dropped.
+fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>> {
     let pool = a.budget.map(|b| b / 4 * 3);
     let progress = std::io::stderr().is_terminal();
     let (mut spent, mut judged, mut dropped) = (0u64, 0usize, 0usize);
@@ -703,7 +779,7 @@ pub fn run(a: &Audit, candidates: &[Candidate]) -> Result<String> {
                 let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
                 eprintln!("judging {}/{} {}{cap}", i + 1, candidates.len(), c.event.session);
             }
-            let reply = call(a, cap, &input)?;
+            let reply = call(a, &SESSION, cap, &input)?;
             spent += reply.cost.unwrap_or_default();
             cost = reply.cost.map(|r| r + cost.unwrap_or_default());
             match reply.answer.and_then(|v| validate(v, &c.condensed)) {
@@ -716,20 +792,14 @@ pub fn run(a: &Audit, candidates: &[Candidate]) -> Result<String> {
                         agent: c.event.agent,
                         src: &c.event.src,
                         session_ts: c.started().map(|t| t.to_string()),
-                        audited_at: Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
+                        audited_at: stamp(),
                         skill_commit: skill.commit.as_deref(),
                         condensed_chars: c.condensed.chars().count(),
-                        judge: JudgeRecord {
-                            agent: a.judge.agent,
-                            model: a.judge.model.as_deref(),
-                            cost_usd: cost.map(|c| RawValue::from_string(exact(c)).expect("a decimal is JSON")),
-                        },
+                        judge: JudgeRecord::new(a.judge, cost),
                         prompt: SESSION_PROMPT_VERSION,
                         result: &verdict,
                     };
-                    let line = serde_json::to_string(&record).expect("record serialises") + "\n";
-                    let _lock = ledger::lock(a.data)?;
-                    ledger::append_lines(&a.data.join("audits.jsonl"), line)?;
+                    append(a.data, &record)?;
                     judged += 1;
                     continue 'sessions;
                 }
@@ -739,15 +809,366 @@ pub fn run(a: &Audit, candidates: &[Candidate]) -> Result<String> {
         eprintln!("warning: {}: judge answer dropped after one retry: {why}", c.event.session);
         dropped += 1;
     }
-    let spend = a.budget.map(|b| format!(", ${} spent of ${}", cents(spent), cents(b))).unwrap_or_default();
-    let mut out = format!("{}: {judged} judged, {dropped} dropped{spend}\n", a.skill);
-    if !left.is_empty() {
-        out.push_str(&format!("budget used up; left for the next run: {}\n", left.len()));
-        for c in left {
-            out.push_str(&format!("  {} {}\n", name(c.event.agent), c.event.session));
+    Ok(Run { candidates: candidates.len(), judged, dropped, spent, left, report: Synthesis::NotDue })
+}
+
+impl Run<'_> {
+    /// False, and the run exits 1 (SPEC §7), when stage 1 dropped every
+    /// session it judged, or stage 2 was due and wrote no record.
+    pub fn ok(&self) -> bool {
+        (self.judged > 0 || self.dropped == 0) && matches!(self.report, Synthesis::NotDue | Synthesis::Written(_))
+    }
+
+    /// The run's summary as text.
+    pub fn text(&self, a: &Audit) -> String {
+        let skill = a.skill;
+        let mut out = if self.candidates == 0 {
+            format!("{skill}: no session to judge\n")
+        } else {
+            let spend =
+                a.budget.map(|b| format!(", ${} spent of ${}", cents(self.spent), cents(b))).unwrap_or_default();
+            format!("{skill}: {} judged, {} dropped{spend}\n", self.judged, self.dropped)
+        };
+        if !self.left.is_empty() {
+            out.push_str(&format!("budget used up; left for the next run: {}\n", self.left.len()));
+            for c in self.left {
+                out.push_str(&format!("  {} {}\n", name(c.event.agent), c.event.session));
+            }
+        }
+        match &self.report {
+            Synthesis::NotDue => {}
+            Synthesis::Written(r) => {
+                out.push_str(&format!("{skill}: skill report over {} sessions: {}\n", r.sessions.len(), r.result.verdict));
+                for (label, rate) in r.rates.labeled() {
+                    out.push_str(&format!("  {label} {}: {}\n", rate.of(), rate.sessions.join(", ")));
+                }
+            }
+            Synthesis::Dropped(why) => out.push_str(&format!("{skill}: skill report dropped after one retry: {why}\n")),
+            Synthesis::Skipped => out.push_str(&format!(
+                "{skill}: skill report skipped: ${} of the budget is left, under $0.01; run `skima audit {skill} --resynth`\n",
+                cents(a.budget.unwrap_or_default().saturating_sub(self.spent))
+            )),
+        }
+        out
+    }
+
+    /// `audit --json` (D40): the new skill record, the session records written
+    /// and dropped, the spend (null with a judge that reports no cost), and the
+    /// sessions left for the next run.
+    pub fn json(&self, a: &Audit) -> String {
+        let record = match &self.report {
+            Synthesis::Written(r) => serde_json::to_value(r).expect("record serialises"),
+            _ => Value::Null,
+        };
+        let spent: Option<Box<RawValue>> =
+            a.budget.map(|_| RawValue::from_string(exact(self.spent)).expect("a decimal is JSON"));
+        let left: Vec<&str> = self.left.iter().map(|c| c.event.session.as_str()).collect();
+        let out = json!({"record": record, "written": self.judged, "dropped": self.dropped, "spent_usd": spent, "left": left});
+        format!("{out}\n")
+    }
+}
+
+const VERDICT_CHARS: usize = 400;
+const REPORT_CHARS: usize = 300;
+const REPORT_ITEMS: usize = 5;
+const REPORT_EXAMPLES: usize = 3;
+/// Stage 2's input cuts (D37).
+const COMMITS: &str = "-30";
+const GRADE_BODY_CHARS: usize = 6_000;
+const RETRO_BODIES: usize = 3;
+const RETRO_BODY_CHARS: usize = 4_000;
+
+/// The JSON schema of the stage-2 answer, passed as `--json-schema`.
+pub static SKILL_SCHEMA: LazyLock<String> = LazyLock::new(|| {
+    let text = |max: usize| json!({"type": "string", "maxLength": max});
+    let sessions = json!({"type": "array", "minItems": 1, "items": {"type": "string"}});
+    let object = |fields: Vec<(&str, Value)>| {
+        let required: Vec<&str> = fields.iter().map(|(k, _)| *k).collect();
+        let properties: serde_json::Map<String, Value> = fields.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        json!({"type": "object", "additionalProperties": false, "required": required, "properties": properties})
+    };
+    let list = |items: Value, max: usize| json!({"type": "array", "maxItems": max, "items": items});
+    let cited = object(vec![("text", text(REPORT_CHARS)), ("sessions", sessions.clone())]);
+    object(vec![
+        ("verdict", text(VERDICT_CHARS)),
+        ("patterns", list(text(REPORT_CHARS), REPORT_ITEMS)),
+        ("works", list(cited.clone(), REPORT_ITEMS)),
+        ("failures", list(cited, REPORT_ITEMS)),
+        (
+            "improvements",
+            list(
+                object(vec![("change", text(REPORT_CHARS)), ("reason", text(REPORT_CHARS)), ("sessions", sessions)]),
+                REPORT_ITEMS,
+            ),
+        ),
+        ("versus_grades", text(VERDICT_CHARS)),
+        (
+            "examples",
+            list(
+                object(vec![
+                    ("situation", text(REPORT_CHARS)),
+                    ("asked", text(REPORT_CHARS)),
+                    ("happened", text(REPORT_CHARS)),
+                    ("tip", text(REPORT_CHARS)),
+                    ("session", json!({"type": "string"})),
+                ]),
+                REPORT_EXAMPLES,
+            ),
+        ),
+    ])
+    .to_string()
+});
+
+/// A finding of the skill report and the sessions behind it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Cited {
+    pub text: String,
+    pub sessions: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Improvement {
+    pub change: String,
+    pub reason: String,
+    pub sessions: Vec<String>,
+}
+
+/// A curated example (F15): paraphrased, citing one session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Example {
+    pub situation: String,
+    pub asked: String,
+    pub happened: String,
+    pub tip: String,
+    pub session: String,
+}
+
+/// The stage-2 judge's answer (SPEC §6.4, D37).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SkillReport {
+    pub verdict: String,
+    pub patterns: Vec<String>,
+    pub works: Vec<Cited>,
+    pub failures: Vec<Cited>,
+    /// Ranked, most important first.
+    pub improvements: Vec<Improvement>,
+    pub versus_grades: String,
+    pub examples: Vec<Example>,
+}
+
+/// `n of N`, and the sessions counted in `n`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Rate {
+    pub n: usize,
+    pub of: usize,
+    pub sessions: Vec<String>,
+}
+
+impl Rate {
+    pub fn of(&self) -> String {
+        format!("{} of {}", self.n, self.of)
+    }
+}
+
+/// The rates skima computes from session records, never the judge (D38).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Rates {
+    pub followed: Rate,
+    pub achieved: Rate,
+    pub abandoned_or_redone: Rate,
+}
+
+impl Rates {
+    fn new(judged: &[Judged]) -> Rates {
+        let rate = |hit: fn(&Verdict) -> bool| {
+            let sessions: Vec<String> = judged.iter().filter(|j| hit(&j.result)).map(|j| j.session.clone()).collect();
+            Rate { n: sessions.len(), of: judged.len(), sessions }
+        };
+        Rates {
+            followed: rate(|v| v.followed == Followed::Yes),
+            achieved: rate(|v| v.outcome == Outcome::Achieved),
+            abandoned_or_redone: rate(|v| v.outcome == Outcome::Abandoned || v.redone),
         }
     }
-    Ok(out)
+
+    /// Each rate with the words it is printed with.
+    pub fn labeled(&self) -> [(&'static str, &Rate); 3] {
+        [("followed", &self.followed), ("achieved", &self.achieved), ("abandoned or redone", &self.abandoned_or_redone)]
+    }
+}
+
+/// A skill record of `audits.jsonl` (D35).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SkillRecord {
+    pub v: u32,
+    pub kind: String,
+    pub skill: String,
+    pub audited_at: String,
+    pub sessions: Vec<String>,
+    pub judge: JudgeRecord,
+    pub prompt: String,
+    pub rates: Rates,
+    pub result: SkillReport,
+}
+
+/// The latest skill record of each skill in `<data>/audits.jsonl`; older ones
+/// stay in the file (D35).
+pub fn latest(data: &Path) -> Result<BTreeMap<String, SkillRecord>> {
+    Ok(parsed::<SkillRecord>(data)?.into_iter().filter(|r| r.kind == "skill").map(|r| (r.skill.clone(), r)).collect())
+}
+
+/// A session record as stage 2 reads it.
+#[derive(Serialize, Deserialize)]
+struct Judged {
+    #[serde(skip_serializing)]
+    kind: String,
+    #[serde(skip_serializing)]
+    skill: String,
+    session: String,
+    agent: Agent,
+    session_ts: Option<String>,
+    skill_commit: Option<String>,
+    result: Verdict,
+}
+
+/// The stage-2 answer checked against its schema and the session records it
+/// may cite (SPEC §6.4, D37). The error says what failed.
+fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<SkillReport, String> {
+    let r: SkillReport = serde_json::from_value(answer).map_err(|e| format!("not the answer schema: {e}"))?;
+    let over = |s: &String, max: usize| s.chars().count() > max;
+    if over(&r.verdict, VERDICT_CHARS) || over(&r.versus_grades, VERDICT_CHARS) {
+        return Err(format!("verdict or versus_grades over {VERDICT_CHARS} characters"));
+    }
+    let texts = r
+        .patterns
+        .iter()
+        .chain(r.works.iter().chain(&r.failures).map(|c| &c.text))
+        .chain(r.improvements.iter().flat_map(|i| [&i.change, &i.reason]))
+        .chain(r.examples.iter().flat_map(|e| [&e.situation, &e.asked, &e.happened, &e.tip]));
+    let lists = [r.patterns.len(), r.works.len(), r.failures.len(), r.improvements.len()];
+    if texts.into_iter().any(|t| over(t, REPORT_CHARS))
+        || lists.iter().any(|n| *n > REPORT_ITEMS)
+        || r.examples.len() > REPORT_EXAMPLES
+    {
+        return Err(format!(
+            "over {REPORT_ITEMS} items, {REPORT_EXAMPLES} examples, or a text over {REPORT_CHARS} characters"
+        ));
+    }
+    let cited = r
+        .works
+        .iter()
+        .chain(&r.failures)
+        .flat_map(|c| &c.sessions)
+        .chain(r.improvements.iter().flat_map(|i| &i.sessions))
+        .chain(r.examples.iter().map(|e| &e.session));
+    if let Some(s) = cited.into_iter().find(|s| !judged.iter().any(|j| j.session == **s)) {
+        return Err(format!("cites session {s}, which has no session record"));
+    }
+    Ok(r)
+}
+
+/// `text` between `<open>` and its closing tag; a closing tag inside is
+/// written `<\/tag>`, so the text cannot end its own frame.
+fn frame(open: &str, text: &str) -> String {
+    let tag = open.split(' ').next().unwrap_or(open);
+    let close = format!("</{tag}>");
+    format!("<{open}>\n{}\n{close}\n", text.trim_end().replace(&close, &format!("<\\/{tag}>")))
+}
+
+/// The stage-2 judge's input (SPEC §6.4, D37): the current `SKILL.md`, its last
+/// 30 commits, every grade's and retro's frontmatter with the latest grade
+/// body and the latest three retro bodies cut, the card's usage section, and
+/// every session record of the skill.
+fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
+    let dir = a.source.join(a.skill);
+    let path = dir.join("SKILL.md");
+    let skill = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let commits = git(&dir, &["log", COMMITS, "--format=%as %s", "--", "."]).unwrap_or_default();
+    // Each file's frontmatter and body; one that no longer reads is left out.
+    let split = |file: &Path| fs::read_to_string(file).ok().and_then(|t| crate::yaml::split_frontmatter(&t).ok());
+    let cut = |body: &str, max: usize| body.chars().take(max).collect::<String>();
+    let fronts = |files: &mut dyn Iterator<Item = &Path>| -> String {
+        files
+            .filter_map(|f| {
+                let name = f.file_name()?.to_string_lossy();
+                Some(format!("--- {name}\n{}\n", split(f)?.0))
+            })
+            .collect()
+    };
+    let grades: Vec<&Path> = a.evals.grades.iter().map(|g| g.eval.file.as_path()).collect();
+    let retros: Vec<&Path> = a.evals.retros.iter().map(|r| r.file.as_path()).collect();
+    let latest_grade = grades.last().and_then(|f| split(f)).map(|(_, b)| cut(&b, GRADE_BODY_CHARS));
+    let retro_bodies: String = retros
+        .iter()
+        .rev()
+        .take(RETRO_BODIES)
+        .filter_map(|f| {
+            Some(format!("--- {}\n{}\n", f.file_name()?.to_string_lossy(), cut(&split(f)?.1, RETRO_BODY_CHARS)))
+        })
+        .collect();
+    let records: String = judged.iter().map(|j| serde_json::to_string(j).expect("record serialises") + "\n").collect();
+    Ok([
+        frame(&format!("skill name=\"{}\"", a.skill), &skill),
+        frame("commits", &commits),
+        frame("grades", &fronts(&mut grades.iter().copied())),
+        frame("latest-grade", latest_grade.as_deref().unwrap_or_default()),
+        frame("retros", &fronts(&mut retros.iter().copied())),
+        frame("latest-retros", &retro_bodies),
+        frame("usage", &serde_json::to_string_pretty(a.usage).expect("usage serialises")),
+        frame("session-records", &records),
+    ]
+    .join("\n"))
+}
+
+/// Stage 2 (SPEC §6.4): one call over every session record of the skill; with
+/// a budget, capped at it minus what is spent, and skipped when that is under
+/// a cent. A valid answer is appended as the skill record with the rates skima
+/// computes; an invalid one is retried once, then dropped.
+fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
+    let judged: Vec<Judged> =
+        parsed::<Judged>(a.data)?.into_iter().filter(|j| j.kind == "session" && j.skill == a.skill).collect();
+    if judged.is_empty() {
+        return Ok(Synthesis::NotDue);
+    }
+    let input = synthesis_input(a, &judged)?;
+    let mut cost = None;
+    let mut why = None;
+    for _ in 0..2 {
+        let cap = a.budget.map(|b| b.saturating_sub(*spent));
+        if cap.is_some_and(|cap| cap < CENT) {
+            break;
+        }
+        if std::io::stderr().is_terminal() {
+            let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
+            eprintln!("reporting on {} sessions{cap}", judged.len());
+        }
+        let reply = call(a, &SKILL, cap, &input)?;
+        *spent += reply.cost.unwrap_or_default();
+        cost = reply.cost.map(|r| r + cost.unwrap_or_default());
+        match reply.answer.and_then(|v| validate_report(v, &judged)) {
+            Ok(result) => {
+                let record = SkillRecord {
+                    v: 1,
+                    kind: "skill".into(),
+                    skill: a.skill.into(),
+                    audited_at: stamp(),
+                    sessions: judged.iter().map(|j| j.session.clone()).collect(),
+                    judge: JudgeRecord::new(a.judge, cost),
+                    prompt: SKILL_PROMPT_VERSION.into(),
+                    rates: Rates::new(&judged),
+                    result,
+                };
+                append(a.data, &record)?;
+                return Ok(Synthesis::Written(Box::new(record)));
+            }
+            Err(e) => why = Some(e),
+        }
+    }
+    Ok(why.map_or(Synthesis::Skipped, Synthesis::Dropped))
 }
 
 /// Input tokens estimated from condensed characters (SPEC §6.4, D36).
@@ -759,7 +1180,7 @@ pub fn estimate_tokens(chars: usize) -> usize {
 /// records paid per condensed character, with how many records set it (D36).
 fn estimate_cost(data: &Path, chars: usize) -> Result<Option<(u64, usize)>> {
     let (mut cost, mut seen, mut n) = (0u128, 0u128, 0usize);
-    for r in recorded(data)? {
+    for r in parsed::<Recorded>(data)? {
         let paid = r.judge.and_then(|j| j.cost_usd).and_then(|c| parse_usd(c.get()).ok());
         if let (true, Some(paid), Some(len)) = (r.kind == "session", paid, r.condensed_chars) {
             cost += u128::from(paid);
@@ -802,8 +1223,7 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
         ("chars", Align::Right),
         ("session", Align::Left),
     ];
-    let quoted: Vec<String> = a
-        .argv
+    let quoted: Vec<String> = command(a.judge, &SESSION)
         .iter()
         .map(|arg| match arg.as_str() {
             SESSION_PROMPT => "\"$(cat <prompt>)\"".into(),

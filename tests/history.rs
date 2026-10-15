@@ -177,7 +177,7 @@ fn outside_a_worktree_history_is_absent_and_no_grade_is_stale() {
     };
     let coverage = Default::default();
     let now: Timestamp = "2026-10-13T12:00:00Z".parse().unwrap();
-    let input = Input { cfg: &cfg, inv: &inv, events: &[], coverage: &coverage, now };
+    let input = Input { cfg: &cfg, inv: &inv, events: &[], coverage: &coverage, audits: &Default::default(), now };
     let v: serde_json::Value = serde_json::from_str(&report::unused(&input, Since::Days(60), true, false)).unwrap();
     assert_eq!(v["skills"][0]["status"], "unused", "no new flag without history");
 }

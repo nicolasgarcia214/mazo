@@ -12,6 +12,7 @@ use common::{copy_tree, git, write};
 use jiff::tz::TimeZone;
 use regex::Regex;
 use serde_json::Value;
+use skima::audit::SkillRecord;
 use skima::config::{Config, Policy};
 use skima::html;
 use skima::inventory::Inventory;
@@ -87,6 +88,7 @@ struct World {
     inv: Inventory,
     coverage: BTreeMap<String, Coverage>,
     events: Vec<Event>,
+    audits: BTreeMap<String, SkillRecord>,
 }
 
 impl World {
@@ -106,11 +108,18 @@ impl World {
             "claude".to_string(),
             Coverage { first: Some("2026-09-10T08:00:00Z".into()), last_scan: Some(NOW.into()) },
         )]);
-        World { inv: Inventory::load(source).unwrap(), cfg, coverage, events }
+        World { inv: Inventory::load(source).unwrap(), cfg, coverage, events, audits: BTreeMap::new() }
     }
 
     fn input(&self) -> Input<'_> {
-        Input { cfg: &self.cfg, inv: &self.inv, events: &self.events, coverage: &self.coverage, now: now() }
+        Input {
+            cfg: &self.cfg,
+            inv: &self.inv,
+            events: &self.events,
+            coverage: &self.coverage,
+            audits: &self.audits,
+            now: now(),
+        }
     }
 
     fn html(&self) -> String {
@@ -361,4 +370,58 @@ fn times_are_local_under_a_fixed_zone() {
     assert!(page.contains("times and days in JST"), "the zone is named");
     let generated = Regex::new(r"generated \d{4}-\d\d-\d\d \d\d:\d\d ·").unwrap();
     assert!(generated.is_match(&page), "generated to the minute");
+}
+
+/// A skill record of `unslop` with `verdict`, written at `at`, with four
+/// ranked improvements and a hostile curated example.
+fn skill_record(verdict: &str, at: &str) -> String {
+    let session = |s: &str| serde_json::json!([s]);
+    let improvement = |i: usize| serde_json::json!({"change": format!("Change {i}."), "reason": format!("Reason {i}."), "sessions": session("s1")});
+    let rate = |n: usize| serde_json::json!({"n": n, "of": 4, "sessions": &["s1", "s2", "s3", "s4"][..n]});
+    let record = serde_json::json!({
+        "v": 1, "kind": "skill", "skill": "unslop", "audited_at": at, "sessions": ["s1", "s2", "s3", "s4"],
+        "judge": {"agent": "claude", "model": null, "cost_usd": 0.12},
+        "prompt": "skill-v1",
+        "rates": {"followed": rate(3), "achieved": rate(2), "abandoned_or_redone": rate(1)},
+        "result": {
+            "verdict": verdict, "patterns": [], "works": [], "failures": [],
+            "improvements": (1..=4).map(improvement).collect::<Vec<_>>(),
+            "versus_grades": "",
+            "examples": [{"situation": "<b>note</b>", "asked": "Tidy.", "happened": "Done.", "tip": "Say the tone.", "session": "s1"}],
+        },
+    });
+    format!("{record}\n")
+}
+
+/// SPEC F14, F16: the usage table carries each skill's latest audit verdict
+/// and the card shows its date, session count, rates, top three improvements
+/// and curated examples, escaped; an older record is not shown.
+#[test]
+fn the_latest_audit_is_in_the_usage_table_and_the_card() {
+    let repo = repo();
+    let data = tempfile::tempdir().unwrap();
+    let audits = skill_record("OLD VERDICT", "2026-10-01T10:00:00Z")
+        + "{\"v\":1,\"kind\":\"session\",\"skill\":\"unslop\",\"session\":\"s1\"}\n"
+        + &skill_record("Good on <short> texts & \"notes\"", "2026-10-12T10:00:00Z");
+    write(&data.path().join("audits.jsonl"), &audits);
+    let mut w = World::new(repo.path());
+    w.audits = skima::audit::latest(data.path()).unwrap();
+    let page = w.html();
+
+    let verdict = "Good on &lt;short&gt; texts &amp; &quot;notes&quot;";
+    let usage = &page[page.find("<h2>Usage</h2>").unwrap()..page.find("coverage:").unwrap()];
+    assert!(usage.contains("<th>audit</th>"), "{usage}");
+    assert!(usage.contains(&format!("<td>{verdict}</td></tr>")), "{usage}");
+    assert_eq!(usage.matches("<td>-</td></tr>").count(), 8, "skills with no audit show -");
+    assert!(!page.contains("OLD VERDICT"), "only the latest record is shown");
+
+    let card = section(&page, "skill-unslop");
+    assert!(card.contains("<dt>audit</dt>") && card.contains("2026-10-12, 4 sessions"), "{card}");
+    assert!(card.contains(verdict));
+    assert!(card.contains("followed 3 of 4, achieved 2 of 4, abandoned or redone 1 of 4"), "{card}");
+    assert!(card.contains("Change 3.") && !card.contains("Change 4."), "the top three improvements");
+    assert!(card.contains("<dt>curated</dt>") && card.contains("&lt;b&gt;note&lt;/b&gt;"), "{card}");
+    assert!(!page.contains("<b>"), "escaped");
+    assert!(section(&page, "skill-goal-plan").contains("<dt>audit</dt><dd>none</dd>"));
+    assert_self_contained(&page);
 }

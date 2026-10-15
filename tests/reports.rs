@@ -8,6 +8,7 @@ use std::path::Path;
 
 use common::{copy_tree, git, write};
 use serde_json::Value;
+use skima::audit::SkillRecord;
 use skima::config::{Config, Policy};
 use skima::evals;
 use skima::inventory::{self, Inventory};
@@ -63,6 +64,7 @@ struct World {
     cfg: Config,
     inv: Inventory,
     coverage: BTreeMap<String, Coverage>,
+    audits: BTreeMap<String, SkillRecord>,
 }
 
 fn world(source: &Path) -> World {
@@ -82,12 +84,12 @@ fn world(source: &Path) -> World {
         ("claude".to_string(), Coverage { first: Some("2026-09-10T08:00:00Z".into()), last_scan: Some(NOW.into()) }),
         ("codex".to_string(), Coverage { first: Some("2026-03-29T08:00:00Z".into()), last_scan: Some(NOW.into()) }),
     ]);
-    World { cfg, inv, coverage }
+    World { cfg, inv, coverage, audits: BTreeMap::new() }
 }
 
 impl World {
     fn input<'a>(&'a self, events: &'a [Event]) -> Input<'a> {
-        Input { cfg: &self.cfg, inv: &self.inv, events, coverage: &self.coverage, now: now() }
+        Input { cfg: &self.cfg, inv: &self.inv, events, coverage: &self.coverage, audits: &self.audits, now: now() }
     }
 }
 
@@ -485,6 +487,7 @@ fn show_prints_the_card() {
         "projects: ~/work 2, /srv/a 1, /srv/b 1\n".into(),
         "invoke: claude /unslop, codex $unslop\n".into(),
         "examples: none\n".into(),
+        "audit: none\n".into(),
     ];
     assert_eq!(tail, expected.concat(), "{text}");
     assert!(text.contains("~/work") && !text.contains(&format!("{home}/work")), "{text}");
@@ -638,7 +641,7 @@ fn show_lists_written_and_real_examples() {
         "{text}"
     );
     assert!(text.contains(&format!(" /a: {}\n", cut.trim_end())), "{text}");
-    assert!(text.ends_with(&format!(" /b: {}\n", msgs[3])), "{text}");
+    assert!(text.ends_with(&format!(" /b: {}\naudit: none\n", msgs[3])), "{text}");
     for m in &msgs[4..] {
         assert!(!text.contains(m), "{m}: {text}");
     }
@@ -659,7 +662,7 @@ fn show_without_events_has_no_real_examples() {
     let w = world(repo.path());
     let input = w.input(&[]);
     let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
-    assert!(text.ends_with("invoke: claude /unslop, codex $unslop\nexamples: none\n"), "{text}");
+    assert!(text.ends_with("invoke: claude /unslop, codex $unslop\nexamples: none\naudit: none\n"), "{text}");
     let v: Value =
         serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
     assert_eq!(v["examples"]["default_prompt"], Value::Null);

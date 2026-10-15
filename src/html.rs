@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::Value;
 
-use crate::report::tilde;
+use crate::report::{AUDIT_IMPROVEMENTS, tilde};
 
 const CSS: &str = "
 :root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
@@ -39,7 +39,7 @@ dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
 dt { color: var(--muted); }
 dd { margin: 0; }
 blockquote { margin: 2px 0 8px; padding-left: 8px; border-left: 2px solid var(--line); white-space: pre-wrap; }
-ul { margin: 0; padding-left: 18px; }
+ul, ol { margin: 0; padding-left: 18px; }
 ";
 
 const LEGEND: &str = "agents C Claude, X Codex, P Pi · the 30d chart has one bar per day, a grey tick for none · \
@@ -164,19 +164,20 @@ fn table(header: &[&str], rows: &[Vec<String>]) -> String {
 }
 
 fn usage(model: &Value, tz: &TimeZone) -> String {
-    let carded: Vec<&str> = list(&model["cards"]).iter().filter_map(|c| c["skill"].as_str()).collect();
+    let cards = list(&model["cards"]);
+    let card = |skill: &str| cards.iter().find(|c| c["skill"].as_str() == Some(skill));
     let n = |v: &Value| format!("<td class=\"n\">{}</td>", text(v));
     let rows: String = list(&model["usage"]["rows"])
         .iter()
         .map(|r| {
             let skill = r["skill"].as_str().unwrap_or_default();
-            let name = if carded.contains(&skill) {
+            let name = if card(skill).is_some() {
                 format!("<a href=\"#{}\">{}</a>", anchor(skill), esc(skill))
             } else {
                 esc(skill)
             };
             format!(
-                "<tr><td>{name}</td>{}{}{}{}{}{}<td class=\"mono\">{}</td><td>{}</td><td>{}</td><td class=\"n\">{}</td></tr>",
+                "<tr><td>{name}</td>{}{}{}{}{}{}<td class=\"mono\">{}</td><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
                 n(&r["sess"]),
                 n(&r["slash"]),
                 n(&r["tool"]),
@@ -187,16 +188,22 @@ fn usage(model: &Value, tz: &TimeZone) -> String {
                 local(&r["last"], tz, DAY),
                 sparkline(list(&r["30d"])),
                 grade(&r["grade"]),
+                card(skill).map_or("-".into(), |c| text(&c["audit"]["result"]["verdict"])),
             )
         })
         .collect();
-    let head: String = ["skill", "sess", "slash", "tool", "typed", "read", "ref", "agents", "last", "30d", "grade"]
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            if (1..=6).contains(&i) || i == 10 { format!("<th class=\"n\">{h}</th>") } else { format!("<th>{h}</th>") }
-        })
-        .collect();
+    let head: String =
+        ["skill", "sess", "slash", "tool", "typed", "read", "ref", "agents", "last", "30d", "grade", "audit"]
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                if (1..=6).contains(&i) || i == 10 {
+                    format!("<th class=\"n\">{h}</th>")
+                } else {
+                    format!("<th>{h}</th>")
+                }
+            })
+            .collect();
     format!("<h2>Usage</h2><div class=\"wrap\"><table><tr>{head}</tr>{rows}</table></div>")
 }
 
@@ -262,7 +269,52 @@ fn examples(ex: &Value, tz: &TimeZone) -> String {
         .collect();
     let real = if real.is_empty() { "none".into() } else { format!("<ul>{real}</ul>") };
     out.push_str(&format!("<dt>examples</dt><dd>{real}</dd>"));
+    let curated: String = list(&ex["curated"])
+        .iter()
+        .map(|c| {
+            format!(
+                "<li>{} <span class=\"muted\">asked</span> {} <span class=\"muted\">happened</span> {} \
+                 <span class=\"muted\">tip</span> {} <span class=\"muted mono\">{}</span></li>",
+                text(&c["situation"]),
+                text(&c["asked"]),
+                text(&c["happened"]),
+                text(&c["tip"]),
+                text(&c["session"]),
+            )
+        })
+        .collect();
+    if !curated.is_empty() {
+        out.push_str(&format!("<dt>curated</dt><dd><ul>{curated}</ul></dd>"));
+    }
     out
+}
+
+/// The latest audit (SPEC F14): its date and session count, verdict, the
+/// rates skima computed and the top three improvements.
+fn audit(a: &Value, tz: &TimeZone) -> String {
+    if a.is_null() {
+        return "<dt>audit</dt><dd>none</dd>".into();
+    }
+    let rates: Vec<String> =
+        [("followed", "followed"), ("achieved", "achieved"), ("abandoned_or_redone", "abandoned or redone")]
+            .iter()
+            .map(|(key, label)| {
+                let r = &a["rates"][key];
+                format!("{label} {} of {}", num(&r["n"]), num(&r["of"]))
+            })
+            .collect();
+    let improvements: String = list(&a["result"]["improvements"])
+        .iter()
+        .take(AUDIT_IMPROVEMENTS)
+        .map(|i| format!("<li>{} <span class=\"muted\">{}</span></li>", text(&i["change"]), text(&i["reason"])))
+        .collect();
+    format!(
+        "<dt>audit</dt><dd><span class=\"muted\">{}, {} sessions</span> {}<br>{}<ol>{improvements}</ol></dd>",
+        local(&a["audited_at"], tz, DAY),
+        list(&a["sessions"]).len(),
+        text(&a["result"]["verdict"]),
+        rates.join(", "),
+    )
 }
 
 fn card(c: &Value, tz: &TimeZone) -> String {
@@ -328,7 +380,7 @@ fn card(c: &Value, tz: &TimeZone) -> String {
          <dl><dt>description</dt><dd>{desc}</dd><dt>path</dt><dd class=\"mono\">{path}</dd>{history}\
          <dt>cites</dt><dd>{cites}</dd><dt>cited by</dt><dd>{cited_by}</dd>\
          <dt>strong</dt><dd>{strong}</dd><dt>last use</dt><dd>{last_use}</dd><dt>projects</dt><dd>{projects}</dd>\
-         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{examples}</dl></section>",
+         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{examples}{audit}</dl></section>",
         id = anchor(skill),
         name = esc(skill),
         hist = histogram(list(&c["histogram"])),
@@ -345,6 +397,7 @@ fn card(c: &Value, tz: &TimeZone) -> String {
         grades = if grades.is_empty() { "none".into() } else { table(&["date", "score"], &grades) },
         retros = if retros.is_empty() { String::new() } else { table(&["date", "score", "verdict"], &retros) },
         examples = examples(&c["examples"], tz),
+        audit = audit(&c["audit"], tz),
     )
 }
 

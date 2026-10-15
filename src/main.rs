@@ -119,21 +119,30 @@ enum Cmd {
         force: bool,
     },
     /// Judge how a skill performs in real sessions; reports, never edits the source.
-    Audit {
-        skill: String,
-        /// The most sessions to judge.
-        #[arg(long, default_value_t = 20, conflicts_with = "all")]
-        limit: usize,
-        /// Judge every candidate session.
-        #[arg(long)]
-        all: bool,
-        /// The most the run may spend, in dollars (default 1); at least 0.04. Claude judge only.
-        #[arg(long, value_parser = audit::parse_usd)]
-        max_budget_usd: Option<u64>,
-        /// List the sessions, the judge command and the input estimate; call nothing.
-        #[arg(long)]
-        dry_run: bool,
-    },
+    Audit(AuditArgs),
+}
+
+#[derive(clap::Args)]
+struct AuditArgs {
+    skill: String,
+    /// The most sessions to judge.
+    #[arg(long, default_value_t = 20, conflicts_with = "all")]
+    limit: usize,
+    /// Judge every candidate session.
+    #[arg(long)]
+    all: bool,
+    /// The most the run may spend, in dollars (default 1); at least 0.04. Claude judge only.
+    #[arg(long, value_parser = audit::parse_usd)]
+    max_budget_usd: Option<u64>,
+    /// Write the skill report from every session record even when no new session was judged.
+    #[arg(long)]
+    resynth: bool,
+    /// List the sessions, the judge command and the input estimate; call nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Print the new skill record, the session records written and dropped, and the spend.
+    #[arg(long)]
+    json: bool,
 }
 
 fn main() -> ExitCode {
@@ -183,9 +192,7 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
             skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
         Cmd::Retire { name, force } => skima::lifecycle::retire(&cfg, &inv, &name, force),
-        Cmd::Audit { skill, limit, all, max_budget_usd, dry_run } => {
-            cmd_audit(&cfg, &inv, &skill, (!all).then_some(limit), max_budget_usd, dry_run, tty)
-        }
+        Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }
@@ -200,8 +207,9 @@ fn with_scanned(
     scan::scan(cfg, inv, &data, false)?.warn_io_errors();
     let ledger = Ledger::load(&data)?;
     let coverage = ledger::load_coverage(&data)?;
+    let audits = audit::latest(&data)?;
     let now = jiff::Timestamp::now();
-    let input = report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, now };
+    let input = report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &audits, now };
     print!("{}", render(&input)?);
     for w in policy::freshness(cfg, &coverage, now) {
         eprintln!("{w}");
@@ -210,15 +218,8 @@ fn with_scanned(
 }
 
 /// `skima audit` (SPEC F18): usage errors exit 2 before the scan (D3).
-fn cmd_audit(
-    cfg: &Config,
-    inv: &Inventory,
-    skill: &str,
-    limit: Option<usize>,
-    budget: Option<u64>,
-    dry_run: bool,
-    tty: bool,
-) -> skima::Result<ExitCode> {
+fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skima::Result<ExitCode> {
+    let (skill, budget) = (args.skill.as_str(), args.max_budget_usd);
     let usage = |msg: String| {
         eprintln!("ERROR: {msg}");
         Ok(ExitCode::from(2))
@@ -240,23 +241,32 @@ fn cmd_audit(
     if budget.is_some_and(|b| b < 4 * audit::CENT) {
         return usage("--max-budget-usd must be at least 0.04".into());
     }
-    let argv = audit::command(&cfg.judge);
     let codex_auth = audit::codex_auth(&cfg.homes)?;
     let data = ledger::data_dir()?;
     scan::scan(cfg, inv, &data, false)?.warn_io_errors();
     let ledger = Ledger::load(&data)?;
+    let limit = (!args.all).then_some(args.limit);
     let candidates = audit::select(ledger.events(), skill, &audit::audited(&data, skill)?, limit);
+    let coverage = ledger::load_coverage(&data)?;
+    let now = jiff::Timestamp::now();
+    let input = report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &BTreeMap::new(), now };
     let a = audit::Audit {
         skill,
         source: &cfg.source,
         data: &data,
         judge: &cfg.judge,
-        argv: &argv,
         budget,
         codex_auth: &codex_auth,
+        evals: &skima::evals::load(inv, skill),
+        usage: &report::usage_section(&input, skill),
     };
-    print!("{}", if dry_run { audit::dry_run(&a, &candidates, tty)? } else { audit::run(&a, &candidates)? });
-    Ok(ExitCode::SUCCESS)
+    if args.dry_run {
+        print!("{}", audit::dry_run(&a, &candidates, tty)?);
+        return Ok(ExitCode::SUCCESS);
+    }
+    let run = audit::run(&a, &candidates, args.resynth)?;
+    print!("{}", if args.json { run.json(&a) } else { run.text(&a) });
+    Ok(if run.ok() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
 
 /// SPEC F16: the report goes under the data directory, outside any git

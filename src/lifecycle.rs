@@ -223,7 +223,8 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
         let ledger = Ledger::load(&data)?;
         let coverage = ledger::load_coverage(&data)?;
         let now = jiff::Timestamp::now();
-        let input = report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, now };
+        let input =
+            report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &BTreeMap::new(), now };
         let blockers = report::retire_blockers(&input, name, RETIRE_DAYS);
         if !blockers.is_empty() {
             for b in &blockers {

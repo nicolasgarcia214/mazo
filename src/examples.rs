@@ -24,6 +24,8 @@ pub struct Examples {
     pub default_prompt: Option<String>,
     /// Newest project first.
     pub real: Vec<Real>,
+    /// Up to three from the latest audit (F18); the card fills them in.
+    pub curated: Vec<crate::audit::Example>,
 }
 
 #[derive(Serialize)]
@@ -70,7 +72,7 @@ pub fn examples<'e>(
                 .map(str::to_string)
         });
     let written = agents.into_iter().map(|agent| Invocation { agent, text: invocation(agent, skill) }).collect();
-    Examples { written, default_prompt, real: real(skill, events) }
+    Examples { written, default_prompt, real: real(skill, events), curated: Vec::new() }
 }
 
 /// The most recent informative prompt per project, from the three most recent

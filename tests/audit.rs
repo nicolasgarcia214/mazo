@@ -1,4 +1,5 @@
-//! `skima audit` selection, judge input and `--dry-run` (SPEC §6.4, §10.8).
+//! `skima audit`: selection, judge input, `--dry-run`, the session records
+//! of stage 1 and the skill record of stage 2 (SPEC §6.4, §10.8).
 
 mod common;
 
@@ -224,9 +225,10 @@ fn an_expired_session_takes_no_turn_in_the_round_robin() {
 /// with no transcripts, Codex and Pi logins, and stub `claude`, `codex` and
 /// `pi` on `PATH`. Every call of a stub leaves `calls/<n>/` with its argv,
 /// working directory, that directory's listing, stdin and the schema and
-/// input files its argv names, then writes `replies/<n>`, else
-/// `replies/default` with `LINE` set to the first line its input cites, to
-/// stdout or the `-o` file. The Codex stub also leaves its `CODEX_HOME`, that
+/// input files its argv names, then writes `replies/<n>`; else, for a stage-2
+/// call, `replies/skill` with `SESSION` set to the first session record's id;
+/// else `replies/default` with `LINE` set to the first line its input cites;
+/// to stdout or the `-o` file. The Codex stub also leaves its `CODEX_HOME`, that
 /// home's listing and where its `auth.json` points, then writes a session and
 /// a log into that home, as Codex would.
 struct Fixture {
@@ -245,6 +247,24 @@ fn answer(line: impl Into<serde_json::Value>) -> serde_json::Value {
         "strengths": [{"line": line, "text": "Loaded the skill first."}],
         "frictions": [],
         "notes": "",
+    })
+}
+
+/// A stage-2 answer citing `session` everywhere a session is cited.
+fn skill_answer(session: &str) -> serde_json::Value {
+    serde_json::json!({
+        "verdict": "Tidies short texts well; long ones need a second pass.",
+        "patterns": ["Used on short prose."],
+        "works": [{"text": "Loaded before editing.", "sessions": [session]}],
+        "failures": [],
+        "improvements": [
+            {"change": "Add a length check.", "reason": "Long texts were redone.", "sessions": [session]},
+            {"change": "Name the tone first.", "reason": "Users asked twice.", "sessions": [session]},
+            {"change": "Cut the preamble rule.", "reason": "It was skipped.", "sessions": [session]},
+            {"change": "Fourth idea.", "reason": "Least valuable.", "sessions": [session]},
+        ],
+        "versus_grades": "",
+        "examples": [{"situation": "A short note.", "asked": "Tidy the note.", "happened": "It was tidied.", "tip": "Say the tone.", "session": session}],
     })
 }
 
@@ -300,6 +320,11 @@ if [ -f {r}/transcript ]; then
   sed "s|CWD|$PWD|g; s|SID|run-$n|g" {r}/transcript > "$HOME/.claude/projects/run/$n.jsonl"
 fi
 if [ -f {r}/replies/$n ]; then cat {r}/replies/$n > "$out"; exit; fi
+if grep -q '^<session-records>$' "$in"; then
+  sid=$(grep -o '"session":"[^"]*"' "$in" | head -n 1 | cut -d '"' -f 4)
+  sed "s/SESSION/$sid/g" {r}/replies/skill > "$out"
+  exit
+fi
 line=$(grep -o '^L[0-9]*:' "$in" | head -n 1 | tr -d 'L:')
 sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
 "#
@@ -312,6 +337,7 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
         common::write(&root.join("home/.pi/agent/auth.json"), "{}\n");
         let fx = Fixture { _temp: temp, root };
         fx.reply("default", "0.1", &answer("LINE"));
+        fx.reply("skill", "0.1", &skill_answer("SESSION"));
         fx
     }
 
@@ -364,9 +390,19 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
     }
 
     /// The lines of `audits.jsonl`.
-    fn records(&self) -> Vec<serde_json::Value> {
+    fn lines(&self) -> Vec<serde_json::Value> {
         let text = fs::read_to_string(self.data().join("audits.jsonl")).unwrap_or_default();
         text.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+
+    /// The session records of `audits.jsonl`.
+    fn records(&self) -> Vec<serde_json::Value> {
+        self.lines().into_iter().filter(|r| r["kind"] == "session").collect()
+    }
+
+    /// The skill records of `audits.jsonl`, oldest first.
+    fn skill_records(&self) -> Vec<serde_json::Value> {
+        self.lines().into_iter().filter(|r| r["kind"] == "skill").collect()
     }
 }
 
@@ -508,7 +544,7 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
 fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
     let fx = Fixture::new("", three_agents);
     let out = fx.skima(&["audit", "unslop", "--max-budget-usd", "0.04"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(1), "the call overshot, so stage 2 is skipped: {}", stdout(&out));
     let calls = fx.calls();
     assert_eq!(calls.len(), 1, "$0.04 leaves one call of $0.03 at $0.10 each");
     assert_eq!(calls[0].arg("--max-budget-usd"), Some("0.03"));
@@ -518,7 +554,7 @@ fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let calls = fx.calls();
-    assert_eq!(calls.len(), 3);
+    assert_eq!(calls.len(), 4, "three sessions, then the skill report");
     let runs = fx.data().join("audit-runs");
     let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
     let mut dirs = HashSet::new();
@@ -538,6 +574,11 @@ fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
         assert!(dirs.insert(call.pwd.clone()), "a directory was reused");
         assert!(call.stdin.contains(&c.condensed) && call.stdin.starts_with("<skill name=\"unslop\">"));
     }
+    let report = &calls[3];
+    assert_eq!(report.arg("--system-prompt"), Some(audit::SKILL_PROMPT));
+    assert_eq!(report.arg("--json-schema"), Some(audit::SKILL_SCHEMA.as_str()));
+    assert_eq!(report.arg("--tools"), Some(""));
+    assert!(Path::new(&report.pwd).starts_with(&runs) && report.ls.is_empty() && dirs.insert(report.pwd.clone()));
     assert_eq!(fs::read_dir(&runs).unwrap().count(), 0);
     assert_eq!(snapshot(&fx.root.join("skills")), source, "the audit wrote inside the source");
 }
@@ -551,6 +592,7 @@ fn agent_homes(fx: &Fixture) -> Vec<(PathBuf, Vec<u8>)> {
 fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     let fx = Fixture::new("[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\n", three_agents);
     fx.raw_reply("default", &answer("LINE").to_string());
+    fx.raw_reply("skill", &skill_answer("SESSION").to_string());
     let homes = agent_homes(&fx);
     let scratch = fx.data().join("codex-judge-home");
 
@@ -566,12 +608,12 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
 
     let out = fx.skima(&["audit", "unslop", "--limit", "2"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "unslop: 2 judged, 0 dropped\n");
+    assert!(stdout(&out).starts_with("unslop: 2 judged, 0 dropped\nunslop: skill report over 2 sessions: "));
     let calls = fx.calls();
-    assert_eq!(calls.len(), 2, "--limit bounds the calls");
+    assert_eq!(calls.len(), 3, "--limit bounds the session calls; then the skill report");
     let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
     let auth = fx.root.join("home/.codex/auth.json");
-    for (call, c) in calls.iter().zip(&candidates) {
+    for (call, c) in calls[..2].iter().zip(&candidates) {
         let mut want = vec!["exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only"];
         want.extend(["--output-schema", call.arg("--output-schema").unwrap(), "-o", call.arg("-o").unwrap()]);
         want.extend(["--json", "-m", "gpt-5", "-"]);
@@ -596,16 +638,30 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     for r in &records {
         assert_eq!(r["judge"], serde_json::json!({"agent": "codex", "model": "gpt-5", "cost_usd": null}));
     }
+    // Stage 2 has no cap to pass and the skill schema in its file; its record has no cost.
+    let report = &calls[2];
+    assert_eq!(fx.left(report, "schema").unwrap(), *audit::SKILL_SCHEMA);
+    assert!(report.stdin.starts_with(&format!("{}\n<skill name=\"unslop\">", audit::SKILL_PROMPT)));
+    assert!(!report.argv.contains(&"--max-budget-usd".to_string()));
+    assert_eq!(fx.left(report, "codex_home_ls").unwrap(), "auth.json\n");
+    let skill = &fx.skill_records()[0];
+    assert_eq!(skill["judge"], serde_json::json!({"agent": "codex", "model": "gpt-5", "cost_usd": null}));
+    assert_eq!(skill["rates"]["followed"]["of"], 2);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&fx.skima(&["audit", "unslop", "--resynth", "--json"]))).unwrap();
+    assert_eq!(json["spent_usd"], serde_json::Value::Null, "Codex reports no cost");
+    assert_eq!(json["record"]["judge"]["cost_usd"], serde_json::Value::Null);
     let left: Vec<_> = fs::read_dir(&scratch).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert_eq!(left, ["auth.json"]);
     assert_eq!(fs::read_link(scratch.join("auth.json")).unwrap(), auth);
     assert_eq!(agent_homes(&fx), homes, "the audit wrote into ~/.codex or ~/.pi");
 
-    // A call that writes no result file is retried, then dropped.
+    // A call that writes no result file is retried, then dropped; a run that
+    // dropped every session it judged exits 1 and has no skill report to write.
     let fx = Fixture::new("[judge]\nagent = \"codex\"\n", claude_sessions(1));
     fx.raw_reply("default", "");
     let out = fx.skima(&["audit", "unslop"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(stdout(&out), "unslop: 0 judged, 1 dropped\n");
     assert!(stderr(&out).contains("no answer in the -o file"), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 2);
@@ -627,6 +683,7 @@ fn pi_stream(text: &str, stop: &str) -> String {
 fn the_pi_judge_reads_its_input_file_and_its_final_message_is_validated() {
     let fx = Fixture::new("[judge]\nagent = \"pi\"\nmodel = \"sonnet\"\n", three_agents);
     fx.raw_reply("default", &pi_stream(&format!("```json\n{}\n```", answer("LINE")), "stop"));
+    fx.raw_reply("skill", &pi_stream(&skill_answer("SESSION").to_string(), "stop"));
     // Codex's session first: an error, then a message that is no JSON; dropped.
     fx.raw_reply("1", &pi_stream("", "error"));
     fx.raw_reply("2", &pi_stream("Here is my verdict.", "stop"));
@@ -639,13 +696,20 @@ fn the_pi_judge_reads_its_input_file_and_its_final_message_is_validated() {
 
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert_eq!(stdout(&out), "unslop: 2 judged, 1 dropped\n");
+    assert!(stdout(&out).starts_with("unslop: 2 judged, 1 dropped\nunslop: skill report over 2 sessions: "));
     let err = stderr(&out);
     assert!(err.contains("warning: x: judge answer dropped after one retry: the final message is not JSON"), "{err}");
     let calls = fx.calls();
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 5, "four session calls, then the skill report");
     let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
     let source = fx.root.join("skills");
+    let report = &calls[4];
+    assert_eq!(report.arg("--system-prompt"), Some(audit::SKILL_PROMPT));
+    assert!(fx.left(report, "input").unwrap().starts_with("<skill name=\"unslop\">"));
+    assert!(!report.argv.contains(&"--max-budget-usd".to_string()));
+    let skill = &fx.skill_records()[0];
+    assert_eq!(skill["judge"], serde_json::json!({"agent": "pi", "model": "sonnet", "cost_usd": null}));
+    assert_eq!(skill["sessions"], serde_json::json!(["c", "p"]));
     for (call, c) in calls.iter().zip([&candidates[0], &candidates[0], &candidates[1], &candidates[2]]) {
         let file = call.argv.last().unwrap().strip_prefix('@').unwrap();
         let mut want = vec!["-p", "--no-session", "--no-tools", "--no-extensions", "--no-skills"];
@@ -676,13 +740,15 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     let fx = Fixture::new("", claude_sessions(12));
     let out = fx.skima(&["audit", "unslop", "--max-budget-usd", "1"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert_eq!(caps(&fx), ["0.75", "0.65", "0.55", "0.45", "0.35", "0.25", "0.15", "0.05"]);
+    // Stage 1 shares $0.75; stage 2 gets the rest: $1 - $0.80.
+    assert_eq!(caps(&fx), ["0.75", "0.65", "0.55", "0.45", "0.35", "0.25", "0.15", "0.05", "0.20"]);
     assert_eq!(fx.records().len(), 8);
+    assert_eq!(fx.skill_records().len(), 1);
     let text = stdout(&out);
-    assert!(text.starts_with("unslop: 8 judged, 0 dropped, $0.80 spent of $1.00\n"), "{text}");
+    assert!(text.starts_with("unslop: 8 judged, 0 dropped, $0.90 spent of $1.00\n"), "{text}");
     assert!(text.contains("left for the next run: 4\n"), "{text}");
     let judged: HashSet<String> = fx.records().iter().map(|r| r["session"].as_str().unwrap().to_string()).collect();
-    let named: Vec<&str> = text.lines().skip(2).map(|l| l.trim().strip_prefix("claude ").unwrap()).collect();
+    let named: Vec<&str> = text.lines().skip(2).take(4).map(|l| l.trim().strip_prefix("claude ").unwrap()).collect();
     assert_eq!(named.len(), 4);
     assert!(named.iter().all(|s| !judged.contains(*s)), "{text}");
 
@@ -690,12 +756,35 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     fx.reply("default", "0.031", &answer("LINE"));
     let out = fx.skima(&["audit", "unslop", "--all"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    let caps = caps(&fx);
-    assert_eq!(caps.len(), 24);
-    assert_eq!(caps[0], "0.75");
-    assert_eq!(caps.last().unwrap(), "0.03");
-    assert!(!caps.contains(&"0.00".to_string()));
-    assert!(stdout(&out).starts_with("unslop: 24 judged, 0 dropped, $0.74 spent of $1.00\n"), "{}", stdout(&out));
+    let all = caps(&fx);
+    assert_eq!(all.len(), 25);
+    assert_eq!(all[0], "0.75");
+    assert_eq!(all[23], "0.03");
+    assert_eq!(all[24], "0.25", "stage 2 gets $1 - $0.744");
+    assert!(!all.contains(&"0.00".to_string()));
+    // $0.744 in stage 1 and $0.10 for the skill report.
+    assert!(stdout(&out).starts_with("unslop: 24 judged, 0 dropped, $0.84 spent of $1.00\n"), "{}", stdout(&out));
+
+    // $0.30 a call: stage 1 judges 3 sessions for $0.90 and stage 2 gets $0.10.
+    let fx = Fixture::new("", claude_sessions(12));
+    fx.reply("default", "0.30", &answer("LINE"));
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(caps(&fx), ["0.75", "0.45", "0.15", "0.10"]);
+    assert_eq!(fx.records().len(), 3);
+    assert_eq!(fx.skill_records().len(), 1);
+
+    // $0.50 a call: stage 1 spends the whole $1, so stage 2 is skipped and the run exits 1.
+    let fx = Fixture::new("", claude_sessions(12));
+    fx.reply("default", "0.50", &answer("LINE"));
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(caps(&fx), ["0.75", "0.25"]);
+    assert_eq!(fx.records().len(), 2);
+    assert!(fx.skill_records().is_empty());
+    let text = stdout(&out);
+    assert!(text.starts_with("unslop: 2 judged, 0 dropped, $1.00 spent of $1.00\n"), "{text}");
+    assert!(text.contains("unslop: skill report skipped: $0.00 of the budget is left, under $0.01"), "{text}");
 }
 
 #[test]
@@ -778,7 +867,7 @@ fn session_records_hold_every_field_and_are_judged_once() {
 
     let again = fx.skima(&["audit", "unslop"]);
     assert_eq!(stdout(&again), "unslop: no session to judge\n");
-    assert_eq!(fx.calls().len(), 3, "a judged session was judged again");
+    assert_eq!(fx.calls().len(), 4, "a judged session was judged again, or stage 2 ran with nothing new");
     assert_eq!(fx.records().len(), 3);
 }
 
@@ -798,8 +887,8 @@ fn an_invalid_answer_is_retried_once_then_dropped() {
     fx.reply("4", "0.1", &answer(3));
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert_eq!(fx.calls().len(), 5);
-    assert!(stdout(&out).starts_with("unslop: 2 judged, 1 dropped, $0.50 spent of $1.00\n"), "{}", stdout(&out));
+    assert_eq!(fx.calls().len(), 6, "five session calls, then the skill report");
+    assert!(stdout(&out).starts_with("unslop: 2 judged, 1 dropped, $0.60 spent of $1.00\n"), "{}", stdout(&out));
     let err = stderr(&out);
     assert!(err.contains("warning: x: judge answer dropped after one retry"), "{err}");
     assert!(err.contains("quotes the session"), "{err}");
@@ -870,7 +959,7 @@ fn the_audits_own_sessions_add_no_event() {
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let written = fx.root.join("home/.claude/projects/run");
-    assert_eq!(fs::read_dir(&written).unwrap().count(), 3);
+    assert_eq!(fs::read_dir(&written).unwrap().count(), 4, "three sessions and the skill report");
 
     let events = || fs::read_to_string(fx.data().join("events.jsonl")).unwrap().lines().count();
     let before = events();
@@ -882,4 +971,214 @@ fn the_audits_own_sessions_add_no_event() {
     common::write(&written.join("elsewhere.jsonl"), &template.replace("CWD", "/p/elsewhere").replace("SID", "x"));
     fx.skima(&["scan"]);
     assert!(events() > before, "the control transcript added no event");
+}
+
+#[test]
+fn stage_two_runs_on_every_session_record_after_new_ones_or_with_resynth() {
+    let fx = Fixture::new("", claude_sessions(3));
+    let first = fx.skima(&["audit", "unslop", "--limit", "1"]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    assert_eq!(fx.calls().len(), 2, "one session, then the skill report");
+    assert_eq!(fx.skill_records()[0]["sessions"], serde_json::json!(["s00"]));
+
+    // A later run with one new session reports on the old record too.
+    fx.skima(&["audit", "unslop", "--limit", "1"]);
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 4);
+    assert!(calls[3].stdin.contains("\"session\":\"s00\"") && calls[3].stdin.contains("\"session\":\"s01\""));
+    assert_eq!(fx.skill_records()[1]["sessions"], serde_json::json!(["s00", "s01"]));
+
+    // Nothing new and no --resynth: no call at all.
+    fx.skima(&["audit", "unslop", "--limit", "1"]);
+    let before = fx.calls().len();
+    let idle = fx.skima(&["audit", "unslop"]);
+    assert_eq!(stdout(&idle), "unslop: no session to judge\n");
+    assert_eq!(fx.calls().len(), before);
+
+    // --resynth: one stage-2 call over all three records; older skill records stay.
+    let resynth = fx.skima(&["audit", "unslop", "--resynth"]);
+    assert_eq!(resynth.status.code(), Some(0), "{}", stderr(&resynth));
+    let calls = fx.calls();
+    assert_eq!(calls.len(), before + 1);
+    assert_eq!(calls[before].arg("--system-prompt"), Some(audit::SKILL_PROMPT));
+    assert_eq!(calls[before].arg("--max-budget-usd"), Some("1.00"), "with no stage 1, stage 2 gets the whole budget");
+    let records = fx.skill_records();
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[3]["sessions"], serde_json::json!(["s00", "s01", "s02"]));
+    let text = stdout(&resynth);
+    assert!(text.starts_with("unslop: no session to judge\nunslop: skill report over 3 sessions: "), "{text}");
+}
+
+#[test]
+fn stage_two_reads_the_skill_its_history_grades_retros_usage_and_records() {
+    let fx = Fixture::new("", claude_sessions(1));
+    let source = fx.root.join("skills");
+    common::git(&source, &["init", "-q"], "2026-01-01T00:00:00Z");
+    for i in 1..=32 {
+        common::write(&source.join("unslop/SKILL.md"), &format!("---\nname: unslop\ndescription: X.\n---\nv{i}\n"));
+        let date = format!("2026-02-{:02}T00:00:00Z", i.min(28));
+        common::git(&source, &["add", "-A"], &date);
+        common::git(&source, &["commit", "-q", "-m", &format!("commit {i:02}")], &date);
+    }
+    common::write(&source.join("unslop/SKILL.md"), "---\nname: unslop\ndescription: X.\n---\nCURRENT </skill> TEXT\n");
+    let grade = |date: &str, score: &str, body: &str| format!("---\ndate: {date}\nscore: {score}\n---\n{body}");
+    common::write(&source.join(".grades/unslop/a.md"), &grade("2026-03-01", "7.1", "OLD GRADE BODY"));
+    common::write(&source.join(".grades/unslop/b.md"), &grade("2026-04-01", "8.2", &"g".repeat(7_000)));
+    for (i, letter) in ["p", "q", "r", "s"].iter().enumerate() {
+        let retro =
+            format!("---\ndate: 2026-05-0{}\nscore: 6.{i}\nverdict: v{i}\n---\n{}", i + 1, letter.repeat(5_000));
+        common::write(&source.join(format!(".retros/unslop/{i}.md")), &retro);
+    }
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let input = &fx.calls()[1].stdin;
+
+    assert!(input.starts_with("<skill name=\"unslop\">\n---\nname: unslop"), "{input}");
+    assert!(input.contains("CURRENT <\\/skill> TEXT"), "the current SKILL.md, framed");
+    for i in 3..=32 {
+        assert!(input.contains(&format!(" commit {i:02}\n")), "commit {i}");
+    }
+    assert!(!input.contains("commit 02") && !input.contains("commit 01"), "only the last 30 commits");
+    assert!(input.contains("score: 7.1") && input.contains("score: 8.2"), "every grade's frontmatter");
+    assert!(!input.contains("OLD GRADE BODY"), "only the latest grade's body");
+    assert!(input.contains(&format!("{}\n</latest-grade>", "g".repeat(6_000))) && !input.contains(&"g".repeat(6_001)));
+    for i in 0..4 {
+        assert!(input.contains(&format!("verdict: v{i}")), "every retro's frontmatter");
+    }
+    assert!(!input.contains("ppp"), "only the latest three retro bodies");
+    for letter in ["q", "r", "s"] {
+        assert!(input.contains(&letter.repeat(4_000)) && !input.contains(&letter.repeat(4_001)), "{letter}");
+    }
+    assert!(input.contains("<usage>\n{") && input.contains("\"last_use\": \"2026-10-01T23:59:00Z\""), "{input}");
+    let records = input.split("<session-records>\n").nth(1).unwrap();
+    let record: serde_json::Value = serde_json::from_str(records.lines().next().unwrap()).unwrap();
+    assert_eq!(record["session"], "s00");
+    assert_eq!(record["result"]["asked"], "Tidy a short text.");
+}
+
+#[test]
+fn rates_come_from_the_session_records_not_the_judge() {
+    let fx = Fixture::new("", claude_sessions(3));
+    let verdict = |followed: &str, outcome: &str, redone: bool| {
+        let mut a = answer(3);
+        a["followed"] = followed.into();
+        a["outcome"] = outcome.into();
+        a["redone"] = redone.into();
+        a
+    };
+    fx.reply("1", "0.1", &verdict("yes", "achieved", false));
+    fx.reply("2", "0.1", &verdict("partly", "abandoned", false));
+    fx.reply("3", "0.1", &verdict("yes", "achieved", true));
+    // The judge's own counts: claimed in the text, and as a field the schema refuses.
+    let mut claimed = skill_answer("s00");
+    claimed["verdict"] = "Followed in 9 of 9 sessions.".into();
+    let mut with_rates = claimed.clone();
+    with_rates["rates"] = serde_json::json!({"followed": [9, 9]});
+    fx.reply("4", "0.1", &with_rates);
+    fx.reply("5", "0.1", &claimed);
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 5, "the answer carrying rates was refused and retried");
+    let record = &fx.skill_records()[0];
+    let rate = |n: usize, sessions: &[&str]| serde_json::json!({"n": n, "of": 3, "sessions": sessions});
+    assert_eq!(record["rates"]["followed"], rate(2, &["s00", "s02"]));
+    assert_eq!(record["rates"]["achieved"], rate(2, &["s00", "s02"]));
+    assert_eq!(record["rates"]["abandoned_or_redone"], rate(2, &["s01", "s02"]));
+    assert!(record["result"].get("rates").is_none());
+    let text = stdout(&out);
+    assert!(text.contains("  followed 2 of 3: s00, s02\n"), "{text}");
+    assert!(text.contains("  abandoned or redone 2 of 3: s01, s02\n"), "{text}");
+}
+
+#[test]
+fn a_skill_report_citing_an_unknown_session_is_retried_once_then_dropped() {
+    let fx = Fixture::new("", claude_sessions(1));
+    fx.reply("2", "0.1", &skill_answer("nope"));
+    let mut example = skill_answer("s00");
+    example["examples"][0]["session"] = "ghost".into();
+    fx.reply("3", "0.1", &example);
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "a due report that was dropped fails the run");
+    assert_eq!(fx.calls().len(), 3);
+    assert!(fx.skill_records().is_empty());
+    let text = stdout(&out);
+    assert!(
+        text.contains("skill report dropped after one retry: cites session ghost, which has no session record"),
+        "{text}"
+    );
+    assert_eq!(fx.records().len(), 1, "the session record stays");
+
+    let fx = Fixture::new("", claude_sessions(1));
+    fx.reply("2", "0.1", &skill_answer("nope"));
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 3, "the retry passed");
+    let records = fx.skill_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["judge"]["cost_usd"], 0.2, "the record's cost includes the retry");
+}
+
+#[test]
+fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
+    let fx = Fixture::new("[judge]\nmodel = \"sonnet\"\n", claude_sessions(2));
+    let mut old = skill_answer("s00");
+    old["verdict"] = "OLD VERDICT".into();
+    fx.reply("2", "0.1", &old);
+    fx.skima(&["audit", "unslop", "--limit", "1"]);
+    let out = fx.skima(&["audit", "unslop", "--limit", "1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let records = fx.skill_records();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["result"]["verdict"], "OLD VERDICT");
+    let r = &records[1];
+    let keys: Vec<&str> = r.as_object().unwrap().keys().map(String::as_str).collect();
+    let want = ["v", "kind", "skill", "audited_at", "sessions", "judge", "prompt", "rates", "result"];
+    assert_eq!(keys.len(), want.len(), "{r}");
+    assert!(want.iter().all(|k| keys.contains(k)), "{r}");
+    assert_eq!(r["v"], 1);
+    assert_eq!(r["skill"], "unslop");
+    assert!(r["audited_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
+    assert_eq!(r["sessions"], serde_json::json!(["s00", "s01"]));
+    assert_eq!(r["judge"], serde_json::json!({"agent": "claude", "model": "sonnet", "cost_usd": 0.1}));
+    assert_eq!(r["prompt"], "skill-v1");
+    assert_eq!(r["result"], skill_answer("s00"));
+
+    let show = fx.skima(&["show", "unslop"]);
+    assert_eq!(show.status.code(), Some(0), "{}", stderr(&show));
+    let text = stdout(&show);
+    let date = &r["audited_at"].as_str().unwrap()[..10];
+    let verdict = skill_answer("s00")["verdict"].as_str().unwrap().to_string();
+    assert!(text.contains(&format!("audit: {date}, 2 sessions: {verdict}\n")), "{text}");
+    assert!(!text.contains("OLD VERDICT"), "{text}");
+    assert!(text.contains("  followed 2 of 2, achieved 2 of 2, abandoned or redone 0 of 2\n"), "{text}");
+    assert!(
+        text.contains("  3. Cut the preamble rule. (It was skipped.)\n") && !text.contains("Fourth idea"),
+        "{text}"
+    );
+    let curated = "curated:\n  A short note. Asked: Tidy the note. Happened: It was tidied. Tip: Say the tone. (s00)\n";
+    assert!(text.contains(curated), "{text}");
+    let json: serde_json::Value = serde_json::from_str(&stdout(&fx.skima(&["show", "unslop", "--json"]))).unwrap();
+    assert_eq!(&json["audit"], r);
+    assert_eq!(json["examples"]["curated"], r["result"]["examples"]);
+}
+
+#[test]
+fn json_prints_the_skill_record_the_counts_and_the_spend() {
+    let fx = Fixture::new("", claude_sessions(3));
+    fx.reply("1", "0.1", &answer(999));
+    fx.reply("2", "0.1", &answer(999));
+    let out = fx.skima(&["audit", "unslop", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v["record"], fx.skill_records()[0]);
+    assert_eq!(v["written"], 2);
+    assert_eq!(v["dropped"], 1);
+    assert_eq!(v["spent_usd"], 0.5);
+    assert_eq!(v["left"], serde_json::json!([]));
+
+    // The dropped session is judged on the next run; the one after has nothing to do.
+    fx.skima(&["audit", "unslop"]);
+    let idle = fx.skima(&["audit", "unslop", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&idle)).unwrap();
+    assert_eq!(v, serde_json::json!({"record": null, "written": 0, "dropped": 0, "spent_usd": 0, "left": []}));
 }
