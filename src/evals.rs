@@ -3,21 +3,27 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::inventory::Inventory;
 use crate::yaml;
 
 /// One loaded grade or retro file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Eval {
     pub file: PathBuf,
     /// The first 10 characters of the frontmatter `date`, a `YYYY-MM-DD`.
     pub date: String,
     /// The frontmatter `score` as written (`8.6`, `9`), if any.
     pub score: Option<String>,
+    /// A retro's frontmatter `verdict`, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Grade {
+    #[serde(flatten)]
     pub eval: Eval,
     /// `+N`: commits that changed the skill after this grade was committed.
     pub since: usize,
@@ -31,12 +37,22 @@ impl Grade {
     pub fn stale(&self) -> bool {
         self.since > 0 || self.wip
     }
+
+    /// `+N` when commits changed the skill after the grade, else `+wip` when
+    /// only uncommitted changes did, else empty (SPEC F2).
+    pub fn mark(&self) -> String {
+        match (self.since, self.wip) {
+            (0, false) => String::new(),
+            (0, true) => "+wip".into(),
+            (n, _) => format!("+{n}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evals {
-    /// The latest grade, by date then filename.
-    pub grade: Option<Grade>,
+    /// Every grade, oldest first; the last one is the latest.
+    pub grades: Vec<Grade>,
     /// Every retro, oldest first; the last one is the latest.
     pub retros: Vec<Eval>,
 }
@@ -44,14 +60,15 @@ pub struct Evals {
 /// The evaluation artifacts of one skill under the inventory's source.
 pub fn load(inv: &Inventory, skill: &str) -> Evals {
     let source = &inv.source;
-    let grade = read_dir(&source.join(".grades").join(skill)).pop().map(|eval| {
-        let (since, wip) = inv
-            .history
-            .as_ref()
-            .map_or((0, false), |h| (eval.file.strip_prefix(source).map_or(0, |g| h.since(skill, g)), h.wip(skill)));
-        Grade { eval, since, wip }
-    });
-    Evals { grade, retros: read_dir(&source.join(".retros").join(skill)) }
+    let history = inv.history.as_ref();
+    let wip = history.is_some_and(|h| h.wip(skill));
+    // Outside a git worktree nothing comes after a grade (SPEC §6.3).
+    let since = |file: &Path| history.map_or(0, |h| file.strip_prefix(source).map_or(0, |g| h.since(skill, g)));
+    let grades = read_dir(&source.join(".grades").join(skill))
+        .into_iter()
+        .map(|eval| Grade { since: since(&eval.file), wip, eval })
+        .collect();
+    Evals { grades, retros: read_dir(&source.join(".retros").join(skill)) }
 }
 
 /// Every `*.md` in `dir` with loadable frontmatter and a `date`, sorted by
@@ -80,8 +97,8 @@ fn read_dir(dir: &Path) -> Vec<Eval> {
             eprintln!("warning: {}: no YYYY-MM-DD date; skipped", file.display());
             continue;
         };
-        let score = yaml::get(&fm, "score").and_then(yaml::text).map(str::to_string);
-        out.push(Eval { file, date, score });
+        let field = |key| yaml::get(&fm, key).and_then(yaml::text).map(str::to_string);
+        out.push(Eval { file, date, score: field("score"), verdict: field("verdict") });
     }
     out.sort_by(|a, b| (&a.date, &a.file).cmp(&(&b.date, &b.file)));
     out

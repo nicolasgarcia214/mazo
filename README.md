@@ -58,7 +58,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima scan` | Reads new log lines into the ledger. `--report` adds per-channel counts, unparsed commands and the parser canary; `--reparse` re-derives every event from the logs on disk. |
 | `skima usage` | One row per skill: sessions, loads per channel, agents, last use, a 30-day sparkline, the latest grade. |
 | `skima unused` | Skills with no strong load in the window, with `held`, `cluster`, `new` and `weak-only` notes. |
-| `skima show <skill>` | A skill's daily histogram and recent events, each with the log line it came from. |
+| `skima show <skill>` | The skill card: daily histogram and recent events, each with the log line it came from, then description, git history, every grade and retro, cites and cited-by, and usage by agent, channel and project. `--json` emits the whole card. |
 | `skima status` | Drift and policy for every home. Writes nothing. |
 | `skima sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
 | `skima init --source <dir>` | Writes the config for a skills directory: one home per existing agent directory, every policy rule off. Refuses to overwrite. |

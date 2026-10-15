@@ -5,19 +5,23 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::inventory::git;
 
 /// A commit that touched the source, with the paths it changed under it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Commit {
     pub hash: String,
     /// The committer date, strict ISO 8601 (`%cI`).
     pub date: String,
     pub subject: String,
     /// Parents rewritten to the nearest commits in the log (`--parents`).
+    #[serde(skip)]
     parents: Vec<String>,
     /// Source-relative paths changed against each parent (`-m`): one list for
     /// a plain commit, one per parent for a merge.
+    #[serde(skip)]
     files: Vec<Vec<PathBuf>>,
 }
 

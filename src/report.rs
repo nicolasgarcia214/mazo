@@ -1,8 +1,8 @@
-//! Reports over the ledger (SPEC F2–F4): usage, unused, show; collapse, held
-//! and cluster.
+//! Reports over the ledger (SPEC F2–F4, F14): usage, unused, the card (show);
+//! collapse, held and cluster.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -11,10 +11,12 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::config::Config;
-use crate::evals::{self, Evals};
+use crate::evals::{self, Eval, Evals, Grade};
+use crate::history::Commit;
 use crate::inventory::{self, Inventory};
 use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin, name};
 use crate::render::{self, Align};
+use crate::yaml;
 
 /// A report window: the last N days, or everything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,41 +204,27 @@ impl<'a> View<'a> {
     }
 }
 
+/// A grade as reports emit it, with its staleness (SPEC §6.3).
 #[derive(Serialize)]
 struct GradeOut {
-    score: Option<String>,
-    date: String,
+    #[serde(flatten)]
+    grade: Grade,
     stale: bool,
-    /// `+N` (SPEC §6.3).
-    since: usize,
-    /// `+wip`.
-    wip: bool,
-    file: String,
+}
+
+impl From<Grade> for GradeOut {
+    fn from(grade: Grade) -> GradeOut {
+        GradeOut { stale: grade.stale(), grade }
+    }
 }
 
 fn grade_out(evals: &Evals) -> Option<GradeOut> {
-    evals.grade.as_ref().map(|g| GradeOut {
-        score: g.eval.score.clone(),
-        date: g.eval.date.clone(),
-        stale: g.stale(),
-        since: g.since,
-        wip: g.wip,
-        file: g.eval.file.display().to_string(),
-    })
+    evals.grades.last().cloned().map(GradeOut::from)
 }
 
+/// The score as written, then `+N` or `+wip`.
 fn grade_cell(g: &Option<GradeOut>) -> String {
-    match g {
-        Some(g) => {
-            let score = g.score.as_deref().unwrap_or("?");
-            match (g.since, g.wip) {
-                (0, false) => score.into(),
-                (0, true) => format!("{score}+wip"),
-                (n, _) => format!("{score}+{n}"),
-            }
-        }
-        None => "-".into(),
-    }
+    g.as_ref().map_or("-".into(), |g| format!("{}{}", g.grade.eval.score.as_deref().unwrap_or("?"), g.grade.mark()))
 }
 
 #[derive(Serialize)]
@@ -438,15 +426,86 @@ struct ShownEvent<'e> {
     expired: bool,
 }
 
+#[derive(Serialize)]
+struct Day {
+    date: String,
+    strong: usize,
+    weak: usize,
+}
+
+#[derive(Serialize)]
+struct CardHistory<'a> {
+    first: Option<&'a Commit>,
+    last: Option<&'a Commit>,
+    uncommitted: bool,
+}
+
+/// A skill the card's skill cites, or one citing it, and whether it is held
+/// in the window (SPEC §5.3).
+#[derive(Serialize)]
+struct Link {
+    skill: String,
+    held: bool,
+}
+
+#[derive(Serialize)]
+struct ByChannel {
+    agent: Agent,
+    channel: Channel,
+    events: usize,
+}
+
+#[derive(Serialize)]
+struct Project {
+    cwd: String,
+    sessions: usize,
+}
+
+#[derive(Serialize)]
+struct CardUsage {
+    /// Collapsed strong events in the window per agent and channel.
+    strong: Vec<ByChannel>,
+    /// The latest strong event in the whole ledger.
+    last_use: Option<String>,
+    /// The top three cwds in the window by distinct root sessions with a strong event.
+    projects: Vec<Project>,
+}
+
+/// The skill card (SPEC F14): what `show` prints and `show --json` emits.
+#[derive(Serialize)]
+struct Card<'a> {
+    skill: &'a str,
+    since: Option<String>,
+    histogram: Vec<Day>,
+    /// The newest `limit` events in the window.
+    events: Vec<ShownEvent<'a>>,
+    total_events: usize,
+    description: Option<String>,
+    path: PathBuf,
+    /// None outside a git worktree (SPEC §6.3).
+    history: Option<CardHistory<'a>>,
+    /// Newest first.
+    grades: Vec<GradeOut>,
+    /// Newest first.
+    retros: Vec<Eval>,
+    /// Strong events on days after the latest retro, over the whole ledger.
+    strong_since_retro: Option<usize>,
+    cites: Vec<Link>,
+    cited_by: Vec<Link>,
+    usage: CardUsage,
+    /// F15, empty until examples land.
+    examples: Vec<serde_json::Value>,
+    /// F18, empty until the audit lands.
+    audit: Option<serde_json::Value>,
+}
+
 /// A name `show` accepts: any known name (canonical names are known).
 pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
     if inv.known.contains(skill) { Ok(()) } else { Err(format!("unknown skill: {skill}")) }
 }
 
-/// Rendered `skima show <skill>` output; Err for an unknown skill.
-pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
-    check_skill(input.inv, skill)?;
-    let view = View::new(input);
+fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> Card<'a> {
+    let inv = view.input.inv;
     let f = Filter::default();
     let start = view.start(since);
     let mut window: Vec<_> = view.select(&f, Some(skill), start).collect();
@@ -458,10 +517,10 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         let set = if e.channel.strong() { &mut day.0 } else { &mut day.1 };
         set.insert((e.agent, &e.session, e.channel));
     }
-    let histogram: Vec<(String, usize, usize)> =
-        days.iter().map(|(d, (s, w))| (d.to_string(), s.len(), w.len())).collect();
+    let histogram =
+        days.iter().map(|(d, (s, w))| Day { date: d.to_string(), strong: s.len(), weak: w.len() }).collect();
 
-    let shown: Vec<ShownEvent> = window
+    let events = window
         .iter()
         .take(limit)
         .map(|(e, _)| ShownEvent {
@@ -475,11 +534,21 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         })
         .collect();
 
-    let evals = evals::load(input.inv, skill);
-    let grade = grade_out(&evals);
-    let latest_retro = evals.retros.last().map(|r| r.date.clone());
-    // Strong loads on days after the latest retro's date, over the whole ledger.
-    let since_retro = latest_retro.as_deref().and_then(|d| d.parse::<Date>().ok()).map(|d| {
+    let path = inv.source.join(skill);
+    let description = std::fs::read_to_string(path.join("SKILL.md"))
+        .ok()
+        .and_then(|text| yaml::frontmatter(&text).ok())
+        .and_then(|fm| yaml::get(&fm, "description").and_then(yaml::text).map(str::to_string));
+    let history = inv.history.as_ref().map(|h| CardHistory {
+        first: h.first(skill),
+        last: h.last(skill),
+        uncommitted: h.wip(skill),
+    });
+
+    let Evals { grades, mut retros } = evals::load(inv, skill);
+    let grades: Vec<GradeOut> = grades.into_iter().rev().map(GradeOut::from).collect();
+    retros.reverse();
+    let strong_since_retro = retros.first().and_then(|r| r.date.parse::<Date>().ok()).map(|d| {
         view.select(&f, Some(skill), None)
             .filter(|(e, t)| e.channel.strong() && view.date(*t) > d)
             .map(|(e, _)| (e.agent, e.session.as_str(), e.channel))
@@ -487,42 +556,102 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
             .len()
     });
 
+    // SPEC §5.3: a skill is held when a skill citing it was used in the window.
+    let used = view.used(start);
+    let graph = inventory::fan_in(&inv.source, &inv.skills);
+    let link =
+        |b: &str| Link { skill: b.to_string(), held: citers(&graph, b).iter().any(|a| used.contains(a.as_str())) };
+    let cites = graph.get(skill).into_iter().flatten().map(|b| link(b)).collect();
+    let cited_by = citers(&graph, skill).iter().map(|a| link(a)).collect();
+
+    let mut by: BTreeMap<(Agent, Channel), HashSet<&str>> = BTreeMap::new();
+    let mut projects: BTreeMap<&str, HashSet<(Agent, &str)>> = BTreeMap::new();
+    for (e, _) in window.iter().filter(|(e, _)| e.channel.strong()) {
+        by.entry((e.agent, e.channel)).or_default().insert(&e.session);
+        if let Some(cwd) = &e.cwd {
+            projects.entry(cwd).or_default().insert((e.agent, &e.session));
+        }
+    }
+    let mut projects: Vec<Project> =
+        projects.into_iter().map(|(cwd, s)| Project { cwd: cwd.to_string(), sessions: s.len() }).collect();
+    projects.sort_by_key(|p| std::cmp::Reverse(p.sessions));
+    projects.truncate(3);
+    let last_use = view.select(&f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
+    let usage = CardUsage {
+        strong: by.into_iter().map(|((agent, channel), s)| ByChannel { agent, channel, events: s.len() }).collect(),
+        last_use: last_use.map(|t| t.to_string()),
+        projects,
+    };
+
+    Card {
+        skill,
+        since: start.map(|s| view.date(s).to_string()),
+        histogram,
+        events,
+        total_events: window.len(),
+        description,
+        path,
+        history,
+        grades,
+        retros,
+        strong_since_retro,
+        cites,
+        cited_by,
+        usage,
+        examples: Vec::new(),
+        audit: None,
+    }
+}
+
+/// `$HOME` as `~` (SPEC F12 Paths).
+fn tilde(path: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    match path.strip_prefix(home.as_str()) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
+        _ => path.to_string(),
+    }
+}
+
+/// A transcript locator as `<agent>:<file name>:<line>` (SPEC F12 Paths).
+fn locator(e: &ShownEvent) -> String {
+    let (file, line) = e.src.rsplit_once(':').unwrap_or((e.src, ""));
+    let file = Path::new(file).file_name().map_or(file.into(), |n| n.to_string_lossy());
+    format!("{}:{file}:{line}", name(e.agent))
+}
+
+/// Rendered `skima show <skill>` output; Err for an unknown skill.
+pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
+    check_skill(input.inv, skill)?;
+    let view = View::new(input);
+    let card = card(&view, skill, since, limit);
     if json {
-        let hist: Vec<_> = histogram.iter().map(|(d, s, w)| json!({"date": d, "strong": s, "weak": w})).collect();
-        return Ok(format!(
-            "{}\n",
-            json!({
-                "skill": skill,
-                "since": start.map(|s| view.date(s).to_string()),
-                "histogram": hist,
-                "events": shown,
-                "total_events": window.len(),
-                "grade": grade,
-                "retros": {"count": evals.retros.len(), "latest": latest_retro, "strong_since": since_retro},
-            })
-        ));
+        return Ok(format!("{}\n", serde_json::to_value(&card).map_err(|e| e.to_string())?));
     }
 
     let mut out = String::new();
-    let from = start.map_or("all time".to_string(), |s| format!("since {}", view.date(s)));
+    let from = card.since.as_ref().map_or("all time".to_string(), |d| format!("since {d}"));
     out.push_str(&format!("{skill}: {from}\n\n"));
-    let max = histogram.iter().map(|h| h.1).max().unwrap_or(0).max(1);
-    let hist_rows: Vec<Vec<String>> = histogram
+    let max = card.histogram.iter().map(|h| h.strong).max().unwrap_or(0).max(1);
+    let hist_rows: Vec<Vec<String>> = card
+        .histogram
         .iter()
-        .map(|(d, s, w)| vec![d.clone(), s.to_string(), w.to_string(), "█".repeat((s * 40).div_ceil(max))])
+        .map(|h| {
+            vec![h.date.clone(), h.strong.to_string(), h.weak.to_string(), "█".repeat((h.strong * 40).div_ceil(max))]
+        })
         .collect();
     let hist_header = [("day", Align::Left), ("strong", Align::Right), ("weak", Align::Right), ("", Align::Left)];
     out.push_str(&render::table(&hist_header, &hist_rows, tty));
 
-    out.push_str(&format!("\nlast {} of {} events:\n", shown.len(), window.len()));
-    let ev_rows: Vec<Vec<String>> = shown
+    out.push_str(&format!("\nlast {} of {} events:\n", card.events.len(), card.total_events));
+    let ev_rows: Vec<Vec<String>> = card
+        .events
         .iter()
         .map(|e| {
             let ts =
                 e.ts.parse::<Timestamp>()
                     .map_or(e.ts.to_string(), |t| t.to_zoned(view.tz.clone()).strftime("%Y-%m-%d %H:%M").to_string());
-            let src = if e.expired { format!("{} expired", e.src) } else { e.src.to_string() };
-            vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.unwrap_or("-").to_string(), src]
+            let src = if e.expired { format!("{} expired", locator(e)) } else { locator(e) };
+            vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })
         .collect();
     let ev_header = [
@@ -536,18 +665,65 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
     out.push_str(&render::table(&ev_header, &ev_rows, tty));
 
     out.push('\n');
-    match &grade {
-        Some(g) => out.push_str(&format!(
-            "grade: {} on {}{}\n",
-            g.score.as_deref().unwrap_or("?"),
-            g.date,
-            if g.stale { " (stale: the skill changed after it)" } else { "" }
-        )),
-        None => out.push_str("grade: none\n"),
+    out.push_str(&format!("description: {}\n", card.description.as_deref().unwrap_or("-")));
+    out.push_str(&format!("path: {}\n", tilde(&card.path.to_string_lossy())));
+    if let Some(h) = &card.history {
+        let commit = |c: &Commit| format!("{} {}", c.date.get(..10).unwrap_or(&c.date), c.subject);
+        let mut line = match (h.first, h.last) {
+            (Some(first), Some(last)) => format!("first {}, last {}", commit(first), commit(last)),
+            _ => "never committed".into(),
+        };
+        if h.uncommitted {
+            line.push_str(", uncommitted changes");
+        }
+        out.push_str(&format!("history: {line}\n"));
     }
-    match (&latest_retro, since_retro) {
-        (Some(d), Some(n)) => out.push_str(&format!("retros: {}, latest {d}, {n} strong since\n", evals.retros.len())),
-        _ => out.push_str("retros: 0\n"),
+
+    let score = |e: &Eval| e.score.clone().unwrap_or_else(|| "?".into());
+    if card.grades.is_empty() {
+        out.push_str("grades: none\n");
+    } else {
+        out.push_str("grades:\n");
+        let rows: Vec<Vec<String>> =
+            card.grades.iter().map(|g| vec![g.grade.eval.date.clone(), score(&g.grade.eval), g.grade.mark()]).collect();
+        let header = [("date", Align::Left), ("score", Align::Right), ("since", Align::Left)];
+        out.push_str(&render::table(&header, &rows, tty));
     }
+    match card.strong_since_retro {
+        None => out.push_str("retros: none\n"),
+        Some(n) => {
+            out.push_str(&format!("retros: {n} strong since the latest\n"));
+            let rows: Vec<Vec<String>> = card
+                .retros
+                .iter()
+                .map(|r| vec![r.date.clone(), score(r), r.verdict.clone().unwrap_or_else(|| "-".into())])
+                .collect();
+            let header = [("date", Align::Left), ("score", Align::Right), ("verdict", Align::Left)];
+            out.push_str(&render::table(&header, &rows, tty));
+        }
+    }
+
+    let links = |ls: &[Link]| match ls {
+        [] => "none".to_string(),
+        _ => ls
+            .iter()
+            .map(|l| if l.held { format!("{} (held)", l.skill) } else { l.skill.clone() })
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    out.push_str(&format!("cites: {}\n", links(&card.cites)));
+    out.push_str(&format!("cited by: {}\n", links(&card.cited_by)));
+
+    let strong: Vec<String> =
+        card.usage.strong.iter().map(|b| format!("{} {} {}", name(b.agent), name(b.channel), b.events)).collect();
+    out.push_str(&format!("strong: {}\n", if strong.is_empty() { "none".into() } else { strong.join(", ") }));
+    let last_use = card.usage.last_use.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
+    out.push_str(&format!(
+        "last use: {}\n",
+        last_use.map_or("never".into(), |t| format!("{} ({})", view.date(t), view.relative(t)))
+    ));
+    let projects: Vec<String> =
+        card.usage.projects.iter().map(|p| format!("{} {}", tilde(&p.cwd), p.sessions)).collect();
+    out.push_str(&format!("projects: {}\n", if projects.is_empty() { "none".into() } else { projects.join(", ") }));
     Ok(out)
 }

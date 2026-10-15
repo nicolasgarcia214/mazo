@@ -400,18 +400,152 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
     assert_eq!(v["total_events"], 4);
     assert_eq!(shown[0]["expired"], false, "newest first, its transcript exists");
     assert_eq!(shown[1]["expired"], true);
-    assert_eq!(v["retros"]["count"], 1);
-    assert_eq!(v["retros"]["latest"], "2026-10-05");
-    assert_eq!(v["retros"]["strong_since"], 2, "A and B, after 2026-10-05; C was before");
-    assert_eq!(v["grade"], Value::Null);
+    assert_eq!(v["retros"].as_array().unwrap().len(), 1);
+    assert_eq!(v["retros"][0]["date"], "2026-10-05");
+    assert_eq!(v["strong_since_retro"], 2, "A and B, after 2026-10-05; C was before");
+    assert_eq!(v["grades"], serde_json::json!([]));
     let hist = v["histogram"].as_array().unwrap();
     assert_eq!(hist.len(), 3);
     assert_eq!(hist[1]["strong"], 1);
     assert_eq!(hist[1]["weak"], 1);
 
     let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
-    assert!(text.contains(".jsonl:1 expired"), "{text}");
-    assert!(text.contains("retros: 1, latest 2026-10-05, 2 strong since"), "{text}");
+    assert!(text.contains("claude:gone.jsonl:1 expired"), "{text}");
+    assert!(text.contains("retros: 2 strong since the latest\n"), "{text}");
+}
+
+/// The card's sections after the events, in SPEC F14 order, with `$HOME` as
+/// `~` and short locators in text and full paths in `--json`.
+#[test]
+fn show_prints_the_card() {
+    let repo = fixture_repo();
+    let src = repo.path();
+    for (date, score) in [("2026-02-01", "6"), ("2026-03-01", "7")] {
+        write(&src.join(format!(".grades/unslop/{date}.md")), &format!("---\ndate: {date}\nscore: {score}\n---\n"));
+        git(src, &["add", "."], NOW);
+        git(src, &["commit", "-q", "-m", &format!("grade {date}")], &format!("{date}T00:00:00Z"));
+    }
+    write(&src.join("unslop/notes.md"), "edit\n");
+    git(src, &["add", "."], NOW);
+    git(src, &["commit", "-q", "-m", "tighten unslop"], "2026-04-01T00:00:00Z");
+    write(&src.join(".grades/unslop/2026-05-01.md"), "---\ndate: 2026-05-01\nscore: 9\n---\n");
+    write(
+        &src.join(".retros/unslop/a.md"),
+        "---\nskill: unslop\ndate: 2026-04-02\nscore: 5\nverdict: too eager\n---\n",
+    );
+    write(&src.join(".retros/unslop/b.md"), "---\nskill: unslop\ndate: 2026-10-05\nscore: 8\nverdict: holds up\n---\n");
+    write(&src.join("unslop/notes.md"), "edit, uncommitted\n");
+    write(&src.join("citer/SKILL.md"), "---\nname: citer\ndescription: Cites.\n---\n\nUse the unslop skill.\n");
+
+    let home = std::env::var("HOME").unwrap();
+    let w = world(src);
+    let at = |id, skill, channel, session, days, cwd: &str| {
+        let mut e = ev(id, skill, channel, session, &ago(days));
+        e.cwd = Some(cwd.into());
+        e.src = format!("{home}/t/{id}.jsonl:7");
+        e
+    };
+    let mut codex = at("x", "unslop", Channel::Tool, "X", 2, "/srv/b");
+    codex.agent = Agent::Codex;
+    let events = vec![
+        at("a", "unslop", Channel::Slash, "A", 1, &format!("{home}/work")),
+        at("b", "unslop", Channel::Slash, "B", 3, &format!("{home}/work")),
+        at("c", "unslop", Channel::Tool, "C", 4, "/srv/a"),
+        at("d", "unslop", Channel::Read, "D", 4, "/srv/weak"),
+        at("e", "unslop", Channel::Tool, "E", 5, "/srv/c"),
+        codex,
+        at("old", "unslop", Channel::Slash, "O", 100, "/srv/old"),
+    ];
+    let input = w.input(&events);
+
+    let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
+    let tail = &text[text.find("description:").expect("description after the events")..];
+    let path = match src.strip_prefix(&home) {
+        Ok(rel) => format!("path: ~/{}/unslop\n", rel.display()),
+        Err(_) => format!("path: {}/unslop\n", src.display()),
+    };
+    let expected = [
+        "description: Removes slop from prose.\n".to_string(),
+        path,
+        "history: first 2026-01-01 skills, last 2026-04-01 tighten unslop, uncommitted changes\n".into(),
+        "grades:\n".into(),
+        "date       score since\n".into(),
+        "2026-05-01     9 +wip\n".into(),
+        "2026-03-01     7 +1\n".into(),
+        "2026-02-01     6 +1\n".into(),
+        "retros: 5 strong since the latest\n".into(),
+        "date       score verdict\n".into(),
+        "2026-10-05     8 holds up\n".into(),
+        "2026-04-02     5 too eager\n".into(),
+        "cites: fresh (held), writing-for-agents (held)\n".into(),
+        "cited by: citer\n".into(),
+        "strong: claude slash 2, claude tool 2, codex tool 1\n".into(),
+        "last use: 2026-10-12 (1d ago)\n".into(),
+        "projects: ~/work 2, /srv/a 1, /srv/b 1\n".into(),
+    ];
+    assert_eq!(tail, expected.concat(), "{text}");
+    assert!(text.contains("~/work") && !text.contains(&format!("{home}/work")), "{text}");
+    assert!(text.contains(" claude:a.jsonl:7 expired\n"), "{text}");
+
+    let v: Value =
+        serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    let keys: BTreeSet<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    let all = [
+        "skill",
+        "since",
+        "histogram",
+        "events",
+        "total_events",
+        "description",
+        "path",
+        "history",
+        "grades",
+        "retros",
+        "strong_since_retro",
+        "cites",
+        "cited_by",
+        "usage",
+        "examples",
+        "audit",
+    ];
+    assert_eq!(keys, BTreeSet::from(all));
+    assert_eq!(v["path"], src.join("unslop").display().to_string());
+    assert_eq!(v["events"][0]["src"], format!("{home}/t/a.jsonl:7"));
+    assert_eq!(v["events"][0]["cwd"], format!("{home}/work"));
+    assert_eq!(v["history"]["last"]["subject"], "tighten unslop");
+    assert_eq!(v["history"]["uncommitted"], true);
+    let grades: Vec<(&str, u64)> = v["grades"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| (g["date"].as_str().unwrap(), g["since"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(grades, [("2026-05-01", 0), ("2026-03-01", 1), ("2026-02-01", 1)], "every grade, newest first");
+    assert_eq!(v["retros"][1]["verdict"], "too eager");
+    assert_eq!(v["cited_by"], serde_json::json!([{"skill": "citer", "held": false}]));
+    assert_eq!(v["usage"]["last_use"], ago(1));
+    assert_eq!(v["usage"]["projects"][0], serde_json::json!({"cwd": format!("{home}/work"), "sessions": 2}));
+    assert_eq!(v["examples"], serde_json::json!([]));
+    assert_eq!(v["audit"], Value::Null);
+}
+
+/// SPEC §6.3 Not a repository: no history section, no `+N`.
+#[test]
+fn show_outside_a_git_worktree_omits_history() {
+    let dir = tempfile::tempdir().unwrap();
+    copy_tree(&common::fixture("reports/skills"), dir.path(), &|s| s);
+    write(&dir.path().join(".grades/unslop/g.md"), "---\ndate: 2026-05-01\nscore: 9\n---\n");
+    let w = world(dir.path());
+    assert!(w.inv.history.is_none());
+    let input = w.input(&[]);
+    let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
+    assert!(!text.contains("history:"), "{text}");
+    assert!(text.contains("grades:\ndate       score since\n2026-05-01     9\n"), "{text}");
+    let v: Value =
+        serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    assert_eq!(v["history"], Value::Null);
+    assert_eq!(v["grades"][0]["since"], 0);
+    assert_eq!(v["grades"][0]["stale"], false);
 }
 
 // ---------------------------------------------------------------- evals
@@ -437,7 +571,7 @@ fn evals_latest_date_and_staleness() {
 
     let load = || evals::load(&Inventory::load(src).unwrap(), "s");
     let e = load();
-    let g = e.grade.as_ref().unwrap();
+    let g = e.grades.last().unwrap();
     assert!(
         g.eval.file.ends_with("b.md"),
         "quoted 2026-02-01 beats unquoted 2026-01-15; GRADES.md, notes.md, bad.md skipped"
@@ -450,12 +584,12 @@ fn evals_latest_date_and_staleness() {
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
     git(src, &["commit", "-q", "-am", "edit skill"], "2026-03-01T00:00:00Z");
-    assert!(load().grade.unwrap().stale(), "a later skill commit makes it stale");
+    assert!(load().grades.pop().unwrap().stale(), "a later skill commit makes it stale");
 
     write(&src.join(".grades/s/c.md"), "---\ntarget: s\ndate: 2026-04-01\nscore: 9\n---\n");
-    let g = load().grade.unwrap();
+    let g = load().grades.pop().unwrap();
     assert!(g.eval.file.ends_with("c.md") && !g.stale(), "an uncommitted grade is not stale");
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v3\n---\n");
-    assert!(load().grade.unwrap().stale(), "uncommitted skill changes make any grade stale");
+    assert!(load().grades.pop().unwrap().stale(), "uncommitted skill changes make any grade stale");
 }
