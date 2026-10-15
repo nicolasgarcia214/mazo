@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{Config, Home};
 use crate::inventory::Inventory;
+use crate::policy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -77,7 +78,13 @@ struct Target {
     entries: Vec<(String, PathBuf)>,
 }
 
-fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<(String, String)>) -> Vec<Target> {
+fn targets(
+    cfg: &Config,
+    inv: &Inventory,
+    homes: &[&Home],
+    present: &dyn Fn(&Path) -> bool,
+    conflicts: &mut Vec<(String, String)>,
+) -> Vec<Target> {
     let mut common: Vec<(String, PathBuf)> = inv.skills.iter().map(|s| (s.clone(), cfg.source.join(s))).collect();
     for loose in &cfg.loose {
         let src = cfg.source.join(loose);
@@ -92,7 +99,7 @@ fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<(
         for (key, value) in &home.links {
             let path = home.path.join(key);
             let src = cfg.source.join(value);
-            if !src.exists() {
+            if !present(&src) {
                 conflicts.push((home.name.clone(), format!("ERROR: {} is missing", src.display())));
                 continue;
             }
@@ -123,8 +130,20 @@ fn targets(cfg: &Config, inv: &Inventory, homes: &[&Home], conflicts: &mut Vec<(
 /// Classifies every entry of the selected homes and plans the writes that
 /// `sync` would make. Never touches the filesystem except to read it.
 pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
+    plan_with(cfg, inv, homes, None)
+}
+
+/// The plan `sync` would make if `gone` did not exist (SPEC F17 `retire`): links
+/// into it plan as dangling and a `links` entry under it is missing. `inv` must
+/// already leave out the skill at `gone`.
+pub fn plan_without(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: &Path) -> Plan {
+    plan_with(cfg, inv, homes, Some(gone))
+}
+
+fn plan_with(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>) -> Plan {
+    let present = |p: &Path| gone.is_none_or(|g| !p.starts_with(g)) && p.exists();
     let mut plan = Plan::default();
-    let targets = targets(cfg, inv, homes, &mut plan.conflicts);
+    let targets = targets(cfg, inv, homes, &present, &mut plan.conflicts);
     // Two homes can share a directory, directly or through a symlink
     // (PI_CODING_AGENT_DIR pointing at another home): plan each physical one once.
     let mut planned: Vec<PathBuf> = Vec::new();
@@ -181,9 +200,8 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
             .collect();
         others.sort();
         for path in others {
-            let owned_dangling = fs::read_link(&path).is_ok_and(|text| {
-                path.file_name().is_some_and(|n| text == cfg.source.join(n)) && fs::metadata(&path).is_err()
-            });
+            let owned_dangling = fs::read_link(&path)
+                .is_ok_and(|text| path.file_name().is_some_and(|n| text == cfg.source.join(n)) && !present(&text));
             let state = if owned_dangling { State::Dangling } else { State::Foreign };
             if owned_dangling {
                 plan.actions.push(Action::Remove(path.clone()));
@@ -232,6 +250,15 @@ fn hint(path: &Path, state: State) -> String {
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Every line that stops `sync` (SPEC §5.4, §5.5): the per-skill rules, the
+/// per-home rules of the selected homes, then the plan's conflicts.
+pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) -> Vec<String> {
+    policy::per_skill(cfg, inv)
+        .into_iter()
+        .chain(policy::home_errors(cfg, inv, homes).into_iter().chain(plan.conflicts.iter().cloned()).map(|(_, e)| e))
+        .collect()
 }
 
 /// Performs a conflict-free plan. Returns the lines to print.

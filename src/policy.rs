@@ -73,6 +73,11 @@ fn valid_name(name: &str) -> bool {
     name.split('-').all(ok)
 }
 
+/// Per-home rules for the selected homes (SPEC §5.4), as `(home, line)`.
+pub fn home_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<(String, String)> {
+    homes.iter().flat_map(|h| per_home(&cfg.policy, inv, h).into_iter().map(|e| (h.name.clone(), e))).collect()
+}
+
 /// Per-home configurable rules for the selected homes. Returns `ERROR: …` lines.
 pub fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
     if !policy.claude_name_only || home.agent != Agent::Claude {
@@ -103,7 +108,7 @@ pub fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
 }
 
 /// A Claude home's parsed `settings.json`.
-fn settings(home: &Home) -> crate::Result<serde_json::Value> {
+pub fn settings(home: &Home) -> crate::Result<serde_json::Value> {
     let bytes = std::fs::read(home.settings()).map_err(|e| e.to_string())?;
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }

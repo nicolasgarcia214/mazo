@@ -29,6 +29,16 @@ pub struct ScanReport {
     pub homes: BTreeMap<String, HomeReport>,
 }
 
+impl ScanReport {
+    pub fn warn_io_errors(&self) {
+        for (home, h) in &self.homes {
+            for e in &h.io_errors {
+                eprintln!("warning: {home}: {e}");
+            }
+        }
+    }
+}
+
 /// Markers whose presence in a file without any event trips the canary (SPEC §4.6).
 const CANARY: [&str; 3] = ["Base directory for this skill", "<skill>", "<skill name="];
 

@@ -293,13 +293,14 @@ card adds, in this order:
   `default_prompt` naming `$<name>`. With `claude_name_only` on, it prints the
   `"<name>": "name-only"` line for each Claude home. It never runs `sync`.
 - **`skima retire <name> [--force]`** scans first (D3). It refuses when the
-  skill is `held` (§5.3) or has a strong event in the last 30 days; `--force`
-  overrides both. It then builds the `sync` plan as if the skill were already
-  archived, and aborts with zero writes if that plan has any conflict or
-  policy error. Only then does it move `<source>/<name>` to
+  skill is `held` (§5.3) or has a strong event in the last 30 days, with
+  `held` judged over the same 30 days; `--force` overrides both. It then
+  builds the `sync` plan as if the skill were already archived, and aborts
+  with zero writes if that plan has any conflict or policy error. Only then does it move `<source>/<name>` to
   `<source>/.archive/<name>` (`git mv` when the skill is tracked, so the move
-  is staged) and apply the plan, which prunes the now-dangling links. It prints
-  the settings lines that can go. It never commits.
+  is staged) and apply the plan, which prunes the now-dangling links. With
+  `claude_name_only` on, it prints the settings lines that can go. It never
+  commits.
 - **`skima prune [<name>] [--yes] [--force]`** permanently deletes
   `<source>/.archive/<name>`, or every entry in `.archive/` without a name. It
   lists what it will delete and asks for confirmation on a TTY; with no TTY it

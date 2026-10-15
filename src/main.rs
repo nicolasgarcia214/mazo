@@ -99,6 +99,13 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Archive a dead skill under `.archive/` and prune its links. Never commits.
+    Retire {
+        name: String,
+        /// Retire a held skill or one used in the last 30 days.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -146,6 +153,7 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
         Cmd::Prune { name, yes, force } => {
             skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
+        Cmd::Retire { name, force } => skima::lifecycle::retire(&cfg, &inv, &name, force),
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }
@@ -157,7 +165,7 @@ fn with_scanned(
     render: impl FnOnce(&report::Input) -> skima::Result<String>,
 ) -> skima::Result<ExitCode> {
     let data = ledger::data_dir()?;
-    warn_io_errors(&scan::scan(cfg, inv, &data, false)?);
+    scan::scan(cfg, inv, &data, false)?.warn_io_errors();
     let ledger = Ledger::load(&data)?;
     let coverage = ledger::load_coverage(&data)?;
     let now = jiff::Timestamp::now();
@@ -195,7 +203,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     }
     let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events.len())).collect();
     println!("scan: {}", summary.join(" · "));
-    warn_io_errors(&r);
+    r.warn_io_errors();
     if detail {
         let ledger = Ledger::load(&data)?;
         for (name, h) in &r.homes {
@@ -220,28 +228,15 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     Ok(ExitCode::SUCCESS)
 }
 
-fn warn_io_errors(r: &scan::ScanReport) {
-    for (home, h) in &r.homes {
-        for e in &h.io_errors {
-            eprintln!("warning: {home}: {e}");
-        }
-    }
-}
-
 fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
-}
-
-/// Per-home rules for the selected homes (SPEC §5.4), as `(home, line)`.
-fn home_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<(String, String)> {
-    homes.iter().flat_map(|h| policy::per_home(&cfg.policy, inv, h).into_iter().map(|e| (h.name.clone(), e))).collect()
 }
 
 fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let skill_errors = policy::per_skill(cfg, inv);
     let plan = links::plan(cfg, inv, &homes);
-    let policy_errors = home_errors(cfg, inv, &homes);
+    let policy_errors = policy::home_errors(cfg, inv, &homes);
     let home_errors = || policy_errors.iter().chain(&plan.conflicts);
     let data = ledger::data_dir()?;
     let warnings = policy::freshness(cfg, &ledger::load_coverage(&data)?, jiff::Timestamp::now());
@@ -281,10 +276,7 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -
 fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let plan = links::plan(cfg, inv, &homes);
-    let errors: Vec<String> = policy::per_skill(cfg, inv)
-        .into_iter()
-        .chain(home_errors(cfg, inv, &homes).into_iter().chain(plan.conflicts.iter().cloned()).map(|(_, e)| e))
-        .collect();
+    let errors = links::sync_errors(cfg, inv, &homes, &plan);
     if !errors.is_empty() {
         for e in &errors {
             eprintln!("{e}");

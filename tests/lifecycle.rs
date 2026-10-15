@@ -1,10 +1,14 @@
-//! Lifecycle commands end to end (SPEC §10.8): `new`, `prune`.
+//! Lifecycle commands end to end (SPEC §10.8): `new`, `retire`, `prune`.
 
 mod common;
+#[path = "fixtures/sync/harness.rs"]
+mod harness;
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+
+use skima::ledger::{Actor, Agent, Channel, Event, Origin};
 
 const DATE: &str = "2026-01-01T00:00:00Z";
 const LEDGER: &str = "{\"id\":\"x\"}\n";
@@ -334,4 +338,197 @@ fn new_rejects_a_missing_description_a_bad_name_and_an_existing_entry() {
         assert!(stderr(&out).contains("already exists"), "{}", stderr(&out));
     }
     assert_eq!(fs::read_to_string(hs.source.join("file")).unwrap(), "x");
+}
+
+/// The sync harness (every rule on, four homes) with the Pi home under
+/// `~/.pi/agent`, `diagnose-bug` citing `blast-radius`, synced.
+fn synced() -> harness::Fixture {
+    let mut fx = harness::Fixture::new();
+    fx.set_env("PI_CODING_AGENT_DIR", None);
+    fx.agent = fx.home.join(".pi/agent");
+    fx.target = fx.agent.join("skills");
+    common::write(
+        &fx.source.join("diagnose-bug/SKILL.md"),
+        "---\nname: diagnose-bug\ndescription: Test skill.\n---\n\nRun the blast-radius skill.\n",
+    );
+    fx.skima(&["sync"]).assert_ok();
+    fx
+}
+
+/// A ledger with one strong event per `(skill, days ago)`.
+fn ledger(fx: &harness::Fixture, uses: &[(&str, i64)]) {
+    let now = jiff::Timestamp::now();
+    let lines: String = uses
+        .iter()
+        .map(|(skill, days)| {
+            let ts = now.checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap();
+            let e = Event {
+                v: 1,
+                id: format!("{skill}-{days}"),
+                ts: ts.to_string(),
+                agent: Agent::Claude,
+                home: "claude".into(),
+                agent_version: None,
+                session: format!("s-{skill}"),
+                actor: Actor::Main,
+                skill: skill.to_string(),
+                origin: Origin::Canonical,
+                channel: Channel::Slash,
+                path: None,
+                cwd: None,
+                authoring: false,
+                src: "/nonexistent/t.jsonl:1".into(),
+            };
+            serde_json::to_string(&e).unwrap() + "\n"
+        })
+        .collect();
+    common::write(&fx.data.join("skima/events.jsonl"), &lines);
+}
+
+/// Every link under `$HOME` (all four homes) to `<source>/<name>`.
+fn links_to(fx: &harness::Fixture, name: &str) -> Vec<PathBuf> {
+    let want = format!("link {}", fx.source.join(name).display());
+    harness::snapshot(&[&fx.home]).into_iter().filter(|(_, v)| *v == want).map(|(p, _)| p).collect()
+}
+
+/// `$HOME` (every home) and the source.
+fn homes_and_source(fx: &harness::Fixture) -> harness::Snapshot {
+    harness::snapshot(&[&fx.home, &fx.source])
+}
+
+fn git_out(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = Command::new("git").arg("-C").arg(dir).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn assert_retired(fx: &harness::Fixture, name: &str) {
+    assert!(fx.source.join(".archive").join(name).join("SKILL.md").is_file());
+    assert!(!fx.source.join(name).exists());
+    assert!(links_to(fx, name).is_empty());
+}
+
+#[test]
+fn retire_refuses_a_recent_or_held_skill_and_force_overrides_both() {
+    let fx = synced();
+    ledger(&fx, &[("grade", 3), ("diagnose-bug", 3), ("interrogate", 40)]);
+    let before = homes_and_source(&fx);
+    for (name, why) in [
+        ("grade", "grade has a strong event in the last 30 days"),
+        ("blast-radius", "blast-radius is held by diagnose-bug"),
+    ] {
+        let r = fx.skima(&["retire", name]);
+        assert_eq!(r.code(), 1, "{}", r.stdout());
+        assert!(r.stderr().contains(why), "{}", r.stderr());
+        assert!(r.stderr().contains("ERROR: retire refused"), "{}", r.stderr());
+    }
+    assert_eq!(homes_and_source(&fx), before);
+
+    // Used only outside the window, and cited by nothing used.
+    fx.skima(&["retire", "interrogate"]).assert_ok();
+    fx.skima(&["retire", "grade", "--force"]).assert_ok();
+    fx.skima(&["retire", "blast-radius", "--force"]).assert_ok();
+    for name in ["interrogate", "grade", "blast-radius"] {
+        assert_retired(&fx, name);
+    }
+    fx.skima(&["status"]).assert_ok();
+}
+
+#[test]
+fn a_holder_used_only_before_the_30_day_window_does_not_hold() {
+    let fx = synced();
+    ledger(&fx, &[("diagnose-bug", 45)]);
+    fx.skima(&["retire", "blast-radius"]).assert_ok();
+    assert_retired(&fx, "blast-radius");
+}
+
+#[test]
+fn a_conflict_or_policy_error_after_archiving_aborts_with_zero_writes() {
+    let fx = synced();
+    let obstructed = fx.target.join("grade");
+    fs::remove_file(&obstructed).unwrap();
+    common::write(&obstructed, "local");
+    let before = homes_and_source(&fx);
+    let r = fx.skima(&["retire", "unslop"]);
+    assert_eq!(r.code(), 1, "{}", r.stdout());
+    assert!(r.stderr().contains("conflicts with a canonical entry"), "{}", r.stderr());
+    assert_eq!(homes_and_source(&fx), before);
+    fs::remove_file(&obstructed).unwrap();
+
+    // The settings miss `grade`: a policy error in the post-archive plan.
+    let mut settings: serde_json::Value = serde_json::from_str(&fx.valid_settings()).unwrap();
+    settings["skillOverrides"].as_object_mut().unwrap().remove("grade");
+    fs::write(fx.settings(".claude"), settings.to_string()).unwrap();
+    let before = homes_and_source(&fx);
+    let r = fx.skima(&["retire", "unslop"]);
+    assert_eq!(r.code(), 1, "{}", r.stdout());
+    assert!(r.stderr().contains("skillOverrides must set every skill to name-only"), "{}", r.stderr());
+    assert_eq!(homes_and_source(&fx), before);
+    fx.write_settings(&fx.home);
+
+    // A `links` entry into the skill is missing once it is archived.
+    let toml = fx.source.join("skima.toml");
+    let text = fs::read_to_string(&toml).unwrap().replace("= \"pi-explicit-skills.ts\" }", "= \"unslop/SKILL.md\" }");
+    fs::write(&toml, text).unwrap();
+    fs::remove_file(fx.agent.join("extensions/pi-explicit-skills.ts")).unwrap();
+    fx.skima(&["sync"]).assert_ok();
+    let before = homes_and_source(&fx);
+    let r = fx.skima(&["retire", "unslop"]);
+    assert_eq!(r.code(), 1, "{}", r.stdout());
+    assert!(
+        r.stderr().contains(&format!("{} is missing", fx.source.join("unslop/SKILL.md").display())),
+        "{}",
+        r.stderr()
+    );
+    assert_eq!(homes_and_source(&fx), before);
+}
+
+#[test]
+fn retire_stages_a_rename_prunes_the_links_and_never_commits() {
+    let fx = synced();
+    let repo = fx.source.parent().unwrap();
+    common::git(repo, &["init", "-q"], DATE);
+    common::git(repo, &["add", "-A", "."], DATE);
+    common::git(repo, &["commit", "-q", "-m", "c"], DATE);
+    assert!(!links_to(&fx, "unslop").is_empty());
+
+    let r = fx.skima(&["retire", "unslop"]);
+    r.assert_ok();
+    assert_retired(&fx, "unslop");
+    let status = git_out(repo, &["status", "--porcelain"]);
+    let renames: String = ["SKILL.md", "agents/openai.yaml"]
+        .iter()
+        .map(|f| format!("R  skills/unslop/{f} -> skills/.archive/unslop/{f}\n"))
+        .collect();
+    assert_eq!(status, renames);
+    assert_eq!(git_out(repo, &["rev-list", "--count", "HEAD"]), "1\n");
+    for dir in [".claude", ".claude-work"] {
+        let lines = format!("{} can drop:\n  \"unslop\": \"name-only\"\n", fx.settings(dir).display());
+        assert!(r.stdout().contains(&lines), "{}", r.stdout());
+    }
+    fx.skima(&["status"]).assert_ok();
+}
+
+#[test]
+fn an_untracked_skill_is_renamed_and_settings_lines_need_claude_name_only() {
+    let fx = synced();
+    let toml = fx.source.join("skima.toml");
+    let text =
+        fs::read_to_string(&toml).unwrap().replace("claude_name_only            = true", "claude_name_only = false");
+    fs::write(&toml, text).unwrap();
+    let r = fx.skima(&["retire", "unslop"]);
+    r.assert_ok();
+    assert_retired(&fx, "unslop");
+    assert!(!r.stdout().contains("can drop"), "{}", r.stdout());
+    fx.skima(&["status"]).assert_ok();
+}
+
+#[test]
+fn retire_of_a_non_canonical_name_is_a_usage_error() {
+    let fx = synced();
+    let before = homes_and_source(&fx);
+    for name in ["nope", ".archive", "../skills"] {
+        assert_eq!(fx.skima(&["retire", name]).code(), 2);
+    }
+    assert_eq!(homes_and_source(&fx), before);
 }

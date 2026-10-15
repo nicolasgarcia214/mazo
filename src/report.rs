@@ -133,6 +133,12 @@ impl<'a> View<'a> {
         })
     }
 
+    /// Skills with a strong event at or after `start`, under the default filter.
+    fn used(&self, start: Option<Timestamp>) -> BTreeSet<&'a str> {
+        let f = Filter::default();
+        self.select(&f, None, start).filter(|(e, _)| e.channel.strong()).map(|(e, _)| e.skill.as_str()).collect()
+    }
+
     /// `today`, `2d ago`.
     fn relative(&self, t: Timestamp) -> String {
         match (self.today - self.date(t)).get_days() {
@@ -309,6 +315,28 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
     render::table(&header, &cells, tty) + &view.coverage_line("coverage", None)
 }
 
+/// Skills that cite `skill` (SPEC §5.3).
+fn citers(graph: &inventory::Graph, skill: &str) -> Vec<String> {
+    graph.iter().filter(|(_, cited)| cited.contains(skill)).map(|(a, _)| a.clone()).collect()
+}
+
+/// Why `retire` refuses `skill` (SPEC F17): a strong event in the last `days`
+/// days, or a citing skill with one, which makes it held (F3). Empty when it may go.
+pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
+    let view = View::new(input);
+    let used = view.used(view.start(Since::Days(days)));
+    let mut out = Vec::new();
+    if used.contains(skill) {
+        out.push(format!("{skill} has a strong event in the last {days} days"));
+    }
+    let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
+    let holders: Vec<String> = citers(&graph, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
+    if !holders.is_empty() {
+        out.push(format!("{skill} is held by {}", holders.join(", ")));
+    }
+    out
+}
+
 #[derive(Serialize)]
 struct UnusedRow {
     skill: String,
@@ -326,14 +354,9 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
     let view = View::new(input);
     let f = Filter::default();
     let start = view.start(since);
-    let window: Vec<_> = view.select(&f, None, start).collect();
-    let used: BTreeSet<&str> =
-        window.iter().filter(|(e, _)| e.channel.strong()).map(|(e, _)| e.skill.as_str()).collect();
-    let weak: BTreeSet<&str> = window.iter().map(|(e, _)| e.skill.as_str()).collect();
+    let used = view.used(start);
+    let weak: BTreeSet<&str> = view.select(&f, None, start).map(|(e, _)| e.skill.as_str()).collect();
     let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
-    let citers = |b: &str| -> Vec<String> {
-        graph.iter().filter(|(_, cited)| cited.contains(b)).map(|(a, _)| a.clone()).collect()
-    };
     let mut rows: Vec<UnusedRow> = input
         .inv
         .skills
@@ -347,7 +370,7 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
                     .is_none_or(|t| start.is_some_and(|s| t > s))
             });
             let (holders, others): (Vec<String>, Vec<String>) =
-                citers(skill).into_iter().partition(|a| used.contains(a.as_str()));
+                citers(&graph, skill).into_iter().partition(|a| used.contains(a.as_str()));
             let (status, holders, cluster) = if is_new {
                 ("new", Vec::new(), Vec::new())
             } else if holders.is_empty() {

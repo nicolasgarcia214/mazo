@@ -1,4 +1,4 @@
-//! Lifecycle of a skill in the source: `new`, `prune` (SPEC F17).
+//! Lifecycle of a skill in the source: `new`, `retire`, `prune` (SPEC F17).
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
@@ -6,10 +6,10 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::Result;
-use crate::config::Config;
-use crate::inventory::git;
-use crate::ledger::Agent;
-use crate::yaml;
+use crate::config::{Config, Home};
+use crate::inventory::{Inventory, git};
+use crate::ledger::{self, Agent, Ledger};
+use crate::{links, policy, report, scan, yaml};
 
 /// `skima new <name> --description <text>` (SPEC F17, D19): writes
 /// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
@@ -20,7 +20,7 @@ pub fn new(cfg: &Config, name: &str, description: &str) -> Result<ExitCode> {
     let skill_md = format!("---\nname: {name}\ndescription: {}\n---\n\n# {name}\n", quoted(description));
     // Parsed back through the rules `sync` runs, so what is written passes them.
     let checked = yaml::frontmatter(&skill_md).and_then(|meta| {
-        crate::policy::always_on(&meta, name)?;
+        policy::always_on(&meta, name)?;
         match yaml::get(&meta, "description").and_then(yaml::string) {
             Some(d) if d == description => Ok(()),
             _ => Err("the description does not survive as a YAML string".into()),
@@ -198,4 +198,71 @@ fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A strong event in this many days, the skill's or a holder's, makes `retire` refuse.
+const RETIRE_DAYS: u32 = 30;
+
+/// `skima retire <name> [--force]` (SPEC F17, D20): scans first, refuses a held or
+/// recently used skill unless `force`, and refuses any conflict or policy error
+/// in the sync plan as if the skill were archived, all before any write. Then
+/// moves `<source>/<name>` to `<source>/.archive/<name>` (`git mv` when tracked)
+/// and applies that plan. Never commits.
+pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<ExitCode> {
+    if !inv.skills.contains(name) {
+        return usage(&format!("{name} is not a canonical skill in {}", cfg.source.display()));
+    }
+    let to = cfg.source.join(".archive").join(name);
+    if to.symlink_metadata().is_ok() {
+        eprintln!("ERROR: retire refused: {} already exists", to.display());
+        return Ok(ExitCode::from(1));
+    }
+    let data = ledger::data_dir()?;
+    scan::scan(cfg, inv, &data, false)?.warn_io_errors();
+    if !force {
+        let ledger = Ledger::load(&data)?;
+        let coverage = ledger::load_coverage(&data)?;
+        let now = jiff::Timestamp::now();
+        let input = report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, now };
+        let blockers = report::retire_blockers(&input, name, RETIRE_DAYS);
+        if !blockers.is_empty() {
+            for b in &blockers {
+                eprintln!("{b}");
+            }
+            eprintln!("ERROR: retire refused; pass --force to retire it anyway");
+            return Ok(ExitCode::from(1));
+        }
+    }
+    let from = cfg.source.join(name);
+    let mut rest = inv.clone();
+    rest.skills.remove(name);
+    let homes: Vec<&Home> = cfg.homes.iter().collect();
+    let plan = links::plan_without(cfg, &rest, &homes, &from);
+    let errors = links::sync_errors(cfg, &rest, &homes, &plan);
+    if !errors.is_empty() {
+        for e in &errors {
+            eprintln!("{e}");
+        }
+        return Ok(ExitCode::from(1));
+    }
+
+    let archive = cfg.source.join(".archive");
+    std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+    if git(&cfg.source, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
+        git(&cfg.source, &["mv", "--", name, &format!(".archive/{name}")]).ok_or(format!("git mv {name} failed"))?;
+    } else {
+        std::fs::rename(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+    }
+    println!("archived  {} -> {}", from.display(), to.display());
+    for line in links::apply(&plan)? {
+        println!("{line}");
+    }
+    if cfg.policy.claude_name_only {
+        for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
+            if let Some(v) = policy::settings(h).ok().and_then(|s| s["skillOverrides"].get(name).cloned()) {
+                println!("{} can drop:\n  \"{name}\": {v}", h.settings().display());
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
