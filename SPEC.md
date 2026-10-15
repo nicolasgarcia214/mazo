@@ -1758,8 +1758,8 @@ Each will be settled by a run, not by reading.
 - **Q2. Work-profile rule file.** Does the work profile need its own `CLAUDE.md`
   for the `AGENTS.md` rule to apply? This is outside skima, which does not
   report it.
-- **Q3. Cross-vendor judging.** With `[judge] agent = "claude"`, auditing a
-  skill sends condensed Codex and Pi sessions to Anthropic, and a Codex judge
-  sends Claude sessions to OpenAI. This is a consent decision for the owner,
-  settled before M9. `--dry-run` prints each session's agent and the judge's,
-  whatever the answer.
+- **Q3. Cross-vendor judging.** Settled 2026-10-14: allowed. The owner has no
+  client work whose sessions must stay with one vendor, so an audit judges
+  every candidate session with the configured judge, whatever agent recorded
+  it, and there is no flag to restrict it. `--dry-run` prints each session's
+  agent and the judge's.
