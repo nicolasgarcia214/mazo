@@ -265,7 +265,13 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
         claude_name_only: true,
         authoring_skills: vec![],
     };
-    let cfg = skima::config::Config { source: hs.source.clone(), loose: vec![], homes: vec![], policy };
+    let cfg = skima::config::Config {
+        source: hs.source.clone(),
+        loose: vec![],
+        homes: vec![],
+        policy,
+        judge: Default::default(),
+    };
     let inv = skima::inventory::Inventory::load(&hs.source).unwrap();
     assert_eq!(skima::policy::per_skill(&cfg, &inv), Vec::<String>::new());
 

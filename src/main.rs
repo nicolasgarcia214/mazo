@@ -8,7 +8,7 @@ use skima::config::{self, Config, Home};
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Ledger};
 use skima::report::{self, Since, UsageArgs};
-use skima::{links, policy, scan};
+use skima::{audit, links, policy, scan};
 
 #[derive(Parser)]
 #[command(name = "skima", version, about = "Skill usage from agent transcripts, and sync of skill links")]
@@ -107,6 +107,19 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Judge how a skill performs in real sessions. Only --dry-run runs so far.
+    Audit {
+        skill: String,
+        /// The most sessions to judge.
+        #[arg(long, default_value_t = 20, conflicts_with = "all")]
+        limit: usize,
+        /// Judge every candidate session.
+        #[arg(long)]
+        all: bool,
+        /// List the sessions, the judge command and the input estimate; call nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -155,6 +168,9 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
             skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
         Cmd::Retire { name, force } => skima::lifecycle::retire(&cfg, &inv, &name, force),
+        Cmd::Audit { skill, limit, all, dry_run } => {
+            cmd_audit(&cfg, &inv, &skill, (!all).then_some(limit), dry_run, tty)
+        }
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }
@@ -175,6 +191,36 @@ fn with_scanned(
     for w in policy::freshness(cfg, &coverage, now) {
         eprintln!("{w}");
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `skima audit` (SPEC F18): usage errors exit 2 before the scan (D3).
+fn cmd_audit(
+    cfg: &Config,
+    inv: &Inventory,
+    skill: &str,
+    limit: Option<usize>,
+    dry_run: bool,
+    tty: bool,
+) -> skima::Result<ExitCode> {
+    let usage = |msg: String| {
+        eprintln!("ERROR: {msg}");
+        Ok(ExitCode::from(2))
+    };
+    if !inv.skills.contains(skill) {
+        return usage(format!("not a skill in the source: {skill}"));
+    }
+    if let Err(e) = audit::command(&cfg.judge, "", "", "") {
+        return usage(e);
+    }
+    if !dry_run {
+        return usage("judge calls are not implemented yet; run skima audit with --dry-run".into());
+    }
+    let data = ledger::data_dir()?;
+    scan::scan(cfg, inv, &data, false)?.warn_io_errors();
+    let ledger = Ledger::load(&data)?;
+    let candidates = audit::select(ledger.events(), skill, &audit::audited(&data, skill)?, limit);
+    print!("{}", audit::dry_run(skill, &cfg.judge, &candidates, tty)?);
     Ok(ExitCode::SUCCESS)
 }
 

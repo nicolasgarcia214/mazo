@@ -75,6 +75,7 @@ fn world(source: &Path) -> World {
             authoring_skills: ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into(),
             ..Policy::default()
         },
+        judge: Default::default(),
     };
     let inv = Inventory::load(source).unwrap();
     let coverage = BTreeMap::from([

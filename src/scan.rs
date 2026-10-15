@@ -220,10 +220,11 @@ fn has_canary(chunk: &tail::Chunk) -> bool {
     chunk.lines.iter().any(|(_, l)| CANARY.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
 }
 
-/// The earliest `"timestamp"` among the first lines of a transcript, for
-/// coverage. Records are written in time order except for a Skill result and
-/// its meta record, whose timestamps are a few milliseconds apart.
-fn first_timestamp(path: &Path) -> Option<String> {
+/// The earliest `"timestamp"` among the first lines of a transcript: when its
+/// session started, for coverage and the audit. Records are written in time
+/// order except for a Skill result and its meta record, whose timestamps are a
+/// few milliseconds apart.
+pub(crate) fn first_timestamp(path: &Path) -> Option<String> {
     use std::io::{BufRead, BufReader};
     let file = std::fs::File::open(path).ok()?;
     BufReader::new(file)

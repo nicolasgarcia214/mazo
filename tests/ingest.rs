@@ -87,7 +87,7 @@ impl Env {
         let skills: BTreeSet<String> = ["unslop", "gitmoji-conventional-commit", "grade"].map(String::from).into();
         let inv =
             Inventory { source: source.clone(), skills: skills.clone(), known: skills, worktree: None, history: None };
-        let cfg = Config { source, loose: vec![], homes, policy: Default::default() };
+        let cfg = Config { source, loose: vec![], homes, policy: Default::default(), judge: Default::default() };
         let env = Env { data: tmp.path().join("data/skima"), tmp, cfg, inv };
         for (dest, src) in files {
             env.put(dest, &fs::read(fixture(src)).unwrap());
@@ -644,7 +644,13 @@ fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
             );
             homes.push(home);
         }
-        let cfg = Config { source: tmp.path().join("skills"), loose: vec![], homes, policy: Default::default() };
+        let cfg = Config {
+            source: tmp.path().join("skills"),
+            loose: vec![],
+            homes,
+            policy: Default::default(),
+            judge: Default::default(),
+        };
         let report = scan::scan(&cfg, &Inventory::default(), &data, false).unwrap();
         let counts: Vec<usize> = cfg.homes.iter().map(|h| report.homes[&h.name].new_events.len()).collect();
         assert_eq!(counts, if audit { [0, 0, 0] } else { [1, 1, 1] }, "audit run: {audit}");

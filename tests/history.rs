@@ -168,7 +168,13 @@ fn outside_a_worktree_history_is_absent_and_no_grade_is_stale() {
     let g = evals::load(&inv, "s").grades.pop().unwrap();
     assert!(!g.stale());
 
-    let cfg = skima::config::Config { source: src.into(), loose: vec![], homes: vec![], policy: Default::default() };
+    let cfg = skima::config::Config {
+        source: src.into(),
+        loose: vec![],
+        homes: vec![],
+        policy: Default::default(),
+        judge: Default::default(),
+    };
     let coverage = Default::default();
     let now: Timestamp = "2026-10-13T12:00:00Z".parse().unwrap();
     let input = Input { cfg: &cfg, inv: &inv, events: &[], coverage: &coverage, now };

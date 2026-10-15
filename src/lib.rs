@@ -1,9 +1,11 @@
 //! skima: skill usage from agent transcripts, and sync of skill links.
 //!
-//! Three paths (SPEC §9): write `tail → adapters → classify → ledger`, read
-//! `ledger + inventory + evals → report`, sync `config + inventory + policy → links`.
+//! Four paths (SPEC §9): write `tail → adapters → classify → ledger`, read
+//! `ledger + inventory + evals → report`, sync `config + inventory + policy → links`,
+//! judge `ledger + adapters (condense) → audit`.
 
 pub mod adapters;
+pub mod audit;
 pub mod classify;
 pub mod config;
 pub mod evals;

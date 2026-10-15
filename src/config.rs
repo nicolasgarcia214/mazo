@@ -18,6 +18,22 @@ pub struct Config {
     pub loose: Vec<String>,
     pub homes: Vec<Home>,
     pub policy: Policy,
+    pub judge: Judge,
+}
+
+/// The optional `[judge]` table (SPEC §6.4, D28).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Judge {
+    pub agent: Agent,
+    /// Passed as `--model` (`-m` for Codex); unset means the agent's own default.
+    pub model: Option<String>,
+}
+
+impl Default for Judge {
+    fn default() -> Judge {
+        Judge { agent: Agent::Claude, model: None }
+    }
 }
 
 /// The `[policy]` table (SPEC §5.4): every rule off and no authoring skill by default.
@@ -70,6 +86,8 @@ struct RawConfig {
     loose: Vec<String>,
     #[serde(default)]
     policy: Policy,
+    #[serde(default, skip_serializing)]
+    judge: Judge,
     #[serde(default, rename = "home")]
     homes: Vec<RawHome>,
 }
@@ -127,7 +145,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
         };
         homes.push(Home { name: h.name, agent: h.agent, path, links: h.links });
     }
-    Ok(Some(Config { source, loose: raw.loose, homes, policy: raw.policy }))
+    Ok(Some(Config { source, loose: raw.loose, homes, policy: raw.policy, judge: raw.judge }))
 }
 
 /// `skima init` (SPEC F11): a config at `path` naming `source` absolutely, a
@@ -148,7 +166,7 @@ pub fn init(path: &Path, source: &Path) -> Result<()> {
                 links: BTreeMap::new(),
             })
             .collect();
-    let raw = RawConfig { source, loose: Vec::new(), policy: Policy::default(), homes };
+    let raw = RawConfig { source, loose: Vec::new(), policy: Policy::default(), judge: Judge::default(), homes };
     let text = toml::to_string(&raw).map_err(|e| e.to_string())?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -267,6 +285,24 @@ mod tests {
         assert_eq!(p.authoring_skills, ["grade"]);
         let p = policy("[policy]\nno_disable_model_invocation = true\nclaude_name_only = true\n").unwrap();
         assert!(p.no_disable_model_invocation && p.claude_name_only && !p.codex_manifest);
+    }
+
+    fn judge(table: &str) -> std::result::Result<Judge, String> {
+        toml::from_str::<RawConfig>(&format!("source = \".\"\n{table}")).map(|r| r.judge).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn judge_table_takes_agent_and_model_only() {
+        for table in ["", "[judge]\n"] {
+            let j = judge(table).unwrap();
+            assert_eq!((j.agent, j.model), (Agent::Claude, None), "{table:?}");
+        }
+        let j = judge("[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\n").unwrap();
+        assert_eq!((j.agent, j.model.as_deref()), (Agent::Codex, Some("gpt-5")));
+        assert_eq!(judge("[judge]\nagent = \"pi\"\n").unwrap().agent, Agent::Pi);
+        let err = judge("[judge]\nmodel = \"sonnet\"\ntemperature = 1\n").unwrap_err();
+        assert!(err.contains("unknown field `temperature`"), "{err}");
+        assert!(judge("[judge]\nagent = \"gemini\"\n").is_err());
     }
 
     #[test]

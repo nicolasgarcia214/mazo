@@ -163,7 +163,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home =
             Home { name: "claude".into(), agent: Agent::Claude, path: dir.path().into(), links: Default::default() };
-        let cfg = Config { source: dir.path().into(), loose: vec![], homes: vec![home], policy: Default::default() };
+        let cfg = Config {
+            source: dir.path().into(),
+            loose: vec![],
+            homes: vec![home],
+            policy: Default::default(),
+            judge: Default::default(),
+        };
         let now: jiff::Timestamp = "2026-10-31T00:00:00Z".parse().unwrap();
         let at = |days: i64| {
             let t = now.checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap();

@@ -46,6 +46,10 @@ name  = "pi"
 agent = "pi"
 path  = "~/.pi/agent"
 links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
+
+[judge]                           # optional: the agent skima audit calls
+agent = "claude"                  # claude (default); codex and pi are not available yet
+model = "sonnet"                  # optional; unset means the agent's own default
 ```
 
 The ledger lives in `${XDG_DATA_HOME:-~/.local/share}/skima/`. Back it up: once
@@ -65,8 +69,9 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry. Does not sync. |
 | `skima retire <name>` | Moves a skill to `.archive/` (`git mv` when tracked) and prunes its links. Refuses a skill used, or held by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
+| `skima audit <skill> --dry-run` | Lists the sessions an audit would judge (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) with their agent, project and condensed size, the judge command and an input-token estimate. Starts no judge; running without `--dry-run` is not available yet. |
 
-`usage`, `unused` and `show` scan first, so their numbers are current. Every
+`usage`, `unused`, `show` and `audit` scan first, so their numbers are current. Every
 report prints how far back each home's logs go: "unused since 2026-09-10" is not
 "never used".
 
