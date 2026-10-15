@@ -8,7 +8,7 @@ use skima::config::{self, Config, Home};
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Ledger};
 use skima::report::{self, Since, UsageArgs};
-use skima::{audit, links, policy, scan};
+use skima::{audit, html, links, policy, scan};
 
 #[derive(Parser)]
 #[command(name = "skima", version, about = "Skill usage from agent transcripts, and sync of skill links")]
@@ -63,6 +63,17 @@ enum Cmd {
         limit: usize,
         #[arg(long)]
         json: bool,
+    },
+    /// Write the HTML report: usage, grades to run, and every skill's card.
+    Report {
+        #[arg(long, default_value = "30d")]
+        since: Since,
+        /// Defaults to `<data dir>/report.html`.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Open the report with `xdg-open` or `open`.
+        #[arg(long)]
+        open: bool,
     },
     /// Drift and policy of every agent home. Writes nothing.
     Status {
@@ -161,6 +172,7 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
             }
             with_scanned(&cfg, &inv, |input| report::show(input, &skill, since, limit, json, tty))
         }
+        Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
         Cmd::Status { agent, json } => cmd_status(&cfg, &inv, agent, json),
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
         Cmd::New { name, description } => skima::lifecycle::new(&cfg, &name, &description),
@@ -222,6 +234,32 @@ fn cmd_audit(
     let candidates = audit::select(ledger.events(), skill, &audit::audited(&data, skill)?, limit);
     print!("{}", audit::dry_run(skill, &cfg.judge, &candidates, tty)?);
     Ok(ExitCode::SUCCESS)
+}
+
+/// SPEC F16: the report goes under the data directory, outside any git
+/// repository, unless `--out` says otherwise.
+fn cmd_report(
+    cfg: &Config,
+    inv: &Inventory,
+    since: Since,
+    out: Option<std::path::PathBuf>,
+    open: bool,
+) -> skima::Result<ExitCode> {
+    let path = match &out {
+        Some(p) => p.clone(),
+        None => ledger::data_dir()?.join("report.html"),
+    };
+    let code = with_scanned(cfg, inv, |input| {
+        html::write(&path, &html::render(&report::report(input, since)?))?;
+        Ok(format!("wrote {}\n", path.display()))
+    })?;
+    if out.is_some() && html::in_worktree(&path) {
+        eprintln!("warning: {} is inside a git worktree; the report shows cwds and prompt excerpts", path.display());
+    }
+    if open {
+        html::open(&path)?;
+    }
+    Ok(code)
 }
 
 fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bool) -> skima::Result<ExitCode> {

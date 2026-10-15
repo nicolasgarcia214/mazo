@@ -11,6 +11,7 @@ pub mod config;
 pub mod evals;
 pub mod examples;
 pub mod history;
+pub mod html;
 pub mod inventory;
 pub mod ledger;
 pub mod lifecycle;

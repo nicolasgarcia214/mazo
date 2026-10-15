@@ -63,6 +63,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima usage` | One row per skill: sessions, loads per channel, agents, last use, a 30-day sparkline, the latest grade. |
 | `skima unused` | Skills with no strong load in the window, with `held`, `cluster`, `new` and `weak-only` notes. |
 | `skima show <skill>` | The skill card: daily histogram and recent events, each with the log line it came from, then description, git history, every grade and retro, cites and cited-by, usage by agent, channel and project, then examples: the invocation on each agent, the manifest's `default_prompt`, and up to three real prompts read from transcripts at display time and never stored. `--json` emits the whole card. |
+| `skima report` | Writes one self-contained HTML page: the `usage --all` table, the grades to run as `/grade <skill>`, and every skill's card. It goes to `report.html` in the data directory with mode `0600` and is overwritten on each run. `--out <path>` writes elsewhere and warns inside a git worktree, because the page shows cwds; `--open` opens it. |
 | `skima status` | Drift and policy for every home. Writes nothing. |
 | `skima sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
 | `skima init --source <dir>` | Writes the config for a skills directory: one home per existing agent directory, every policy rule off. Refuses to overwrite. |
@@ -71,7 +72,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 | `skima audit <skill> --dry-run` | Lists the sessions an audit would judge (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) with their agent, project and condensed size, the judge command and an input-token estimate. Starts no judge; running without `--dry-run` is not available yet. |
 
-`usage`, `unused`, `show` and `audit` scan first, so their numbers are current. Every
+`usage`, `unused`, `show`, `report` and `audit` scan first, so their numbers are current. Every
 report prints how far back each home's logs go: "unused since 2026-09-10" is not
 "never used".
 

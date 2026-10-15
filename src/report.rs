@@ -211,11 +211,13 @@ struct GradeOut {
     #[serde(flatten)]
     grade: Grade,
     stale: bool,
+    /// `+N`, `+wip` or empty.
+    mark: String,
 }
 
 impl From<Grade> for GradeOut {
     fn from(grade: Grade) -> GradeOut {
-        GradeOut { stale: grade.stale(), grade }
+        GradeOut { stale: grade.stale(), mark: grade.mark(), grade }
     }
 }
 
@@ -245,9 +247,9 @@ struct UsageRow {
     grade: Option<GradeOut>,
 }
 
-/// Rendered `skima usage` output (text, or JSON when `json`).
-pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
-    let view = View::new(input);
+/// The `usage` rows, most used first.
+fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
+    let input = view.input;
     let f = Filter { all: args.all, authoring: args.authoring, agent: args.agent, channel: args.channel };
     let start = view.start(args.since);
     let mut skills: BTreeSet<&str> = input.inv.skills.iter().map(String::as_str).collect();
@@ -283,6 +285,13 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
         })
         .collect();
     rows.sort_by(|a, b| (b.sess, b.read + b.ref_).cmp(&(a.sess, a.read + a.ref_)).then_with(|| a.skill.cmp(&b.skill)));
+    rows
+}
+
+/// Rendered `skima usage` output (text, or JSON when `json`).
+pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
+    let view = View::new(input);
+    let rows = usage_rows(&view, args);
     if json {
         let coverage: BTreeMap<String, String> = view.coverage(None).into_iter().collect();
         return format!("{}\n", json!({"rows": rows, "coverage": coverage}));
@@ -608,7 +617,7 @@ fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> C
 }
 
 /// `$HOME` as `~` (SPEC F12 Paths).
-fn tilde(path: &str) -> String {
+pub fn tilde(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     match path.strip_prefix(home.as_str()) {
         Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
@@ -747,4 +756,38 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         }
     }
     Ok(out)
+}
+
+/// Events listed on each card of the HTML report: `show`'s default `--limit`.
+const REPORT_EVENTS: usize = 20;
+
+/// The model of `skima report` (SPEC F16): the `usage --all` rows and
+/// coverage, the grades to run, and every inventory skill's card. The page
+/// renders this value, so it shows nothing the JSON lacks (D12).
+pub fn report(input: &Input, since: Since) -> crate::Result<serde_json::Value> {
+    let view = View::new(input);
+    let args = UsageArgs { since, agent: None, channel: None, all: true, authoring: false };
+    let rows = usage_rows(&view, &args);
+    // Rows outside the inventory have no grade and nothing to grade.
+    let grades_due: Vec<serde_json::Value> = rows
+        .iter()
+        .filter(|r| input.inv.skills.contains(&r.skill))
+        .filter_map(|r| {
+            let state = match &r.grade {
+                None => "missing",
+                Some(g) if g.stale => "stale",
+                Some(_) => return None,
+            };
+            Some(json!({"skill": r.skill, "state": state, "command": format!("/grade {}", r.skill)}))
+        })
+        .collect();
+    let cards: Vec<Card> = input.inv.skills.iter().map(|s| card(&view, s, since, REPORT_EVENTS)).collect();
+    let coverage: BTreeMap<String, String> = view.coverage(None).into_iter().collect();
+    Ok(json!({
+        "generated": input.now.to_string(),
+        "since": view.start(since).map(|s| view.date(s).to_string()),
+        "usage": {"rows": rows, "coverage": coverage},
+        "grades_due": grades_due,
+        "cards": serde_json::to_value(&cards).map_err(|e| e.to_string())?,
+    }))
 }
