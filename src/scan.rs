@@ -79,6 +79,8 @@ pub fn scan_with<'a>(
     let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut lines: Vec<Event> = Vec::new();
     let files: Vec<Vec<PathBuf>> = cfg.homes.iter().map(|h| adapter_for(h.agent).files(h)).collect();
+    // Agents record their resolved cwd, so compare against the resolved data dir.
+    let audit_runs = std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf()).join("audit-runs");
 
     // Reparse builds a new ledger that starts with every typed event and every
     // event whose transcript this run does not parse, then appends the parse to
@@ -93,7 +95,7 @@ pub fn scan_with<'a>(
 
     for (home, files) in cfg.homes.iter().zip(files) {
         let adapter = adapter_for(home.agent);
-        let classifier = Classifier { inv, home, homes: &cfg.homes };
+        let classifier = Classifier { inv, home, homes: &cfg.homes, audit_runs: &audit_runs };
         let mut roots_cache = Roots::default();
         let mut hr = HomeReport::default();
         let first_scan = !coverage.contains_key(&home.name);
@@ -141,7 +143,7 @@ pub fn scan_with<'a>(
                 hr.canary.push(key.clone());
             }
             for raw in parsed.raws {
-                let event = classifier.event(&mut roots_cache, raw, &path);
+                let Some(event) = classifier.event(&mut roots_cache, raw, &path) else { continue };
                 let target = if reparse { &mut fresh } else { &mut ledger };
                 if let Some(line) = target.admit(event) {
                     hr.new_events.push(line.clone());
@@ -154,7 +156,7 @@ pub fn scan_with<'a>(
         if home.agent == Agent::Claude && first_scan {
             for raw in adapters::claude::backfill(home, &inv.known) {
                 let history = home.path.join("history.jsonl");
-                let event = classifier.event(&mut roots_cache, raw, &history);
+                let Some(event) = classifier.event(&mut roots_cache, raw, &history) else { continue };
                 let target = if reparse { &mut fresh } else { &mut ledger };
                 if let Some(line) = target.admit(event) {
                     hr.new_events.push(line.clone());

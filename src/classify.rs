@@ -93,10 +93,17 @@ pub struct Classifier<'a> {
     pub inv: &'a Inventory,
     pub home: &'a Home,
     pub homes: &'a [Home],
+    /// `<data dir>/audit-runs`, where the judge runs.
+    pub audit_runs: &'a Path,
 }
 
 impl Classifier<'_> {
-    pub fn event(&self, roots: &mut Roots, raw: Raw, file: &Path) -> Event {
+    /// The event for `raw`, or `None` for a session whose cwd is inside
+    /// `<data dir>/audit-runs/`: the judge's own runs are never usage (SPEC §4.7).
+    pub fn event(&self, roots: &mut Roots, raw: Raw, file: &Path) -> Option<Event> {
+        if raw.session.cwd.as_deref().is_some_and(|c| Path::new(c).starts_with(self.audit_runs)) {
+            return None;
+        }
         let session = roots.root(self.home, &raw.session.id, raw.session.parent.as_ref());
         let id = match &raw.key {
             Key::Plain(s) => s.clone(),
@@ -117,7 +124,7 @@ impl Classifier<'_> {
                 self.inv.worktree.as_deref().is_some_and(|w| c.starts_with(w))
                     || self.homes.iter().any(|h| c.starts_with(h.skills_dir()))
             });
-        Event {
+        Some(Event {
             v: 1,
             id,
             ts: raw.ts,
@@ -133,7 +140,7 @@ impl Classifier<'_> {
             cwd,
             authoring,
             src: format!("{}:{}", file.display(), raw.line),
-        }
+        })
     }
 
     /// Claude Skill results and typed history: the name alone decides. A Skill

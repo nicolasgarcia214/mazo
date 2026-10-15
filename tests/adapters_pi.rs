@@ -236,3 +236,20 @@ fn bare_skill_block_prompt_is_the_message_before_it() {
     std::fs::write(&path, text).unwrap();
     assert_eq!(pi::Pi.prompt_at(&format!("{}:3", path.display())).as_deref(), Some("Plan the scrubbed work."));
 }
+
+#[test]
+fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
+    // Line 4 is a `/skill:unslop` expansion, its own prompt; line 7 expands
+    // `unslop` again and line 8 `grade`.
+    let got = pi::Pi.condense(&format!("{}:4", fixture("condense.jsonl").display()), 60_000).unwrap();
+    let want = [
+        "L4: user: /skill:unslop tidy the prose".to_string(),
+        "L5: assistant: Working on it.".into(),
+        format!("L5: tool bash: {{\"command\":\"echo {}", "a".repeat(183)),
+        format!("L6: result: {}", "r".repeat(500)),
+        "L7: user: /skill:unslop check the tone".into(),
+    ]
+    .join("\n");
+    assert_eq!(got, want);
+    assert!(!got.contains("SKILL_BODY_TEXT") && !got.contains("_TAIL"));
+}

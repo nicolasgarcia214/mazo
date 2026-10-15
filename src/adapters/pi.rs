@@ -47,6 +47,36 @@ impl Adapter for Pi {
     fn prompt_at(&self, src: &str) -> Option<String> {
         super::prompt_back(src, user_turn)
     }
+
+    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
+        super::condense(self, src, max_chars, user_turn, render)
+    }
+}
+
+/// What the judge keeps of an entry (SPEC §6.4): the user's text without
+/// `/skill:` bodies, assistant text, tool calls and tool results.
+fn render(v: &Value) -> Vec<String> {
+    if let Some(text) = user_turn(v) {
+        return vec![format!("user: {text}")];
+    }
+    let msg = &v["message"];
+    if v["type"] != "message" {
+        return Vec::new();
+    }
+    match msg["role"].as_str() {
+        Some("assistant") => msg["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| match item["type"].as_str()? {
+                "text" => Some(format!("assistant: {}", item["text"].as_str()?)),
+                "toolCall" => Some(super::tool_call(item["name"].as_str()?, &item["arguments"].to_string())),
+                _ => None,
+            })
+            .collect(),
+        Some("toolResult") => vec![super::tool_result(&super::message_text(&msg["content"]))],
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC §4.7: a user `message` entry. A `/skill:` expansion stands for

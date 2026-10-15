@@ -318,6 +318,9 @@ impl<F: Fn(&Path, &Chunk, &mut Parsed)> Adapter for Rule<F> {
     fn prompt_at(&self, _src: &str) -> Option<String> {
         None
     }
+    fn condense(&self, _src: &str, _max_chars: usize) -> Option<String> {
+        None
+    }
 }
 
 #[test]
@@ -610,4 +613,34 @@ fn a_skill_result_for_a_known_but_removed_skill_stays_canonical() {
     let tool = events(&env.data).into_iter().find(|e| e.channel == skima::ledger::Channel::Tool).unwrap();
     assert_eq!(tool.skill, "unslop");
     assert_eq!(tool.origin, skima::ledger::Origin::Canonical);
+}
+
+#[test]
+fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
+    // One strong load per agent, scanned once with its recorded cwd and once
+    // with that cwd moved under `<data dir>/audit-runs/` (SPEC §4.7).
+    let sessions = [
+        (Agent::Claude, "claude/pair.jsonl", "/home/nicolas/projects/argus", "projects/p/pair.jsonl"),
+        (Agent::Codex, "codex/name_block.jsonl", "/home/nicolas/projects/demo", "2026/07/27/rollout.jsonl"),
+        (Agent::Pi, "pi/slash.jsonl", "/home/nicolas/dotfiles", "p/session.jsonl"),
+    ];
+    for audit in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = fs::canonicalize(tmp.path()).unwrap().join("data/skima");
+        let run = data.join("audit-runs/run-1");
+        let mut homes = Vec::new();
+        for (agent, fixture, cwd, dest) in sessions {
+            let home = common::home(&ledger::name(agent), agent, &tmp.path().join(ledger::name(agent)));
+            let text = fs::read_to_string(common::fixture(fixture)).unwrap();
+            common::write(
+                &home.transcripts().join(dest),
+                &if audit { text.replace(cwd, run.to_str().unwrap()) } else { text },
+            );
+            homes.push(home);
+        }
+        let cfg = Config { source: tmp.path().join("skills"), loose: vec![], homes, policy: Default::default() };
+        let report = scan::scan(&cfg, &Inventory::default(), &data, false).unwrap();
+        let counts: Vec<usize> = cfg.homes.iter().map(|h| report.homes[&h.name].new_events.len()).collect();
+        assert_eq!(counts, if audit { [0, 0, 0] } else { [1, 1, 1] }, "audit run: {audit}");
+    }
 }

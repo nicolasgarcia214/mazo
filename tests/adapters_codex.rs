@@ -335,3 +335,24 @@ fn bare_name_prompt_is_the_turn_before_it() {
     // Line 5 is a bare `$gitmoji-conventional-commit`.
     assert_eq!(prompt("prompt_bare.jsonl", 6).as_deref(), Some("Validate the scrubbed solution with an agent."));
 }
+
+#[test]
+fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
+    // Line 6 is the `user_message` behind the `<skill>` load on line 7; line
+    // 18 loads `grade`. `response_item` user messages, reasoning and
+    // `agent_message` duplicates keep nothing.
+    let got = Codex.condense(&format!("{}:7", fixtures().join("condense.jsonl").display()), 60_000).unwrap();
+    let want = [
+        "L6: user: $unslop tidy the prose".to_string(),
+        "L9: assistant: Working on it.".into(),
+        format!("L11: tool exec_command: {{\"cmd\": \"echo {}", "a".repeat(186)),
+        format!("L12: result: {}", "r".repeat(500)),
+        "L13: tool exec: text('hi')".into(),
+        "L14: result: Script completed".into(),
+        "L15: user: Now check the tone.".into(),
+        "L17: user: $grade it".into(),
+    ]
+    .join("\n");
+    assert_eq!(got, want);
+    assert!(!got.contains("SKILL_BODY_TEXT") && !got.contains("_TAIL"));
+}

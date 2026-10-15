@@ -81,6 +81,33 @@ impl Adapter for Codex {
     fn prompt_at(&self, src: &str) -> Option<String> {
         super::prompt_back(src, user_turn)
     }
+
+    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
+        super::condense(self, src, max_chars, user_turn, render)
+    }
+}
+
+/// What the judge keeps of a record (SPEC §6.4): the user's turns from
+/// `event_msg`, and from `response_item` the assistant's text, tool calls and
+/// tool results. `response_item` user messages repeat the turns or carry
+/// `<skill>` bodies, so they keep nothing.
+fn render(v: &Value) -> Vec<String> {
+    if let Some(text) = user_turn(v) {
+        return vec![format!("user: {text}")];
+    }
+    let p = &v["payload"];
+    if v["type"] != "response_item" {
+        return Vec::new();
+    }
+    let text = |k: &str| p[k].as_str().map_or_else(|| super::message_text(&p[k]), str::to_string);
+    let name = p["name"].as_str().unwrap_or_default();
+    match p["type"].as_str() {
+        Some("message") if p["role"] == "assistant" => vec![format!("assistant: {}", text("content"))],
+        Some("function_call") => vec![super::tool_call(name, &text("arguments"))],
+        Some("custom_tool_call") => vec![super::tool_call(name, &text("input"))],
+        Some("function_call_output" | "custom_tool_call_output") => vec![super::tool_result(&text("output"))],
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC §4.7: an `event_msg` `user_message`, or the `item_completed`

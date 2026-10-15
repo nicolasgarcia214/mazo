@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::config::{self, Home};
 use crate::ledger::{Agent, Channel};
 use crate::readcmd::{self, Reads};
-use crate::tail::Chunk;
+use crate::tail::{Chunk, Cursor};
 
 /// Event identity before classification.
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +166,10 @@ pub trait Adapter {
     /// at display time and never stored (SPEC §4.7). `None` when the file is
     /// gone or holds no user turn up to that line.
     fn prompt_at(&self, src: &str) -> Option<String>;
+    /// The judge's view of the session window around the strong load at `src`,
+    /// at most `max_chars` characters plus a cut marker (SPEC §6.4). `None`
+    /// when the file is gone or `src` is not a strong load.
+    fn condense(&self, src: &str, max_chars: usize) -> Option<String>;
 }
 
 pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
@@ -180,30 +184,114 @@ pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
 /// (`<file>:<line>`), that record included: a `/skill:` message holds its own
 /// prompt, a Claude meta record or Codex injection does not (SPEC §4.7).
 fn prompt_back(src: &str, authored: impl Fn(&Value) -> Option<String>) -> Option<String> {
+    let t = transcript(src)?;
+    authored_back(&t.chunk.lines[..t.line], &authored).map(|(_, text)| text)
+}
+
+/// The transcript `src` (`<file>:<line>`) names, read whole, and that line.
+struct Transcript {
+    path: PathBuf,
+    chunk: Chunk,
+    line: usize,
+}
+
+fn transcript(src: &str) -> Option<Transcript> {
     let (file, line) = src.rsplit_once(':')?;
     let line: usize = line.parse().ok()?;
     let bytes = std::fs::read(file).ok()?;
     let body = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
-    let lines: Vec<&[u8]> = body.split(|&b| b == b'\n').take(line).collect();
+    let lines: Vec<(u64, Vec<u8>)> = (1..).zip(body.split(|&b| b == b'\n').map(<[u8]>::to_vec)).collect();
     if line == 0 || lines.len() < line {
         return None;
     }
-    lines.iter().rev().filter_map(|l| serde_json::from_slice::<Value>(l).ok()).find_map(|v| authored(&v))
+    let cursor = Cursor { dev: 0, ino: 0, offset: 0, line: 0 };
+    Some(Transcript { path: PathBuf::from(file), chunk: Chunk { lines, cursor }, line })
 }
 
-/// The text of a message `content`: a string, or its `text` blocks joined by
-/// newlines, so an image beside the text does not hide it.
+/// The line and text of the first record `authored` reads walking back from
+/// the last of `lines`.
+fn authored_back(lines: &[(u64, Vec<u8>)], authored: &impl Fn(&Value) -> Option<String>) -> Option<(u64, String)> {
+    lines.iter().rev().find_map(|(n, l)| Some((*n, authored(&serde_json::from_slice(l).ok()?)?)))
+}
+
+/// The window ends before the 40th user-authored message after its start.
+const WINDOW_MESSAGES: usize = 40;
+const TOOL_INPUT_CHARS: usize = 200;
+const TOOL_RESULT_CHARS: usize = 500;
+const CUT: &str = "\n[… cut …]\n";
+
+/// SPEC §6.4 condensing, shared by every adapter. The window runs from the
+/// prompt behind the strong load at `src` (the load itself when no prompt
+/// precedes it) up to, not including, the first strong load of a different
+/// skill after `src`, the 40th `authored` record after the start, or the end
+/// of the file. `render` gives a record's kept parts, each prefixed `L<line>: `.
+fn condense(
+    adapter: &dyn Adapter,
+    src: &str,
+    max_chars: usize,
+    authored: impl Fn(&Value) -> Option<String>,
+    render: impl Fn(&Value) -> Vec<String>,
+) -> Option<String> {
+    let t = transcript(src)?;
+    let lines = &t.chunk.lines;
+    let header = lines.first().map(|(_, l)| l.as_slice());
+    // Strong loads come from the harness's own markers, so no skill roots are needed.
+    let strong: Vec<Raw> = adapter
+        .parse(&SkillRoots::default(), &t.path, header, &t.chunk)
+        .raws
+        .into_iter()
+        .filter(|r| r.channel.strong())
+        .collect();
+    let load = t.line as u64;
+    let skill = &strong.iter().find(|r| r.line == load)?.skill;
+    let start = authored_back(&lines[..t.line], &authored).map_or(load, |(n, _)| n);
+    let other = strong.iter().filter(|r| r.line > load && r.skill != *skill).map(|r| r.line).min();
+    let value = |l: &[u8]| serde_json::from_slice::<Value>(l).ok();
+    let limit = lines
+        .iter()
+        .filter(|(n, l)| *n > start && value(l).and_then(|v| authored(&v)).is_some())
+        .nth(WINDOW_MESSAGES - 1)
+        .map(|(n, _)| *n);
+    let end = other.into_iter().chain(limit).min().unwrap_or(u64::MAX);
+    let text = lines
+        .iter()
+        .filter(|(n, _)| (start..end).contains(n))
+        .filter_map(|(n, l)| Some((n, render(&value(l)?))))
+        .flat_map(|(n, parts)| parts.into_iter().map(move |p| format!("L{n}: {p}")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(cap(text, max_chars))
+}
+
+/// `text` cut to the first two thirds and the last third of `max_chars`
+/// characters, with [`CUT`] between, when it is longer.
+fn cap(text: String, max_chars: usize) -> String {
+    let len = text.chars().count();
+    if len <= max_chars {
+        return text;
+    }
+    let head = max_chars * 2 / 3;
+    let at = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
+    format!("{}{CUT}{}", &text[..at(head)], &text[at(len - (max_chars - head))..])
+}
+
+/// A tool call as the judge sees it: its name and the start of its input.
+fn tool_call(name: &str, input: &str) -> String {
+    format!("tool {name}: {}", input.chars().take(TOOL_INPUT_CHARS).collect::<String>())
+}
+
+/// A tool result as the judge sees it: the start of its text.
+fn tool_result(output: &str) -> String {
+    format!("result: {}", output.chars().take(TOOL_RESULT_CHARS).collect::<String>())
+}
+
+/// The text of a message `content`: a string, or the `text` of its blocks
+/// (`text`, `input_text`, `output_text`) joined by newlines, so an image
+/// beside the text does not hide it.
 fn message_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
-        _ => content
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|b| b["type"] == "text")
-            .filter_map(|b| b["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
+        _ => content.as_array().into_iter().flatten().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n"),
     }
 }
 

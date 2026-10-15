@@ -41,6 +41,34 @@ impl Adapter for Claude {
     fn prompt_at(&self, src: &str) -> Option<String> {
         super::prompt_back(src, authored)
     }
+
+    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
+        super::condense(self, src, max_chars, authored, render)
+    }
+}
+
+/// What the judge keeps of a record (SPEC §6.4): the user's text, assistant
+/// text, tool calls and tool results. Meta records, which carry skill bodies,
+/// keep nothing.
+fn render(v: &Value) -> Vec<String> {
+    if let Some(text) = authored(v) {
+        return vec![format!("user: {text}")];
+    }
+    let content = &v["message"]["content"];
+    match v["type"].as_str() {
+        Some("user") if v["isMeta"] != true => blocks(content)
+            .filter(|b| b["type"] == "tool_result")
+            .map(|b| super::tool_result(&super::message_text(&b["content"])))
+            .collect(),
+        Some("assistant") => blocks(content)
+            .filter_map(|b| match b["type"].as_str()? {
+                "text" => Some(format!("assistant: {}", b["text"].as_str()?)),
+                "tool_use" => Some(super::tool_call(b["name"].as_str()?, &b["input"].to_string())),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// One transcript record with the fields every event takes from it.

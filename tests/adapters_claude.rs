@@ -240,8 +240,9 @@ fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
         Inventory { skills: ["unslop".to_string()].into(), known: ["unslop".to_string()].into(), ..Default::default() };
     let h = home(dir.path());
     let homes = [h.clone()];
-    let classifier = Classifier { inv: &inv, home: &h, homes: &homes };
-    let event = |raw: Raw| classifier.event(&mut Roots::default(), raw, &p);
+    let audit_runs = dir.path().join("audit-runs");
+    let classifier = Classifier { inv: &inv, home: &h, homes: &homes, audit_runs: &audit_runs };
+    let event = |raw: Raw| classifier.event(&mut Roots::default(), raw, &p).unwrap();
     let mut ledger = Ledger::load(dir.path()).unwrap();
     let stored = ledger.admit(event(first.raws[0].clone())).unwrap();
     let upgrade = ledger.admit(event(second.raws[0].clone())).unwrap();
@@ -574,4 +575,85 @@ fn expired_transcript_has_no_prompt() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(Claude.prompt_at(&format!("{}:2", dir.path().join("gone.jsonl").display())), None);
     assert_eq!(prompt("slash.jsonl", 3), None, "a line past the end");
+}
+
+/// `condense` at line `line` of `path` with the audit's 60,000-character cap (SPEC §6.4).
+fn condense_at(path: &Path, line: u64, max_chars: usize) -> Option<String> {
+    Claude.condense(&format!("{}:{line}", path.display()), max_chars)
+}
+
+#[test]
+fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
+    // Line 3 is the prompt, line 5 the `unslop` Skill result and line 6 its
+    // meta record with the body; line 11 loads `unslop` again and line 14 loads
+    // `grade`, which ends the window.
+    let got = condense_at(&fixture("condense.jsonl"), 5, 60_000).unwrap();
+    let input = format!("{{\"command\":\"echo {}", "a".repeat(183));
+    let want = [
+        "L3: user: Please tidy the prose.".to_string(),
+        r#"L4: tool Skill: {"skill":"unslop"}"#.into(),
+        "L5: result: Launching skill: unslop".into(),
+        "L7: assistant: Working on it.".into(),
+        format!("L7: tool Bash: {input}"),
+        format!("L8: result: {}", "r".repeat(500)),
+        "L9: user: Now check the tone.".into(),
+        r#"L10: tool Skill: {"skill":"unslop"}"#.into(),
+        "L11: result: Launching skill: unslop".into(),
+        r#"L13: tool Skill: {"skill":"grade"}"#.into(),
+    ]
+    .join("\n");
+    assert_eq!(got, want);
+    assert!(!got.contains("SKILL_BODY_TEXT") && !got.contains("_TAIL"));
+}
+
+#[test]
+fn condense_needs_a_strong_load_at_src() {
+    assert_eq!(condense_at(&fixture("condense.jsonl"), 3, 60_000), None, "a user message");
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(condense_at(&dir.path().join("gone.jsonl"), 5, 60_000), None);
+}
+
+/// A transcript: line 1 is the prompt, lines 2–4 load `unslop`, then `rest`.
+fn transcript_with(dir: &Path, rest: impl Iterator<Item = serde_json::Value>) -> PathBuf {
+    let fixture = std::fs::read_to_string(fixture("condense.jsonl")).unwrap();
+    let load = fixture.lines().skip(3).take(3);
+    let record = |kind: &str, content: serde_json::Value| {
+        serde_json::json!({"type": kind, "timestamp": "2026-10-14T05:00:00Z", "sessionId": "s",
+            "message": {"role": kind, "content": content}})
+        .to_string()
+    };
+    let lines: Vec<String> = std::iter::once(record("user", "go".into()))
+        .chain(load.map(str::to_string))
+        .chain(rest.map(|v| record(v["role"].as_str().unwrap(), v["content"].clone())))
+        .collect();
+    let path = dir.join("t.jsonl");
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    path
+}
+
+#[test]
+fn condense_stops_before_the_40th_user_message_after_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    // `m0` is on line 5, so `m39`, the 40th user message after line 1, is on line 44.
+    let path =
+        transcript_with(dir.path(), (0..45).map(|i| serde_json::json!({"role": "user", "content": format!("m{i}")})));
+    let got = condense_at(&path, 3, 60_000).unwrap();
+    assert!(got.starts_with("L1: user: go\n"));
+    assert!(got.ends_with("\nL43: user: m38"), "{got}");
+}
+
+#[test]
+fn condense_keeps_two_thirds_head_and_one_third_tail_of_any_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = |i: usize| serde_json::json!([{"type": "text", "text": format!("{i:04} ").repeat(200)}]);
+    let path =
+        transcript_with(dir.path(), (0..100).map(|i| serde_json::json!({"role": "assistant", "content": text(i)})));
+    let full: Vec<char> = condense_at(&path, 3, usize::MAX).unwrap().chars().collect();
+    assert!(full.len() > 60_000);
+    assert_eq!(condense_at(&path, 3, full.len()).unwrap().chars().count(), full.len(), "at the cap: uncut");
+    for (cap, head, tail) in [(60_000, 40_000, 20_000), (1_000, 666, 334), (1_001, 667, 334), (1_002, 668, 334)] {
+        let part = |c: &[char]| c.iter().collect::<String>();
+        let want = format!("{}\n[… cut …]\n{}", part(&full[..head]), part(&full[full.len() - tail..]));
+        assert_eq!(condense_at(&path, 3, cap).unwrap(), want, "cap {cap}");
+    }
 }

@@ -92,6 +92,34 @@ Measured on 2026-10-13 against this machine's logs (SPEC §10.2, §10.3):
 Reads with commands skima's grammar does not parse (`awk`, globs, heredocs) are
 missed; `skima scan --report` counts them and prints samples.
 
+## Adding an agent
+
+Each agent is one module in `src/adapters/` implementing `Adapter`, plus one
+`Agent` variant. Adapters only turn transcript records into events, prompts and
+condensed sessions; identity, actor, root session and authoring are computed
+once, in `classify.rs`.
+
+```rust
+pub trait Adapter {
+    /// Transcript files of a home, sorted by basename (SPEC §6.2).
+    fn files(&self, home: &Home) -> Vec<PathBuf>;
+    /// Raw events from the lines of `chunk`; `header` is line 1 of the file.
+    fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
+    /// The user-authored text behind the load at `src` (`<file>:<line>`) (SPEC §4.7).
+    fn prompt_at(&self, src: &str) -> Option<String>;
+    /// The judge's view of the session window around the strong load at `src` (SPEC §6.4).
+    fn condense(&self, src: &str, max_chars: usize) -> Option<String>;
+}
+```
+
+- `files` has a default: every `*.jsonl` under the home's transcripts directory.
+- `parse` gets the new lines since the file's cursor that pass the scan's
+  prefilter, not the whole file.
+- `prompt_at` and `condense` read the transcript at display or audit time and
+  return `None` when it is gone. Both share the walk in `adapters/mod.rs`; an
+  adapter supplies which records are user-authored and what the judge keeps
+  of each record.
+
 ## Tests
 
 ```

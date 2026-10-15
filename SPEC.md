@@ -1404,11 +1404,11 @@ pub trait Adapter {
     /// Transcript files under one home, in scan order (§6.2).
     fn files(&self, home: &Home) -> Vec<PathBuf>;
     /// Events from the lines of `chunk`; `header` is line 1 of the file.
-    fn parse(&self, roots: &SkillRoots, path: &Path, header: &str, chunk: Chunk) -> Parsed;
-    /// The user-authored text behind the load at `src` (§4.7).
-    fn prompt_at(&self, src: &Locator) -> Option<String>;
-    /// The judge's view of the session window starting at `src` (§6.4).
-    fn condense(&self, src: &Locator, max_chars: usize) -> Option<Condensed>;
+    fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
+    /// The user-authored text behind the load at `src` (`<file>:<line>`) (§4.7).
+    fn prompt_at(&self, src: &str) -> Option<String>;
+    /// The judge's view of the session window around the strong load at `src` (§6.4).
+    fn condense(&self, src: &str, max_chars: usize) -> Option<String>;
 }
 ```
 
