@@ -246,11 +246,13 @@ fn cmd_report(
     open: bool,
 ) -> skima::Result<ExitCode> {
     let path = match &out {
-        Some(p) => p.clone(),
+        // Absolute, so the opener and the printed path do not depend on its cwd.
+        Some(p) => std::path::absolute(p).map_err(|e| format!("{}: {e}", p.display()))?,
         None => ledger::data_dir()?.join("report.html"),
     };
     let code = with_scanned(cfg, inv, |input| {
-        html::write(&path, &html::render(&report::report(input, since)?))?;
+        let page = html::render(&report::report(input, since)?, &jiff::tz::TimeZone::system());
+        html::write(&path, &page)?;
         Ok(format!("wrote {}\n", path.display()))
     })?;
     if out.is_some() && html::in_worktree(&path) {

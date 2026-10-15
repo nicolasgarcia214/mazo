@@ -7,6 +7,8 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde_json::Value;
 
 use crate::report::tilde;
@@ -36,6 +38,8 @@ svg .z { fill: var(--line); }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
 dt { color: var(--muted); }
 dd { margin: 0; }
+blockquote { margin: 2px 0 8px; padding-left: 8px; border-left: 2px solid var(--line); white-space: pre-wrap; }
+ul { margin: 0; padding-left: 18px; }
 ";
 
 const LEGEND: &str = "agents C Claude, X Codex, P Pi · the 30d chart has one bar per day, a grey tick for none · \
@@ -70,10 +74,18 @@ fn num(v: &Value) -> u64 {
     v.as_u64().unwrap_or(0)
 }
 
-/// The `YYYY-MM-DD` of a timestamp, `-` for none.
-fn day(v: &Value) -> String {
-    v.as_str().map_or("-".into(), |t| esc(t.get(..10).unwrap_or(t)))
+/// A timestamp in the report's zone, as `show` prints it; `-` for none.
+fn local(v: &Value, tz: &TimeZone, format: &str) -> String {
+    match v.as_str() {
+        None => "-".into(),
+        Some(t) => {
+            esc(&t.parse::<Timestamp>().map_or(t.to_string(), |t| t.to_zoned(tz.clone()).strftime(format).to_string()))
+        }
+    }
 }
+
+const DAY: &str = "%Y-%m-%d";
+const MINUTE: &str = "%Y-%m-%d %H:%M";
 
 fn anchor(skill: &str) -> String {
     format!("skill-{}", esc(skill))
@@ -151,7 +163,7 @@ fn table(header: &[&str], rows: &[Vec<String>]) -> String {
     format!("<div class=\"wrap\"><table><tr>{head}</tr>{body}</table></div>")
 }
 
-fn usage(model: &Value) -> String {
+fn usage(model: &Value, tz: &TimeZone) -> String {
     let carded: Vec<&str> = list(&model["cards"]).iter().filter_map(|c| c["skill"].as_str()).collect();
     let n = |v: &Value| format!("<td class=\"n\">{}</td>", text(v));
     let rows: String = list(&model["usage"]["rows"])
@@ -172,7 +184,7 @@ fn usage(model: &Value) -> String {
                 n(&r["read"]),
                 n(&r["ref"]),
                 text(&r["agents"]),
-                day(&r["last"]),
+                local(&r["last"], tz, DAY),
                 sparkline(list(&r["30d"])),
                 grade(&r["grade"]),
             )
@@ -224,13 +236,42 @@ fn links(ls: &Value) -> String {
     if names.is_empty() { "none".into() } else { names.join(", ") }
 }
 
-fn card(c: &Value) -> String {
+/// The card's examples (SPEC F15): the invocation per agent, the manifest's
+/// default prompt, and real prompts read from transcripts.
+fn examples(ex: &Value, tz: &TimeZone) -> String {
+    let written: Vec<String> = list(&ex["written"])
+        .iter()
+        .map(|i| format!("{} <code>{}</code>", text(&i["agent"]), text(&i["text"])))
+        .collect();
+    let mut out =
+        format!("<dt>invoke</dt><dd>{}</dd>", if written.is_empty() { "-".into() } else { written.join(", ") });
+    if !ex["default_prompt"].is_null() {
+        out.push_str(&format!("<dt>default prompt</dt><dd>{}</dd>", text(&ex["default_prompt"])));
+    }
+    let real: String = list(&ex["real"])
+        .iter()
+        .map(|r| {
+            let cwd = r["cwd"].as_str().map_or("-".into(), |p| esc(&tilde(p)));
+            format!(
+                "<li><span class=\"muted\">{} {} {cwd}</span><blockquote>{}</blockquote></li>",
+                local(&r["ts"], tz, DAY),
+                text(&r["agent"]),
+                text(&r["text"]),
+            )
+        })
+        .collect();
+    let real = if real.is_empty() { "none".into() } else { format!("<ul>{real}</ul>") };
+    out.push_str(&format!("<dt>examples</dt><dd>{real}</dd>"));
+    out
+}
+
+fn card(c: &Value, tz: &TimeZone) -> String {
     let skill = c["skill"].as_str().unwrap_or_default();
     let from = c["since"].as_str().map_or("all time".into(), |d| format!("since {}", esc(d)));
     let events: Vec<Vec<String>> = list(&c["events"])
         .iter()
         .map(|e| {
-            let ts = e["ts"].as_str().map_or("-".into(), |t| esc(&t.get(..16).unwrap_or(t).replace('T', " ")));
+            let ts = local(&e["ts"], tz, MINUTE);
             let cwd = e["cwd"].as_str().map_or("-".into(), |p| esc(&tilde(p)));
             let mut src = esc(&tilde(e["src"].as_str().unwrap_or_default()));
             if e["expired"].as_bool() == Some(true) {
@@ -246,7 +287,11 @@ fn card(c: &Value) -> String {
             ]
         })
         .collect();
-    let commit = |v: &Value| format!("{} {}", day(&v["date"]), text(&v["subject"]));
+    // The committer's own date, as `show` prints it.
+    let commit = |v: &Value| {
+        let date = v["date"].as_str().unwrap_or_default();
+        format!("{} {}", esc(date.get(..10).unwrap_or(date)), text(&v["subject"]))
+    };
     let history = match &c["history"] {
         Value::Null => String::new(),
         h => {
@@ -283,7 +328,7 @@ fn card(c: &Value) -> String {
          <dl><dt>description</dt><dd>{desc}</dd><dt>path</dt><dd class=\"mono\">{path}</dd>{history}\
          <dt>cites</dt><dd>{cites}</dd><dt>cited by</dt><dd>{cited_by}</dd>\
          <dt>strong</dt><dd>{strong}</dd><dt>last use</dt><dd>{last_use}</dd><dt>projects</dt><dd>{projects}</dd>\
-         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd></dl></section>",
+         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{examples}</dl></section>",
         id = anchor(skill),
         name = esc(skill),
         hist = histogram(list(&c["histogram"])),
@@ -295,24 +340,27 @@ fn card(c: &Value) -> String {
         cites = links(&c["cites"]),
         cited_by = links(&c["cited_by"]),
         strong = or_none(strong),
-        last_use = day(&c["usage"]["last_use"]),
+        last_use = local(&c["usage"]["last_use"], tz, DAY),
         projects = or_none(projects),
         grades = if grades.is_empty() { "none".into() } else { table(&["date", "score"], &grades) },
         retros = if retros.is_empty() { String::new() } else { table(&["date", "score", "verdict"], &retros) },
+        examples = examples(&c["examples"], tz),
     )
 }
 
-/// The report page for the model of `report::report`.
-pub fn render(model: &Value) -> String {
+/// The report page for the model of `report::report`. Times are shown in
+/// `tz`, the zone the model's days were bucketed in.
+pub fn render(model: &Value, tz: &TimeZone) -> String {
     let from = model["since"].as_str().map_or("all time".into(), |d| format!("since {}", esc(d)));
-    let cards: String = list(&model["cards"]).iter().map(card).collect();
+    let cards: String = list(&model["cards"]).iter().map(|c| card(c, tz)).collect();
     format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <title>skima report</title><style>{CSS}</style></head>\n<body><h1>skima report</h1>\
-         <p class=\"muted\">generated {} · usage {from}</p>{}{}{}<h2>Skills</h2>{cards}</body></html>\n",
-        text(&model["generated"]),
-        usage(model),
+         <p class=\"muted\">generated {} · usage {from} · times and days in {}</p>{}{}{}<h2>Skills</h2>{cards}</body></html>\n",
+        local(&model["generated"], tz, MINUTE),
+        local(&model["generated"], tz, "%Z"),
+        usage(model, tz),
         coverage(model),
         grades_due(model),
     )

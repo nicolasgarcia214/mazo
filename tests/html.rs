@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::{copy_tree, git, write};
+use jiff::tz::TimeZone;
 use regex::Regex;
 use serde_json::Value;
 use skima::config::{Config, Policy};
@@ -90,17 +91,22 @@ struct World {
 
 impl World {
     fn new(source: &Path) -> World {
+        World::with(source, events())
+    }
+
+    fn with(source: &Path, events: Vec<Event>) -> World {
         let cfg = Config {
             source: source.into(),
             loose: vec![],
             homes: vec![common::home("claude", Agent::Claude, &source.join("claude"))],
             policy: Policy::default(),
+            judge: Default::default(),
         };
         let coverage = BTreeMap::from([(
             "claude".to_string(),
             Coverage { first: Some("2026-09-10T08:00:00Z".into()), last_scan: Some(NOW.into()) },
         )]);
-        World { inv: Inventory::load(source).unwrap(), cfg, coverage, events: events() }
+        World { inv: Inventory::load(source).unwrap(), cfg, coverage, events }
     }
 
     fn input(&self) -> Input<'_> {
@@ -108,7 +114,7 @@ impl World {
     }
 
     fn html(&self) -> String {
-        html::render(&report::report(&self.input(), Since::Days(30)).unwrap())
+        html::render(&report::report(&self.input(), Since::Days(30)).unwrap(), &TimeZone::system())
     }
 }
 
@@ -117,6 +123,32 @@ fn section<'h>(html: &'h str, id: &str) -> &'h str {
     let start = html.find(&format!("id=\"{id}\"")).unwrap_or_else(|| panic!("no #{id}"));
     let end = html[start..].find("</section>").unwrap();
     &html[start..start + end]
+}
+
+/// No `src` attribute, every `href` an in-page anchor to an existing id,
+/// nothing loaded from outside, inline CSS for both colour schemes.
+fn assert_self_contained(page: &str) {
+    let attr = Regex::new(r#"(?i)\s(src|href)\s*=\s*("([^"]*)"|\S)"#).unwrap();
+    let ids: BTreeSet<&str> =
+        Regex::new(r#"\sid="([^"]*)""#).unwrap().captures_iter(page).map(|c| c.get(1).unwrap().as_str()).collect();
+    let mut hrefs = 0;
+    // Attributes live inside tags; escaped text has no `<` to open one.
+    let tags = Regex::new(r"<[a-zA-Z][^>]*>").unwrap();
+    for c in tags.find_iter(page).flat_map(|t| attr.captures_iter(t.as_str())) {
+        assert_eq!(&c[1], "href", "no src attribute: {}", &c[0]);
+        let target = c.get(3).map(|m| m.as_str()).unwrap_or_else(|| panic!("unquoted: {}", &c[0]));
+        let id = target.strip_prefix('#').unwrap_or_else(|| panic!("href outside the file: {target}"));
+        assert!(ids.contains(id), "href to a missing id: {target}");
+        hrefs += 1;
+    }
+    assert!(hrefs > 0, "the usage table links to the cards");
+    for outside in ["<link", "<script", "@import", "url(", "<iframe", "<img"] {
+        assert!(!page.contains(outside), "{outside} in the page");
+    }
+
+    assert!(page.contains("<style>") && page.contains("--bg:"), "inline CSS");
+    assert!(page.contains("@media (prefers-color-scheme: dark)"), "dark scheme");
+    assert!(page.contains("color-scheme: light dark"), "both schemes");
 }
 
 /// AC2: every skill of `usage --all --json`, escaped, is in the page.
@@ -139,31 +171,49 @@ fn every_usage_all_skill_appears() {
     assert!(!page.contains("x\"<retired>"), "names are escaped");
 }
 
+/// A hostile description, default prompt, real prompt, cwd and src path come
+/// out as text, and the page stays self-contained.
+#[test]
+fn hostile_text_is_escaped() {
+    let repo = repo();
+    let src = repo.path();
+    write(&src.join("unslop/SKILL.md"), "---\nname: unslop\ndescription: \"<script>alert('d')</script> & co\"\n---\n");
+    write(&src.join("unslop/agents/openai.yaml"), "interface:\n  default_prompt: \"<img src=x onerror=alert(1)>\"\n");
+    let prompt = "</blockquote><script>alert(\"p\")</script> tighten this please";
+    let transcript = src.join("t<i>\"'.jsonl");
+    write(
+        &transcript,
+        &format!("{}\n", serde_json::json!({"type": "user", "message": {"role": "user", "content": prompt}})),
+    );
+    let mut e = ev("h1", "unslop", Channel::Tool, 1);
+    e.cwd = Some("/w/<b>\"cwd\"</b>".into());
+    e.src = format!("{}:1", transcript.display());
+    let page = World::with(src, vec![e]).html();
+
+    let card = section(&page, "skill-unslop");
+    for escaped in [
+        "&lt;script&gt;alert(&#39;d&#39;)&lt;/script&gt; &amp; co",
+        "&lt;img src=x onerror=alert(1)&gt;",
+        "&lt;/blockquote&gt;&lt;script&gt;alert(&quot;p&quot;)&lt;/script&gt; tighten this please",
+        "/w/&lt;b&gt;&quot;cwd&quot;&lt;/b&gt;",
+        "t&lt;i&gt;&quot;&#39;.jsonl:1",
+    ] {
+        assert!(card.contains(escaped), "{escaped} missing: {card}");
+    }
+    assert!(card.contains("<blockquote>&lt;/blockquote&gt;"), "the real prompt is rendered as an example");
+    for raw in ["<script>", "<img", "<b>", "<i>"] {
+        assert!(!page.contains(raw), "{raw} unescaped");
+    }
+    assert_self_contained(&page);
+}
+
 /// AC3: nothing outside the file, inline CSS and SVG, both colour schemes.
 #[test]
 fn the_page_is_self_contained() {
     let repo = repo();
     let page = World::new(repo.path()).html();
 
-    let attr = Regex::new(r#"(?i)\s(src|href)\s*=\s*("([^"]*)"|\S)"#).unwrap();
-    let ids: BTreeSet<&str> =
-        Regex::new(r#"\sid="([^"]*)""#).unwrap().captures_iter(&page).map(|c| c.get(1).unwrap().as_str()).collect();
-    let mut hrefs = 0;
-    for c in attr.captures_iter(&page) {
-        assert_eq!(&c[1], "href", "no src attribute: {}", &c[0]);
-        let target = c.get(3).map(|m| m.as_str()).unwrap_or_else(|| panic!("unquoted: {}", &c[0]));
-        let id = target.strip_prefix('#').unwrap_or_else(|| panic!("href outside the file: {target}"));
-        assert!(ids.contains(id), "href to a missing id: {target}");
-        hrefs += 1;
-    }
-    assert!(hrefs > 0, "the usage table links to the cards");
-    for outside in ["<link", "<script", "@import", "url(", "<iframe", "<img"] {
-        assert!(!page.contains(outside), "{outside} in the page");
-    }
-
-    assert!(page.contains("<style>") && page.contains("--bg:"), "inline CSS");
-    assert!(page.contains("@media (prefers-color-scheme: dark)"), "dark scheme");
-    assert!(page.contains("color-scheme: light dark"), "both schemes");
+    assert_self_contained(&page);
 
     let usage = &page[page.find("<h2>Usage</h2>").unwrap()..page.find("coverage:").unwrap()];
     let rows = usage.matches("<tr><td>").count();
@@ -219,17 +269,20 @@ impl Bin {
         Bin { _temp: temp, root }
     }
 
-    fn skima(&self, args: &[&str]) -> Output {
+    fn cmd(&self, args: &[&str]) -> Command {
         let path = format!("{}:{}", self.root.join("bin").display(), std::env::var("PATH").unwrap_or_default());
-        Command::new(env!("CARGO_BIN_EXE_skima"))
-            .args(args)
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
+        cmd.args(args)
             .current_dir(&self.root)
             .env("HOME", self.root.join("home"))
             .env("SKIMA_CONFIG", self.root.join("skills/skima.toml"))
             .env("XDG_DATA_HOME", self.root.join("data"))
-            .env("PATH", path)
-            .output()
-            .unwrap()
+            .env("PATH", path);
+        cmd
+    }
+
+    fn skima(&self, args: &[&str]) -> Output {
+        self.cmd(args).output().unwrap()
     }
 }
 
@@ -274,10 +327,38 @@ fn out_warns_in_a_worktree_and_open_runs_the_opener() {
         write(&stub, &format!("#!/bin/sh\necho \"{opener} $@\" > '{}'\n", log.display()));
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // Relative to skima's cwd; the opener gets the absolute path.
     let outside = b.root.join("elsewhere/report.html");
-    let out = b.skima(&["report", "--out", outside.to_str().unwrap(), "--open"]);
+    let out = b.skima(&["report", "--out", "elsewhere/report.html", "--open"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(!String::from_utf8_lossy(&out.stderr).contains("git worktree"));
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     assert_eq!(fs::read_to_string(&log).unwrap(), format!("{opener} {}\n", outside.display()));
+}
+
+/// Every time on the page is in the local zone, as `show` prints it: an event
+/// at 20:30 UTC yesterday is 05:30 today in Tokyo, in the events table, the
+/// usage `last`, the card's last use and its histogram alike.
+#[test]
+fn times_are_local_under_a_fixed_zone() {
+    let b = Bin::new();
+    let utc_day = jiff::Timestamp::now().to_zoned(TimeZone::UTC).date().yesterday().unwrap();
+    let ts = utc_day.at(20, 30, 0, 0).to_zoned(TimeZone::UTC).unwrap().timestamp();
+    let jst = TimeZone::fixed(jiff::tz::offset(9));
+    let local = ts.to_zoned(jst).date();
+    let mut e = ev("t1", "unslop", Channel::Slash, 0);
+    e.ts = ts.to_string();
+    write(&b.root.join("data/skima/events.jsonl"), &format!("{}\n", serde_json::to_string(&e).unwrap()));
+
+    let out = b.cmd(&["report"]).env("TZ", "JST-9").output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let page = fs::read_to_string(b.root.join("data/skima/report.html")).unwrap();
+    assert!(page.contains(&format!("<td>{local} 05:30</td>")), "event time: {page}");
+    assert!(!page.contains(&format!("{utc_day} 20:30")), "no UTC time");
+    assert!(page.contains(&format!("<td>{local}</td>")), "usage last");
+    assert!(page.contains(&format!("<dt>last use</dt><dd>{local}</dd>")), "card last use");
+    assert!(page.contains(&format!("<title>{local} strong 1 weak 0</title>")), "histogram day");
+    assert!(page.contains("times and days in JST"), "the zone is named");
+    let generated = Regex::new(r"generated \d{4}-\d\d-\d\d \d\d:\d\d ·").unwrap();
+    assert!(generated.is_match(&page), "generated to the minute");
 }
