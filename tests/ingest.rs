@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde_json::Value;
 use skima::adapters::claude::Claude;
@@ -92,7 +92,22 @@ impl Env {
         for (dest, src) in files {
             env.put(dest, &fs::read(fixture(src)).unwrap());
         }
+        // Written once here: rewriting it per `cli` call truncates it under a
+        // child already spawned and reading it.
+        let homes: String = env
+            .cfg
+            .homes
+            .iter()
+            .map(|h| {
+                format!("\n[[home]]\nname = \"{}\"\nagent = \"claude\"\npath = \"{}\"\n", h.name, h.path.display())
+            })
+            .collect();
+        fs::write(env.config(), format!("source = \".\"\n{homes}")).unwrap();
         env
+    }
+
+    fn config(&self) -> PathBuf {
+        self.tmp.path().join("dotfiles/skills/skima.toml")
     }
 
     fn project(&self) -> PathBuf {
@@ -132,19 +147,8 @@ impl Env {
 
     /// The `skima` binary, configured for this machine with its data under `xdg`.
     fn cli(&self, xdg: &Path) -> Command {
-        let root = self.tmp.path();
-        let config = root.join("dotfiles/skills/skima.toml");
-        let homes: String = self
-            .cfg
-            .homes
-            .iter()
-            .map(|h| {
-                format!("\n[[home]]\nname = \"{}\"\nagent = \"claude\"\npath = \"{}\"\n", h.name, h.path.display())
-            })
-            .collect();
-        fs::write(&config, format!("source = \".\"\n{homes}")).unwrap();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
-        cmd.env("HOME", root).env("XDG_DATA_HOME", xdg).env("SKIMA_CONFIG", &config);
+        cmd.env("HOME", self.tmp.path()).env("XDG_DATA_HOME", xdg).env("SKIMA_CONFIG", self.config());
         cmd
     }
 
@@ -423,9 +427,11 @@ fn concurrent_scan_processes_write_no_duplicate_ids() {
     let env = Env::new(&TRANSCRIPTS, &[]);
     for round in 0..8 {
         let xdg = env.tmp.path().join(format!("xdg{round}"));
-        let run = || env.cli(&xdg).arg("scan").spawn().unwrap();
-        let (mut a, mut b) = (run(), run());
-        assert!(a.wait().unwrap().success() && b.wait().unwrap().success());
+        let run = || env.cli(&xdg).arg("scan").stderr(Stdio::piped()).spawn().unwrap();
+        let (a, b) = (run(), run());
+        for out in [a.wait_with_output().unwrap(), b.wait_with_output().unwrap()] {
+            assert!(out.status.success(), "round {round}: {}", String::from_utf8_lossy(&out.stderr));
+        }
         let data = xdg.join("skima");
         let lines = ledger_lines(&data);
         let unique: HashSet<String> = lines.iter().map(|l| serde_json::from_str::<Event>(l).unwrap().id).collect();
