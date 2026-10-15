@@ -106,7 +106,7 @@ fn parity(src: &Path, skills: &[&str]) -> (Vec<(usize, usize)>, bool) {
         String::from_utf8(out.stdout).unwrap().trim().parse::<usize>().unwrap()
     };
     let counts = skills.iter().map(|s| (h.since(s, Path::new(GRADE)), rev_list(s))).collect();
-    (counts, evals::load(&inv, "s").grade.unwrap().stale)
+    (counts, evals::load(&inv, "s").grade.unwrap().stale())
 }
 
 /// SPEC §6.3: `+N` counts by ancestry. A side branch edits the skill before
@@ -166,7 +166,7 @@ fn outside_a_worktree_history_is_absent_and_no_grade_is_stale() {
     let inv = Inventory::load(src).unwrap();
     assert!(inv.history.is_none() && inv.worktree.is_none());
     let g = evals::load(&inv, "s").grade.unwrap();
-    assert!(!g.stale);
+    assert!(!g.stale());
 
     let cfg = skima::config::Config { source: src.into(), loose: vec![], homes: vec![], policy: Default::default() };
     let coverage = Default::default();

@@ -3,7 +3,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::history::History;
 use crate::inventory::Inventory;
 use crate::yaml;
 
@@ -20,8 +19,18 @@ pub struct Eval {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Grade {
     pub eval: Eval,
-    /// The skill changed after this grade was committed, or has uncommitted changes.
-    pub stale: bool,
+    /// `+N`: commits that changed the skill after this grade was committed.
+    pub since: usize,
+    /// `+wip`: the skill has uncommitted changes.
+    pub wip: bool,
+}
+
+impl Grade {
+    /// SPEC §6.3: the skill changed after the grade, committed or not. An
+    /// uncommitted grade has no `G`, so only `wip` can make it stale.
+    pub fn stale(&self) -> bool {
+        self.since > 0 || self.wip
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,8 +45,11 @@ pub struct Evals {
 pub fn load(inv: &Inventory, skill: &str) -> Evals {
     let source = &inv.source;
     let grade = read_dir(&source.join(".grades").join(skill)).pop().map(|eval| {
-        let stale = inv.history.as_ref().is_some_and(|h| grade_stale(h, source, skill, &eval.file));
-        Grade { eval, stale }
+        let (since, wip) = inv
+            .history
+            .as_ref()
+            .map_or((0, false), |h| (eval.file.strip_prefix(source).map_or(0, |g| h.since(skill, g)), h.wip(skill)));
+        Grade { eval, since, wip }
     });
     Evals { grade, retros: read_dir(&source.join(".retros").join(skill)) }
 }
@@ -80,11 +92,4 @@ fn date(text: &str) -> Option<String> {
     let d = text.get(..10)?;
     let shape = d.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
     shape.then(|| d.to_string())
-}
-
-/// SPEC §6.3: uncommitted changes to the skill make any grade stale; otherwise
-/// the grade is stale when a commit after `G` (the last commit touching the
-/// grade file) changed the skill. An uncommitted grade has no `G`.
-fn grade_stale(history: &History, source: &Path, skill: &str, grade: &Path) -> bool {
-    history.wip(skill) || grade.strip_prefix(source).is_ok_and(|g| history.since(skill, g) > 0)
 }

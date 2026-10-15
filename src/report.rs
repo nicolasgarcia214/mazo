@@ -53,6 +53,9 @@ pub struct UsageArgs {
     pub authoring: bool,
 }
 
+/// The last line of `usage` and `unused` (SPEC F2).
+const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade\n";
+
 /// Days in the `30d` sparkline.
 const SPARK_DAYS: i64 = 30;
 
@@ -204,6 +207,10 @@ struct GradeOut {
     score: Option<String>,
     date: String,
     stale: bool,
+    /// `+N` (SPEC §6.3).
+    since: usize,
+    /// `+wip`.
+    wip: bool,
     file: String,
 }
 
@@ -211,14 +218,23 @@ fn grade_out(evals: &Evals) -> Option<GradeOut> {
     evals.grade.as_ref().map(|g| GradeOut {
         score: g.eval.score.clone(),
         date: g.eval.date.clone(),
-        stale: g.stale,
+        stale: g.stale(),
+        since: g.since,
+        wip: g.wip,
         file: g.eval.file.display().to_string(),
     })
 }
 
 fn grade_cell(g: &Option<GradeOut>) -> String {
     match g {
-        Some(g) => format!("{}{}", g.score.as_deref().unwrap_or("?"), if g.stale { "*" } else { "" }),
+        Some(g) => {
+            let score = g.score.as_deref().unwrap_or("?");
+            match (g.since, g.wip) {
+                (0, false) => score.into(),
+                (0, true) => format!("{score}+wip"),
+                (n, _) => format!("{score}+{n}"),
+            }
+        }
         None => "-".into(),
     }
 }
@@ -247,7 +263,8 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
     let start = view.start(args.since);
     let mut skills: BTreeSet<&str> = input.inv.skills.iter().map(String::as_str).collect();
     if args.all {
-        skills.extend(view.select(&f, None, start).map(|(e, _)| e.skill.as_str()));
+        // Every skill in the ledger, so a retired or pruned one keeps a row (SPEC F17).
+        skills.extend(input.events.iter().map(|e| e.skill.as_str()));
     }
     let mut rows: Vec<UsageRow> = skills
         .into_iter()
@@ -257,7 +274,7 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
             let count = |c: Channel| keys.iter().filter(|k| k.2 == c).count();
             let sess = keys.iter().filter(|k| k.2.strong()).map(|k| (k.0, k.1)).collect::<HashSet<_>>().len();
             let agents: BTreeSet<Agent> = window.iter().map(|(e, _)| e.agent).collect();
-            let last = view.select(&f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
+            let last = window.iter().filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
             let spark_from = input.now.checked_sub(SignedDuration::from_hours(24 * (SPARK_DAYS + 1))).ok();
             let last_30d = view.daily_strong(view.select(&f, Some(skill), spark_from), SPARK_DAYS);
             let grade = input.inv.skills.contains(skill).then(|| grade_out(&evals::load(input.inv, skill))).flatten();
@@ -312,7 +329,7 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
             ]
         })
         .collect();
-    render::table(&header, &cells, tty) + &view.coverage_line("coverage", None)
+    render::table(&header, &cells, tty) + &view.coverage_line("coverage", None) + LEGEND
 }
 
 /// Skills that cite `skill` (SPEC §5.3).
@@ -407,7 +424,7 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
             vec![r.skill.clone(), r.status.into(), notes.join("; ")]
         })
         .collect();
-    render::table(&header, &cells, tty) + &view.coverage_line("window", start)
+    render::table(&header, &cells, tty) + &view.coverage_line("window", start) + LEGEND
 }
 
 #[derive(Serialize)]

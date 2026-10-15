@@ -40,11 +40,11 @@ pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> Strin
 
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-/// One cell per count: `▁` for zero, and `▂`…`█` for a non-zero count scaled
+/// One cell per count: `·` for zero, and `▁`…`█` for a non-zero count scaled
 /// against the largest, so a single event is still visible.
 pub fn sparkline(counts: &[usize]) -> String {
     let max = counts.iter().copied().max().unwrap_or(0);
-    counts.iter().map(|&c| if c == 0 { BARS[0] } else { BARS[(c * 7).div_ceil(max).max(1)] }).collect()
+    counts.iter().map(|&c| if c == 0 { '·' } else { BARS[(c * 8).div_ceil(max) - 1] }).collect()
 }
 
 #[cfg(test)]
@@ -52,9 +52,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sparkline_keeps_zero_lowest_and_small_counts_visible() {
-        assert_eq!(sparkline(&[0, 1, 7, 100]), "▁▂▂█");
-        assert_eq!(sparkline(&[0, 0]), "▁▁");
+    fn sparkline_marks_empty_days_and_keeps_small_counts_visible() {
+        assert_eq!(sparkline(&[0, 1, 7, 50, 100]), "·▁▁▄█");
+        assert_eq!(sparkline(&[0, 0]), "··");
         assert_eq!(sparkline(&[3]), "█");
     }
 

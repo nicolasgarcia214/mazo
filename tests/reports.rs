@@ -16,6 +16,9 @@ use skima::report::{self, Input, Since, UsageArgs};
 
 const NOW: &str = "2026-10-13T12:00:00Z";
 
+const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
+                      +N commits since the grade; +wip uncommitted changes since the grade";
+
 fn now() -> jiff::Timestamp {
     NOW.parse().unwrap()
 }
@@ -214,7 +217,7 @@ fn unused_reports_clusters_held_new_and_weak_only() {
     );
     assert!(!unused_lines.iter().any(|l| l.starts_with("writing-for-agents")), "{text}");
     assert!(text.contains("writing-for-agents held   held by unslop"), "{text}");
-    assert!(text.ends_with("window: claude since 2026-09-10 · codex since 2026-08-14\n"), "{text}");
+    assert!(text.ends_with(&format!("window: claude since 2026-09-10 · codex since 2026-08-14\n{LEGEND}\n")), "{text}");
 }
 
 #[test]
@@ -271,6 +274,10 @@ fn usage_collapses_and_applies_default_filters() {
         ev("dt", "unslop", Channel::Tool, "D", &d1), // strong events are never authoring
         ev("old", "unslop", Channel::Tool, "Z", &ago(40)),
         ev("ty", "unslop", Channel::Typed, "Y", "2026-02-24T10:00:00Z"),
+        // goal-execute's only strong event is older than the window.
+        ev("gx", "goal-execute", Channel::Tool, "Q", &ago(40)),
+        // A pruned skill: in the ledger, not in the inventory.
+        ev("pr", "pruned", Channel::Tool, "R", &ago(90)),
     ];
     let input = w.input(&events);
 
@@ -285,9 +292,13 @@ fn usage_collapses_and_applies_default_filters() {
     assert_eq!(&spark[27..], [1, 3, 0], "two days ago: B/tool; yesterday: A/tool, A/slash, D/tool");
     assert_eq!(counts(&row(&out, "goal-plan")), [0; 6], "zero-use skills get a row");
     assert_eq!(row(&out, "goal-plan")["last"], Value::Null);
+    assert_eq!(row(&out, "goal-execute")["last"], Value::Null, "last is the last strong event in the window");
+    assert!(!out.contains("\"pruned\""), "no row for a skill outside the inventory without --all");
 
     let all = report::usage(&input, &UsageArgs { all: true, ..args() }, true, false);
     assert_eq!(counts(&row(&all, "unslop")), [5, 2, 4, 0, 2, 1], "--all adds the probe and the other origin");
+    assert_eq!(counts(&row(&all, "pruned")), [0; 6], "--all adds a row for a pruned skill, used outside the window");
+    assert_eq!(row(&all, "pruned")["last"], Value::Null);
 
     let authoring = report::usage(&input, &UsageArgs { authoring: true, ..args() }, true, false);
     assert_eq!(counts(&row(&authoring, "unslop")), [3, 1, 3, 0, 4, 1], "--authoring adds sessions C and D");
@@ -299,6 +310,7 @@ fn usage_collapses_and_applies_default_filters() {
 
     let since_all = report::usage(&input, &UsageArgs { since: Since::All, ..args() }, true, false);
     assert_eq!(counts(&row(&since_all, "unslop")), [5, 1, 4, 1, 2, 1]);
+    assert_eq!(row(&since_all, "goal-execute")["last"], ago(40).as_str());
 
     let codex = report::usage(&input, &UsageArgs { agent: Some(Agent::Codex), ..args() }, true, false);
     assert_eq!(counts(&row(&codex, "unslop")), [0, 0, 0, 0, 1, 0]);
@@ -310,29 +322,55 @@ fn usage_collapses_and_applies_default_filters() {
     assert!(lines[0].starts_with("skill") && lines[0].ends_with(&format!("30d{}grade", " ".repeat(28))), "{text}");
     assert!(lines[1].starts_with("unslop "), "highest sess first: {text}");
     assert!(lines[1].contains(" CX     1d ago "), "{text}");
-    assert!(lines[1].ends_with(&format!("{}▄█▁     -", "▁".repeat(27))), "{text}");
+    assert!(lines[1].ends_with(&format!("{}▃█·     -", "·".repeat(27))), "a day with no event is a dot: {text}");
+    let execute = lines.iter().find(|l| l.starts_with("goal-execute ")).unwrap();
+    assert!(execute.ends_with(&format!(" 0        -      {}     -", "·".repeat(30))), "{text}");
     assert_eq!(
-        *lines.last().unwrap(),
+        lines[lines.len() - 2],
         "coverage: claude since 2026-09-10 (typed since 2026-02-24) · codex since 2026-03-29"
     );
+    assert_eq!(*lines.last().unwrap(), LEGEND);
     assert!(!text.contains('\x1b'), "no bold off a tty");
     assert!(report::usage(&input, &args(), false, true).starts_with("\x1b[1mskill"));
 }
 
-#[test]
-fn usage_shows_the_latest_grade_and_staleness() {
-    let repo = fixture_repo();
-    write(&repo.path().join(".grades/unslop/g.md"), "---\ntarget: unslop\ndate: 2026-09-01\nscore: 9.1\n---\n");
-    git(repo.path(), &["add", "."], NOW);
-    git(repo.path(), &["commit", "-q", "-m", "grade"], "2026-09-01T00:00:00Z");
-    let w = world(repo.path());
+/// The text and JSON grade of `skill` in a fresh report, which reads the history again.
+fn grade_of(source: &Path, skill: &str) -> (String, Value) {
+    let w = world(source);
     let input = w.input(&[]);
-    assert_eq!(row(&report::usage(&input, &args(), true, false), "unslop")["grade"]["stale"], false);
-    write(&repo.path().join("unslop/SKILL.md"), "---\nname: unslop\ndescription: Edited.\n---\n");
-    // The next report reads the history again.
-    let w = world(repo.path());
-    let text = report::usage(&w.input(&[]), &args(), false, false);
-    assert!(text.lines().any(|l| l.starts_with("unslop") && l.ends_with(" 9.1*")), "{text}");
+    let text = report::usage(&input, &args(), false, false);
+    let line = text.lines().find(|l| l.starts_with(&format!("{skill} "))).unwrap();
+    let cell = line.rsplit(' ').next().unwrap().to_string();
+    (cell, row(&report::usage(&input, &args(), true, false), skill)["grade"].clone())
+}
+
+#[test]
+fn usage_grade_shows_the_score_then_commits_or_wip_since() {
+    let repo = fixture_repo();
+    let src = repo.path();
+    write(&src.join(".grades/unslop/g.md"), "---\ntarget: unslop\ndate: 2026-09-01\nscore: 9.1\n---\n");
+    git(src, &["add", "."], NOW);
+    git(src, &["commit", "-q", "-m", "grade"], "2026-09-01T00:00:00Z");
+    let edit = |d: &str| write(&src.join("unslop/SKILL.md"), &format!("---\nname: unslop\ndescription: {d}.\n---\n"));
+    let summary =
+        |g: &Value| (g["stale"].as_bool().unwrap(), g["since"].as_u64().unwrap(), g["wip"].as_bool().unwrap());
+
+    assert_eq!(grade_of(src, "goal-plan").0, "-", "no grade");
+    let (cell, g) = grade_of(src, "unslop");
+    assert_eq!((cell.as_str(), summary(&g)), ("9.1", (false, 0, false)));
+
+    edit("One");
+    let (cell, g) = grade_of(src, "unslop");
+    assert_eq!((cell.as_str(), summary(&g)), ("9.1+wip", (true, 0, true)), "only uncommitted changes");
+
+    git(src, &["commit", "-q", "-am", "one"], "2026-09-02T00:00:00Z");
+    assert_eq!(grade_of(src, "unslop").0, "9.1+1");
+
+    edit("Two");
+    git(src, &["commit", "-q", "-am", "two"], "2026-09-03T00:00:00Z");
+    edit("Three");
+    let (cell, g) = grade_of(src, "unslop");
+    assert_eq!((cell.as_str(), summary(&g)), ("9.1+2", (true, 2, true)), "commits win over uncommitted changes");
 }
 
 // ---------------------------------------------------------------- show
@@ -405,19 +443,19 @@ fn evals_latest_date_and_staleness() {
         "quoted 2026-02-01 beats unquoted 2026-01-15; GRADES.md, notes.md, bad.md skipped"
     );
     assert_eq!(g.eval.score.as_deref(), Some("8.5"));
-    assert!(!g.stale, "a grade committed together with the skill edit is not stale");
+    assert!(!g.stale(), "a grade committed together with the skill edit is not stale");
     let retros: Vec<&str> = e.retros.iter().map(|r| r.file.file_name().unwrap().to_str().unwrap()).collect();
     assert_eq!(retros, ["r2.md", "r0.md", "r1.md", "r3.md"], "by date, ties by filename; r4.md has no YYYY-MM-DD");
     assert_eq!(e.retros[3].date, "2026-03-06", "a timestamp is read as a string, its first 10 characters the date");
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
     git(src, &["commit", "-q", "-am", "edit skill"], "2026-03-01T00:00:00Z");
-    assert!(load().grade.unwrap().stale, "a later skill commit makes it stale");
+    assert!(load().grade.unwrap().stale(), "a later skill commit makes it stale");
 
     write(&src.join(".grades/s/c.md"), "---\ntarget: s\ndate: 2026-04-01\nscore: 9\n---\n");
     let g = load().grade.unwrap();
-    assert!(g.eval.file.ends_with("c.md") && !g.stale, "an uncommitted grade is not stale");
+    assert!(g.eval.file.ends_with("c.md") && !g.stale(), "an uncommitted grade is not stale");
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v3\n---\n");
-    assert!(load().grade.unwrap().stale, "uncommitted skill changes make any grade stale");
+    assert!(load().grade.unwrap().stale(), "uncommitted skill changes make any grade stale");
 }
