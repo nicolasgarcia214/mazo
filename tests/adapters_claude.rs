@@ -350,11 +350,21 @@ fn bash_reading_two_skill_files_yields_two_events_with_distinct_ids() {
     assert_eq!(parse("bash_two.jsonl"), vec![r(0, "validate-findings-backlog"), r(1, "interrogate")]);
 }
 
+/// The named file is a skill's only because `unslop/SKILL.md` exists on disk
+/// (`known` is empty), so the home skills dir is built under a temp root.
 #[test]
 fn unknown_command_naming_a_skill_file_is_counted_as_unparsed() {
-    let (p, _) = parse_from(&fixture("unparsed.jsonl"), None);
+    let tmp = tempfile::tempdir().unwrap();
+    let skills = tmp.path().join("skills");
+    common::write(&skills.join("unslop/SKILL.md"), "x");
+    let line =
+        std::fs::read_to_string(fixture("unparsed.jsonl")).unwrap().replace(HOME_SKILLS, skills.to_str().unwrap());
+    let transcript = tmp.path().join("unparsed.jsonl");
+    common::write(&transcript, &line);
+    let roots = SkillRoots { home_skills: vec![skills.clone()], ..roots() };
+    let (p, _) = common::parse_file(&Claude, &roots, &transcript, None);
     assert!(p.raws.is_empty());
-    assert_eq!(p.unparsed, vec!["awk 'NR<5' /home/nicolas/.claude/skills/unslop/references/prose-tells.md"]);
+    assert_eq!(p.unparsed, vec![format!("awk 'NR<5' {}/unslop/references/prose-tells.md", skills.display())]);
 }
 
 const HISTORY_ARGUS_TS: &str = "2026-03-13T15:43:39.625Z";
