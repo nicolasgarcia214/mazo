@@ -5,14 +5,16 @@
 //! record the card shows. `--dry-run` shows what a run would judge and calls
 //! nothing.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
-use std::io::{ErrorKind, IsTerminal, Write};
+use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::LazyLock;
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::{LazyLock, mpsc};
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -552,16 +554,7 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
         if let Some(home) = &scratch {
             cmd.env("CODEX_HOME", home);
         }
-        let mut child = cmd.spawn()?;
-        let pipe = child.stdin.take();
-        std::thread::scope(|s| {
-            // A judge that exits without reading its input closes the pipe;
-            // its output says why.
-            if let (Some(mut pipe), Some(stdin)) = (pipe, stdin) {
-                s.spawn(move || pipe.write_all(stdin.as_bytes()));
-            }
-            child.wait_with_output()
-        })
+        wait(cmd.spawn()?, stdin, JUDGE_TIMEOUT)
     });
     let written = fs::read(&result);
     let removed = fs::remove_dir_all(&dir);
@@ -572,6 +565,12 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
     if scratch.is_some() {
         codex_home(a)?;
     }
+    let Some(output) = output else {
+        // A killed Claude judge is counted at its cap, as one reporting no cost.
+        let cost = (a.judge.agent == Agent::Claude).then(|| cap.unwrap_or_default());
+        let minutes = JUDGE_TIMEOUT.as_secs() / 60;
+        return Ok(Reply { cost, answer: Err(format!("no answer within {minutes} minutes; the judge was killed")) });
+    };
     let failed = || {
         let stderr = String::from_utf8_lossy(&output.stderr);
         format!("({}): {}", output.status, stderr.lines().next().unwrap_or_default())
@@ -598,6 +597,71 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
         },
         Agent::Pi => Reply { cost: None, answer: pi_answer(&output.stdout).map_err(|e| format!("{e} {}", failed())) },
     })
+}
+
+/// How long one judge call may run before it is killed and counted as invalid.
+const JUDGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// How long a judge past its limit has to exit on SIGTERM before SIGKILL.
+const KILL_GRACE: Duration = Duration::from_secs(5);
+
+/// `child`'s output once it exits, after writing `stdin` to it; `None` when it
+/// was still running after `limit` and was killed: SIGTERM first, which
+/// launchers such as Codex's npm shim forward to the process doing the work
+/// and SIGKILL would orphan, then SIGKILL after [`KILL_GRACE`]. The pipes are read on
+/// detached threads given a second after the exit, so a grandchild left
+/// holding one costs its output, not a hang.
+fn wait(mut child: Child, stdin: Option<String>, limit: Duration) -> std::io::Result<Option<Output>> {
+    // A judge that exits without reading its input closes the pipe; its
+    // output says why.
+    if let (Some(mut pipe), Some(stdin)) = (child.stdin.take(), stdin) {
+        std::thread::spawn(move || pipe.write_all(stdin.as_bytes()));
+    }
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = mpsc::channel();
+        if let Some(mut pipe) = pipe {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = pipe.read_to_end(&mut bytes);
+                let _ = tx.send(bytes);
+            });
+        }
+        rx
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            // SAFETY: kill(2) on our own child, unreaped, so its pid is not reused.
+            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+            let grace = Instant::now() + KILL_GRACE;
+            while child.try_wait()?.is_none() && Instant::now() < grace {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            child.kill()?;
+            child.wait()?;
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let read = |rx: mpsc::Receiver<Vec<u8>>| rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default();
+    Ok(Some(Output { status, stdout: read(stdout), stderr: read(stderr) }))
+}
+
+/// The input of a retry: the first call's, and why its answer was rejected.
+/// A call that gave no answer is retried as it was.
+fn retry<'i>(input: &'i str, why: Option<&str>) -> Cow<'i, str> {
+    match why {
+        None => Cow::Borrowed(input),
+        Some(why) => {
+            let note = format!("Your previous answer was rejected: {why}. Answer again with that fixed.");
+            Cow::Owned(format!("{input}\n{}", frame("rejected-answer", &note)))
+        }
+    }
 }
 
 /// The user's Codex `auth.json`: in the configured Codex home, else `~/.codex`.
@@ -762,7 +826,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
     'sessions: for (i, c) in candidates.iter().enumerate() {
         let (skill, input) = input(a.source, c)?;
         let mut cost = None;
-        let mut why = String::new();
+        let (mut why, mut rejected) = (String::new(), None);
         for _ in 0..2 {
             let cap = pool.map(|p| p.saturating_sub(spent));
             if cap.is_some_and(|cap| cap < CENT) {
@@ -773,11 +837,11 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                 let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
                 eprintln!("judging {}/{} {}{cap}", i + 1, candidates.len(), c.event.session);
             }
-            let reply = call(a, &SESSION, cap, &input)?;
+            let reply = call(a, &SESSION, cap, &retry(&input, rejected.as_deref()))?;
             spent += reply.cost.unwrap_or_default();
             cost = reply.cost.map(|r| r + cost.unwrap_or_default());
-            match reply.answer.and_then(|v| validate(v, &c.condensed)) {
-                Ok(verdict) => {
+            match reply.answer.map(|v| validate(v, &c.condensed)) {
+                Ok(Ok(verdict)) => {
                     let record = SessionRecord {
                         v: 1,
                         kind: "session",
@@ -797,7 +861,8 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                     judged += 1;
                     continue 'sessions;
                 }
-                Err(e) => why = e,
+                Ok(Err(e)) => (why, rejected) = (e.clone(), Some(e)),
+                Err(e) => (why, rejected) = (e, None),
             }
         }
         eprintln!("warning: {}: judge answer dropped after one retry: {why}", c.event.session);
@@ -1130,7 +1195,7 @@ fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
     }
     let input = synthesis_input(a, &judged)?;
     let mut cost = None;
-    let mut why = None;
+    let (mut why, mut rejected) = (None, None);
     for _ in 0..2 {
         let cap = a.budget.map(|b| b.saturating_sub(*spent));
         if cap.is_some_and(|cap| cap < CENT) {
@@ -1140,11 +1205,11 @@ fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
             let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
             eprintln!("reporting on {} sessions{cap}", judged.len());
         }
-        let reply = call(a, &SKILL, cap, &input)?;
+        let reply = call(a, &SKILL, cap, &retry(&input, rejected.as_deref()))?;
         *spent += reply.cost.unwrap_or_default();
         cost = reply.cost.map(|r| r + cost.unwrap_or_default());
-        match reply.answer.and_then(|v| validate_report(v, &judged)) {
-            Ok(result) => {
+        match reply.answer.map(|v| validate_report(v, &judged)) {
+            Ok(Ok(result)) => {
                 let record = SkillRecord {
                     v: 1,
                     kind: "skill".into(),
@@ -1159,7 +1224,8 @@ fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
                 append(a.data, &record)?;
                 return Ok(Synthesis::Written(Box::new(record)));
             }
-            Err(e) => why = Some(e),
+            Ok(Err(e)) => (why, rejected) = (Some(e.clone()), Some(e)),
+            Err(e) => (why, rejected) = (Some(e), None),
         }
     }
     Ok(why.map_or(Synthesis::Skipped, Synthesis::Dropped))
@@ -1250,4 +1316,46 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
         ));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sh(script: &str) -> Child {
+        Command::new("sh")
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    #[test]
+    fn wait_returns_the_output_of_a_judge_that_exits() {
+        let out = wait(sh("cat; echo e >&2"), Some("in".into()), Duration::from_secs(30)).unwrap().unwrap();
+        assert!(out.status.success());
+        assert_eq!((out.stdout.as_slice(), out.stderr.as_slice()), (b"in".as_slice(), b"e\n".as_slice()));
+    }
+
+    #[test]
+    fn wait_kills_a_judge_past_its_limit_even_when_a_grandchild_holds_its_pipes() {
+        let started = Instant::now();
+        assert!(wait(sh("sleep 10 & sleep 10"), None, Duration::from_millis(100)).unwrap().is_none());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // A launcher that forwards SIGTERM takes the process doing the work with it.
+        let pid = tempfile::NamedTempFile::new().unwrap();
+        let launcher = format!("sleep 10 & echo $! > {}; trap 'kill $!; exit' TERM; wait", pid.path().display());
+        assert!(wait(sh(&launcher), None, Duration::from_millis(200)).unwrap().is_none());
+        let worker = fs::read_to_string(pid.path()).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        let alive = Command::new("kill").args(["-0", worker.trim()]).stderr(Stdio::null()).status().unwrap();
+        assert!(!alive.success(), "the worker outlived its launcher");
+        // An exited judge whose grandchild keeps stdout open costs its output, not a hang.
+        let started = Instant::now();
+        let out = wait(sh("sleep 10 & echo x"), None, Duration::from_secs(30)).unwrap().unwrap();
+        assert!(out.status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 }

@@ -896,7 +896,16 @@ fn an_invalid_answer_is_retried_once_then_dropped() {
     fx.reply("4", "0.1", &answer(3));
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert_eq!(fx.calls().len(), 6, "five session calls, then the skill report");
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 6, "five session calls, then the skill report");
+    // A retry carries the first input and why its answer was rejected.
+    let (first, second) = (fx.left(&calls[0], "stdin").unwrap(), fx.left(&calls[1], "stdin").unwrap());
+    assert!(second.starts_with(&first), "{second}");
+    assert_eq!(
+        &second[first.len()..],
+        "\n<rejected-answer>\nYour previous answer was rejected: cites L999, which is not in the session. \
+         Answer again with that fixed.\n</rejected-answer>\n"
+    );
     assert!(stdout(&out).starts_with("unslop: 2 judged, 1 dropped, $0.60 spent of $1.00\n"), "{}", stdout(&out));
     let err = stderr(&out);
     assert!(err.contains("warning: x: judge answer dropped after one retry"), "{err}");

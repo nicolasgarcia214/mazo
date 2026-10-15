@@ -1166,8 +1166,9 @@ that a session's verdict survives its transcript.
    assistant message or a tool result, and no whole user message of 12 to 39
    characters. Both sides are compared after lowercasing and collapsing
    whitespace. A record
-   that fails is retried once, then dropped and counted as an error. It is
-   never stored half-valid.
+   that fails is retried once, with the input followed by a
+   `<rejected-answer>` block that names the failure, then dropped and counted
+   as an error. It is never stored half-valid.
 
 **Stage 2: one record per skill.** Runs after stage 1 when any new session
 record was written, or with `--resynth`. Its input is:
@@ -1202,7 +1203,10 @@ removed after the call. skima passes the shipped prompt and the input as the
 table says: for Claude, the prompt is the `--system-prompt` argument value and
 the input goes on stdin, so no file is written; Codex and Pi, which read a
 schema or input from a file, get those files in a fresh temporary directory.
-Every flag below exists today (E16):
+A call still running after 15 minutes gets SIGTERM, which a launcher such as
+Codex's npm shim forwards, then SIGKILL 5 seconds later, and counts as an
+invalid answer; a killed Claude call counts its cap as spent. Every flag below exists
+today (E16):
 
 | Agent | Command | Structured output | Spend |
 |---|---|---|---|
@@ -1715,7 +1719,9 @@ and records its arguments, so no test spends money:
   $0.10.
 - An invalid record (a cited line outside the condensed text, an unknown
   session id, 40 characters copied from a user message or a tool result) is
-  retried once and then dropped.
+  retried once, with the failure named in the retry's input, and then dropped.
+- A judge still running at its limit is killed, even when a grandchild holds
+  its pipes.
 - Rates are computed from session records, not taken from the judge.
 - D13: the stub writes a Claude transcript with a Skill load into a project
   directory whose cwd is under `audit-runs/`; a scan after the audit appends
