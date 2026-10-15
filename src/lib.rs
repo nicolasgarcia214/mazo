@@ -9,6 +9,7 @@ pub mod config;
 pub mod evals;
 pub mod inventory;
 pub mod ledger;
+pub mod lifecycle;
 pub mod links;
 pub mod policy;
 pub mod readcmd;

@@ -77,6 +77,17 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Permanently delete archived skills whose work is saved in git.
+    Prune {
+        /// One entry of `.archive/`; every entry when omitted.
+        name: Option<String>,
+        /// Delete without asking; required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+        /// Delete even files whose content is in no HEAD path.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -111,6 +122,9 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
         }
         Cmd::Status { agent, json } => cmd_status(&cfg, &inv, agent, json),
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
+        Cmd::Prune { name, yes, force } => {
+            skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
+        }
     }
 }
 

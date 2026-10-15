@@ -44,6 +44,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima show <skill>` | A skill's daily histogram and recent events, each with the log line it came from. |
 | `skima status` | Drift and policy for every home. Writes nothing. |
 | `skima sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
+| `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 
 `usage`, `unused` and `show` scan first, so their numbers are current. Every
 report prints how far back each home's logs go: "unused since 2026-09-10" is not
