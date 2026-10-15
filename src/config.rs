@@ -132,16 +132,20 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     let joined = base.join(&raw.source);
     let source = fs::canonicalize(&joined).map_err(|e| format!("{}: {e}", joined.display()))?;
     let home = home_dir()?;
-    let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
-    let mut homes = Vec::new();
+    let mut homes: Vec<Home> = Vec::new();
     for h in raw.homes {
-        let path = match h.agent {
-            Agent::Pi => {
-                let env = std::env::var("PI_CODING_AGENT_DIR").ok().filter(|v| !v.is_empty());
-                let value = env.unwrap_or(h.path);
-                pi_agent_dir(&value, &home, &cwd)?
+        if homes.iter().any(|o| o.name == h.name) {
+            return Err(format!("{}: two homes are named {:?}", path.display(), h.name));
+        }
+        // A relative `path` is relative to this file, like `source`; Pi
+        // resolves its own variable against the cwd, so skima does too.
+        let path = match (h.agent, std::env::var("PI_CODING_AGENT_DIR").ok().filter(|v| !v.is_empty())) {
+            (Agent::Pi, Some(env)) => {
+                let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
+                pi_agent_dir(&env, &home, &cwd)?
             }
-            _ => resolve(&cwd, &expand_tilde(&h.path, &home)),
+            (Agent::Pi, None) => pi_agent_dir(&h.path, &home, base)?,
+            _ => resolve(base, &expand_tilde(&h.path, &home)),
         };
         homes.push(Home { name: h.name, agent: h.agent, path, links: h.links });
     }

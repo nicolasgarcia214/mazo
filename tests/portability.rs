@@ -318,3 +318,33 @@ fn a_fresh_home_runs_init_then_sync() {
     assert_eq!(fs::read_link(f.home.join(".claude/skills/plain")).unwrap(), source.join("plain"));
     assert_ok(&f.skima(&[], &["status"]));
 }
+
+#[test]
+fn relative_home_paths_resolve_against_the_config_file_not_the_cwd() {
+    let f = Fresh::new();
+    let source = f.plain_skill();
+    let config = source.join("skima.toml");
+    common::write(
+        &config,
+        "source = \".\"\n\
+         [[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"../agents/codex\"\n\
+         [[home]]\nname = \"pi\"\nagent = \"pi\"\npath = \"../agents/pi\"\n",
+    );
+    assert_ok(&f.skima(&[("SKIMA_CONFIG", &config)], &["sync"]));
+    for agent in ["codex", "pi"] {
+        let link = f.home.join("agents").join(agent).join("skills/plain");
+        assert_eq!(fs::read_link(&link).unwrap(), source.join("plain"), "{agent}");
+    }
+}
+
+#[test]
+fn two_homes_with_one_name_are_an_error() {
+    let f = Fresh::new();
+    let source = f.plain_skill();
+    let config = source.join("skima.toml");
+    let home = "[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n";
+    common::write(&config, &format!("source = \".\"\n{home}{home}"));
+    let o = f.skima(&[("SKIMA_CONFIG", &config)], &["status"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(stderr(&o).contains("two homes are named \"codex\""), "{}", stderr(&o));
+}

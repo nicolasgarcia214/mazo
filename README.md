@@ -30,7 +30,8 @@ skima reads `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml`
 every command but `init` exits 2. `skima init --source <skills dir>` writes it:
 a home for each of `~/.claude`, `~/.codex` and `~/.pi/agent` that exists, and
 every policy rule off. It never overwrites an existing file. A config can be a
-symlink; `source` is resolved against the directory of the file it points to.
+symlink; `source` and a relative home `path` are resolved against the
+directory of the file it points to.
 
 ```toml
 source = "."                      # the skills directory, relative to this file

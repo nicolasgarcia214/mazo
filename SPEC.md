@@ -949,10 +949,11 @@ links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 ```
 
 - `name` labels the home in the coverage footer, in `coverage.json`, and in
-  `status` output.
+  `status` output. Two homes with one name are an error.
 - Every path goes through one expansion: `~`, and the Pi normalisation
-  (§5.6). For the Pi home, a set `PI_CODING_AGENT_DIR` overrides `path`, as it
-  does for Pi itself.
+  (§5.6). A relative `path` is relative to the config file, like `source`. For
+  the Pi home, a set `PI_CODING_AGENT_DIR` overrides `path`, and a relative
+  value is relative to the cwd, as it is for Pi itself.
 - `links` lists extra files to link into the home. The keys are relative to the
   home, the values relative to `source`.
 - An unknown key anywhere is an error, so a typo in a policy name never
