@@ -77,6 +77,28 @@ impl Adapter for Codex {
         }
         out
     }
+
+    fn prompt_at(&self, src: &str) -> Option<String> {
+        super::prompt_back(src, user_turn)
+    }
+}
+
+/// SPEC §4.7: an `event_msg` `user_message`, or the `item_completed`
+/// `UserMessage` that replaced it from 2026-08. A bare `$name` gives way to the
+/// turn before it, and a `<skill>` injection is never the user's.
+fn user_turn(v: &Value) -> Option<String> {
+    if v["type"] != "event_msg" {
+        return None;
+    }
+    let p = &v["payload"];
+    let text = match p["type"].as_str()? {
+        "user_message" => p["message"].as_str()?.to_string(),
+        "item_completed" if p["item"]["type"] == "UserMessage" => super::message_text(&p["item"]["content"]),
+        _ => return None,
+    };
+    let text = super::strip_injected(&text)?;
+    let bare = text.strip_prefix('$').is_some_and(|name| !name.contains(char::is_whitespace));
+    (!bare && !text.starts_with("<skill>")).then_some(text)
 }
 
 /// The parent rollout id named by a `session_meta` header line, if any.

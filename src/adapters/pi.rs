@@ -43,6 +43,26 @@ impl Adapter for Pi {
         }
         out
     }
+
+    fn prompt_at(&self, src: &str) -> Option<String> {
+        super::prompt_back(src, user_turn)
+    }
+}
+
+/// SPEC §4.7: a user `message` entry. A `/skill:` expansion stands for
+/// `/skill:name args`, and a bare one for nothing, so the walk goes on to the
+/// message before it.
+fn user_turn(v: &Value) -> Option<String> {
+    let msg = &v["message"];
+    if v["type"] != "message" || msg["role"] != "user" {
+        return None;
+    }
+    let text = super::message_text(&msg["content"]);
+    match SKILL_BLOCK.captures(&text) {
+        Some(caps) => super::strip_injected(text.split_once("</skill>").map_or("", |(_, args)| args))
+            .map(|args| format!("/skill:{} {args}", &caps[1])),
+        None => super::strip_injected(&text),
+    }
 }
 
 /// One message entry being parsed.

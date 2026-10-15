@@ -672,14 +672,22 @@ evaluated at display time against the transcript, never stored (D11):
   load in the same session file.
 - **`typed`:** the `display` text of the `history.jsonl` line.
 - Injected skill bodies, `<system-reminder>` blocks and pasted-content blocks
-  are stripped before the 300-character cut.
+  are stripped before the 300-character cut, and so are Claude's
+  `<task-notification>` and `<local-command-stdout>` blocks, which the harness
+  writes as user records (509 task notifications on 2026-10-14). A message
+  with nothing left after stripping is not user-authored.
 
 A user-authored message is, per agent: on Claude, a `user` record that is
 neither a `tool_result` nor `isMeta`, whose content is a string or holds
-`text` blocks (an attached image does not disqualify it); on Codex, an
-`event_msg` of type `user_message`; on Pi, a `message` entry with role `user`.
+`text` blocks (an attached image does not disqualify it), with a
+`<command-name>` record read as the command and its `<command-args>`; on
+Codex, an `event_msg` of type `user_message`, or from 2026-08 an
+`item_completed` event whose item is a `UserMessage` (rollouts from 2026-10
+have no `user_message`); on Pi, a `message` entry with role `user`, a
+`/skill:` expansion read as the invocation and the text after `</skill>`.
 Skill injections, which Codex and Pi also record as user turns, are excluded
-by the same markers §4.3 and §4.4 detect.
+by the same markers §4.3 and §4.4 detect. The walk back starts at the load's
+own record, since a Pi expansion carries its own arguments.
 
 Each agent's rule is pinned by a fixture taken from a real session (§10.1).
 `None` (an expired transcript, or no user turn found) skips the example.

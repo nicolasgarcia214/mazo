@@ -296,6 +296,9 @@ impl<F: Fn(&Path, &Chunk, &mut Parsed)> Adapter for Rule<F> {
         (self.0)(path, chunk, &mut parsed);
         parsed
     }
+    fn prompt_at(&self, _src: &str) -> Option<String> {
+        None
+    }
 }
 
 #[test]

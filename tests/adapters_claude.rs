@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use skima::adapters::claude::{self, Claude};
-use skima::adapters::{ActorInputs, Key, Parsed, Raw, Session, SkillRoots};
+use skima::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
 use skima::classify::{Classifier, Roots};
 use skima::config::{Config, Home};
 use skima::inventory::Inventory;
@@ -513,4 +513,54 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
         ("cc:toolu_01EKQ5jSt7RhgFyyw72kyqoY".into(), Channel::Tool, s(&dotfiles), false),
     ];
     assert_eq!(got, want);
+}
+
+/// `prompt_at` on line `line` of a fixture (SPEC §4.7).
+fn prompt(name: &str, line: u64) -> Option<String> {
+    Claude.prompt_at(&format!("{}:{line}", fixture(name).display()))
+}
+
+#[test]
+fn slash_prompt_is_the_invocation_and_its_arguments() {
+    // Line 2 is the meta record; line 1 is the command record holding the arguments.
+    assert_eq!(prompt("slash.jsonl", 2).as_deref(), Some("/gitmoji-conventional-commit [scrubbed]"));
+}
+
+#[test]
+fn bare_slash_prompt_is_the_message_before_it() {
+    // Line 3 is a bare `/gitmoji-conventional-commit`; line 2 is an earlier load's skill body.
+    let want = "Validate the scrubbed claims with two agents and implement it.";
+    assert_eq!(prompt("prompt_bare.jsonl", 4).as_deref(), Some(want));
+}
+
+#[test]
+fn tool_prompt_is_the_user_message_not_a_tool_result() {
+    // Line 3 is a Bash tool_result; lines 5 and 6 are the Skill result and its meta record.
+    let want = Some("Improve the scrubbed skill and check its retros.");
+    assert_eq!(prompt("prompt_tool.jsonl", 5).as_deref(), want);
+    assert_eq!(prompt("prompt_tool.jsonl", 6).as_deref(), want);
+}
+
+#[test]
+fn injected_blocks_are_stripped_and_an_image_keeps_its_text() {
+    let image = "scrubbed reply request:\n\n[Image #2]\n\n use /unslop";
+    assert_eq!(prompt("prompt_image.jsonl", 4).as_deref(), Some(image));
+    let pasted = "Improve the scrubbed skill based on this one: \"\n\n\"";
+    assert_eq!(prompt("prompt_pasted.jsonl", 3).as_deref(), Some(pasted));
+    // Lines 2 and 3 hold only a task notification and a `<system-reminder>`, so
+    // the walk passes them. Line 2 is real but came 68 records before line 1 in
+    // its session, where no load follows it.
+    assert_eq!(prompt("prompt_reminder.jsonl", 4).as_deref(), Some("Validate the scrubbed nits and commit."));
+}
+
+#[test]
+fn typed_prompt_is_the_history_display() {
+    assert_eq!(prompt("history.jsonl", 1).as_deref(), Some("/gitmoji-conventional-commit [scrubbed]"));
+}
+
+#[test]
+fn expired_transcript_has_no_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(Claude.prompt_at(&format!("{}:2", dir.path().join("gone.jsonl").display())), None);
+    assert_eq!(prompt("slash.jsonl", 3), None, "a line past the end");
 }

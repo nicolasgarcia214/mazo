@@ -37,6 +37,10 @@ impl Adapter for Claude {
         }
         out
     }
+
+    fn prompt_at(&self, src: &str) -> Option<String> {
+        super::prompt_back(src, authored)
+    }
 }
 
 /// One transcript record with the fields every event takes from it.
@@ -139,6 +143,33 @@ fn base_dir(content: &Value) -> Option<&str> {
 
 fn blocks(content: &Value) -> impl Iterator<Item = &Value> {
     content.as_array().into_iter().flatten()
+}
+
+/// SPEC §4.7: a `typed` history line's `display`, or a user record that is
+/// neither a `tool_result` nor `isMeta`. A slash command record stands for
+/// `/name args`, and a bare `/name` for nothing, so the walk goes on to the
+/// message before it.
+fn authored(v: &Value) -> Option<String> {
+    if let Some(display) = v["display"].as_str() {
+        return super::strip_injected(display);
+    }
+    let content = &v["message"]["content"];
+    if v["type"] != "user" || v["isMeta"] == true || blocks(content).any(|b| b["type"] == "tool_result") {
+        return None;
+    }
+    let text = super::message_text(content);
+    match tag(&text, "command-name") {
+        Some(name) => {
+            super::strip_injected(tag(&text, "command-args").unwrap_or_default()).map(|args| format!("{name} {args}"))
+        }
+        None => super::strip_injected(&text),
+    }
+}
+
+/// The text between `<name>` and `</name>`.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let (_, rest) = text.split_once(&format!("<{name}>"))?;
+    Some(rest.split_once(&format!("</{name}>"))?.0)
 }
 
 /// Rows 4–5: `Read` and `Bash` tool calls on skill files, one event per skill

@@ -212,3 +212,27 @@ fn fork_copies_share_keys_and_the_child_roots_to_the_parent() {
     );
     assert_eq!(pi::header_id_parent(&tail::first_line(&files[0]).unwrap().unwrap()), Some((parent_id.into(), None)));
 }
+
+#[test]
+fn skill_block_prompt_is_the_invocation_and_its_arguments() {
+    let src = format!("{}:2", fixture("slash.jsonl").display());
+    assert_eq!(pi::Pi.prompt_at(&src).as_deref(), Some("/skill:goal-smart [scrubbed]"));
+}
+
+#[test]
+fn bare_skill_block_prompt_is_the_message_before_it() {
+    // No session on this machine has a bare `/skill:`, so this one is composed:
+    // the `slash.jsonl` header, a plain message, then that file's block without arguments.
+    let header = tail::first_line(&fixture("slash.jsonl")).unwrap().unwrap();
+    let user = |id: &str, text: &str| {
+        serde_json::json!({"type": "message", "id": id, "timestamp": "2026-09-11T03:25:29.274Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+        .to_string()
+    };
+    let block = "<skill name=\"goal-smart\" location=\"/home/nicolas/.pi/agent/skills/goal-smart/SKILL.md\">\n[scrubbed]\n</skill>";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let text = [String::from_utf8(header).unwrap(), user("a", "Plan the scrubbed work."), user("b", block)].join("\n");
+    std::fs::write(&path, text).unwrap();
+    assert_eq!(pi::Pi.prompt_at(&format!("{}:3", path.display())).as_deref(), Some("Plan the scrubbed work."));
+}

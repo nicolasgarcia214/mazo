@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use skima::adapters::codex::{self, Codex};
-use skima::adapters::{Key, Parent, Parsed, Raw, SkillRoots};
+use skima::adapters::{Adapter, Key, Parent, Parsed, Raw, SkillRoots};
 use skima::classify::Roots;
 use skima::config::{Config, Home};
 use skima::inventory::Inventory;
@@ -315,4 +315,23 @@ fn golden_codex_id() {
         "{header}\n{{\"timestamp\":\"2027-01-01T00:00:00Z\",\"type\":\"response_item\",\"payload\":{payload}}}\n"
     ));
     assert_eq!(later.raws[0].key, p.raws[0].key);
+}
+
+/// `prompt_at` on line `line` of a fixture (SPEC §4.7).
+fn prompt(name: &str, line: u64) -> Option<String> {
+    Codex.prompt_at(&format!("{}:{line}", fixtures().join(name).display()))
+}
+
+#[test]
+fn name_block_prompt_is_the_user_turn() {
+    // Line 6 is the `<skill>` injection, line 5 the `user_message` event.
+    assert_eq!(prompt("name_block.jsonl", 6).as_deref(), Some("$triage-finding scrubbed"));
+    // From 2026-08 the turn is an `item_completed` `UserMessage` (line 3).
+    assert_eq!(prompt("prompt_item.jsonl", 4).as_deref(), Some("Use $vbc-noimpl now."));
+}
+
+#[test]
+fn bare_name_prompt_is_the_turn_before_it() {
+    // Line 5 is a bare `$gitmoji-conventional-commit`.
+    assert_eq!(prompt("prompt_bare.jsonl", 6).as_deref(), Some("Validate the scrubbed solution with an agent."));
 }

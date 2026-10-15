@@ -7,6 +7,10 @@ pub mod pi;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use regex::Regex;
+use serde_json::Value;
 
 use crate::config::{self, Home};
 use crate::ledger::{Agent, Channel};
@@ -158,6 +162,10 @@ pub trait Adapter {
     }
     /// Parses the prefiltered lines of one file. `header` is line 1 of the file.
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
+    /// The user-authored text behind the load at `src` (`<file>:<line>`), read
+    /// at display time and never stored (SPEC §4.7). `None` when the file is
+    /// gone or holds no user turn up to that line.
+    fn prompt_at(&self, src: &str) -> Option<String>;
 }
 
 pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
@@ -166,6 +174,55 @@ pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
         Agent::Codex => &codex::Codex,
         Agent::Pi => &pi::Pi,
     }
+}
+
+/// The first text `authored` reads walking back from the record at `src`
+/// (`<file>:<line>`), that record included: a `/skill:` message holds its own
+/// prompt, a Claude meta record or Codex injection does not (SPEC §4.7).
+fn prompt_back(src: &str, authored: impl Fn(&Value) -> Option<String>) -> Option<String> {
+    let (file, line) = src.rsplit_once(':')?;
+    let line: usize = line.parse().ok()?;
+    let bytes = std::fs::read(file).ok()?;
+    let body = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+    let lines: Vec<&[u8]> = body.split(|&b| b == b'\n').take(line).collect();
+    if line == 0 || lines.len() < line {
+        return None;
+    }
+    lines.iter().rev().filter_map(|l| serde_json::from_slice::<Value>(l).ok()).find_map(|v| authored(&v))
+}
+
+/// The text of a message `content`: a string, or its `text` blocks joined by
+/// newlines, so an image beside the text does not hide it.
+fn message_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        _ => content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["type"] == "text")
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// Text the harness puts inside a user turn: reminders, task notifications,
+/// local command output and pasted content (SPEC §4.7).
+static INJECTED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?s)<system-reminder>.*?</system-reminder>|<task-notification>.*?</task-notification>",
+        r"|<local-command-stdout>.*?</local-command-stdout>|<pasted_content[^>]*>.*?</pasted_content[^>]*>",
+    ))
+    .expect("valid regex")
+});
+static BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n\s*\n").expect("valid regex"));
+
+/// `text` without injected blocks; `None` when nothing the user wrote is left.
+fn strip_injected(text: &str) -> Option<String> {
+    let text = INJECTED.replace_all(text, "");
+    let text = BLANK_LINES.replace_all(text.trim(), "\n\n");
+    (!text.is_empty()).then(|| text.into_owned())
 }
 
 /// Every `*.jsonl` under `dir` (recursively), sorted by basename then path.
