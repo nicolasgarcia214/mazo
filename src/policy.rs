@@ -45,7 +45,7 @@ fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
 }
 
 /// The Agent Skills format rules on a parsed frontmatter.
-fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
+pub fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
     if !meta.is_mapping() {
         return Err("SKILL.md frontmatter must be a mapping".into());
     }

@@ -82,6 +82,12 @@ enum Cmd {
         #[arg(long)]
         source: std::path::PathBuf,
     },
+    /// Create a skill that already satisfies the configured policy rules.
+    New {
+        name: String,
+        #[arg(long)]
+        description: String,
+    },
     /// Permanently delete archived skills whose work is saved in git.
     Prune {
         /// One entry of `.archive/`; every entry when omitted.
@@ -136,6 +142,7 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
         }
         Cmd::Status { agent, json } => cmd_status(&cfg, &inv, agent, json),
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
+        Cmd::New { name, description } => skima::lifecycle::new(&cfg, &name, &description),
         Cmd::Prune { name, yes, force } => {
             skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }

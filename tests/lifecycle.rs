@@ -1,4 +1,4 @@
-//! Lifecycle commands end to end (SPEC §10.8): `prune`.
+//! Lifecycle commands end to end (SPEC §10.8): `new`, `prune`.
 
 mod common;
 
@@ -180,4 +180,158 @@ fn an_archived_skill_in_a_repository_without_commits_is_refused() {
     fx.skill(".archive/a");
     assert_code(&fx.prune(&["--yes"]), 1);
     assert_eq!(archived(&fx), ["a"]);
+}
+
+const ALL_RULES: &str =
+    "[policy]\nno_disable_model_invocation = true\ncodex_manifest = true\nclaude_name_only = true\n";
+
+/// A source with no skill yet, two Claude homes and a Codex home, each with an
+/// empty settings file, under a private `HOME`.
+struct Homes {
+    _temp: tempfile::TempDir,
+    home: PathBuf,
+    source: PathBuf,
+}
+
+impl Homes {
+    fn new(policy: &str) -> Homes {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let (home, source) = (root.join("home"), root.join("skills"));
+        let homes = "[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\n\n\
+                     [[home]]\nname = \"work\"\nagent = \"claude\"\npath = \"~/.claude-work\"\n\n\
+                     [[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n";
+        common::write(&source.join("skima.toml"), &format!("source = \".\"\n{policy}\n{homes}"));
+        for h in HOMES {
+            common::write(&home.join(h).join("settings.json"), "{}\n");
+        }
+        Homes { _temp: temp, home, source }
+    }
+
+    fn skima(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_skima"))
+            .args(args)
+            .current_dir(&self.home)
+            .env("HOME", &self.home)
+            .env("SKIMA_CONFIG", self.source.join("skima.toml"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .output()
+            .unwrap()
+    }
+
+    /// The files under `<source>/<name>`, relative to it.
+    fn files(&self, name: &str) -> Vec<String> {
+        let dir = self.source.join(name);
+        let mut out = Vec::new();
+        let mut stack = vec![dir.clone()];
+        while let Some(d) = stack.pop() {
+            for e in fs::read_dir(&d).unwrap().flatten() {
+                if e.file_type().unwrap().is_dir() {
+                    stack.push(e.path());
+                } else {
+                    out.push(e.path().strip_prefix(&dir).unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// No home links the skill.
+    fn unlinked(&self, name: &str) -> bool {
+        HOMES.iter().all(|h| self.home.join(h).join("skills").join(name).symlink_metadata().is_err())
+    }
+}
+
+const HOMES: [&str; 3] = [".claude", ".claude-work", ".codex"];
+
+#[test]
+fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
+    let hs = Homes::new(ALL_RULES);
+    let out = hs.skima(&["new", "fresh-skill", "--description", "Does a fresh thing."]);
+    assert_code(&out, 0);
+    assert_eq!(hs.files("fresh-skill"), ["SKILL.md", "agents/openai.yaml"]);
+    let manifest = fs::read_to_string(hs.source.join("fresh-skill/agents/openai.yaml")).unwrap();
+    assert!(manifest.contains("default_prompt: \"Use $fresh-skill."), "{manifest}");
+
+    // The per-skill rules, every configurable one on, pass on what was written.
+    let policy = skima::config::Policy {
+        no_disable_model_invocation: true,
+        codex_manifest: true,
+        claude_name_only: true,
+        authoring_skills: vec![],
+    };
+    let cfg = skima::config::Config { source: hs.source.clone(), loose: vec![], homes: vec![], policy };
+    let inv = skima::inventory::Inventory::load(&hs.source).unwrap();
+    assert_eq!(skima::policy::per_skill(&cfg, &inv), Vec::<String>::new());
+
+    // One name-only line per Claude home, none for Codex.
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let lines: Vec<(&str, &str)> = stdout.lines().filter_map(|l| l.split_once(": add to skillOverrides: ")).collect();
+    let settings = |h: &str| hs.home.join(h).join("settings.json").to_string_lossy().into_owned();
+    let paths: Vec<&str> = lines.iter().map(|(p, _)| *p).collect();
+    assert_eq!(paths, [settings(".claude"), settings(".claude-work")], "{stdout}");
+    assert!(hs.unlinked("fresh-skill"), "new ran sync");
+
+    for (path, entry) in lines {
+        assert_eq!(entry, "\"fresh-skill\": \"name-only\"");
+        fs::write(path, format!("{{\"skillOverrides\": {{{entry}}}}}\n")).unwrap();
+    }
+    assert_code(&hs.skima(&["sync"]), 0);
+    assert_code(&hs.skima(&["status"]), 0);
+}
+
+#[test]
+fn new_with_every_rule_off_writes_only_skill_md() {
+    let hs = Homes::new("");
+    let out = hs.skima(&["new", "plain", "--description", "A plain skill."]);
+    assert_code(&out, 0);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("name-only"));
+    assert_eq!(hs.files("plain"), ["SKILL.md"]);
+    // Not synced: status sees the missing links until sync runs.
+    assert!(hs.unlinked("plain"), "new ran sync");
+    assert_code(&hs.skima(&["status"]), 1);
+    assert_code(&hs.skima(&["sync"]), 0);
+    assert_code(&hs.skima(&["status"]), 0);
+}
+
+#[test]
+fn a_description_with_yaml_syntax_round_trips() {
+    let hs = Homes::new("");
+    let description = "Says \"hi\": a # b\\c, then\na tab\there, and \u{2028} é.";
+    assert_code(&hs.skima(&["new", "tricky", "--description", description]), 0);
+    let text = fs::read_to_string(hs.source.join("tricky/SKILL.md")).unwrap();
+    let meta = skima::yaml::frontmatter(&text).unwrap();
+    assert_eq!(skima::yaml::get(&meta, "description").and_then(skima::yaml::string), Some(description));
+    assert!(text.ends_with("---\n\n# tricky\n"), "{text}");
+    assert_code(&hs.skima(&["sync"]), 0);
+}
+
+#[test]
+fn new_rejects_a_missing_description_a_bad_name_and_an_existing_entry() {
+    let hs = Homes::new(ALL_RULES);
+    assert_code(&hs.skima(&["new", "ok"]), 2);
+    let long = "a".repeat(65);
+    for name in ["Bad", "a--b", "-a", "a_b", "../escape", "a/b", "", long.as_str()] {
+        assert_code(&hs.skima(&["new", name, "--description", "D."]), 2);
+    }
+    let too_long = "d".repeat(1025);
+    for description in ["", " \t ", too_long.as_str()] {
+        assert_code(&hs.skima(&["new", "ok", "--description", description]), 2);
+    }
+    let entries: Vec<_> = fs::read_dir(&hs.source).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(entries, ["skima.toml"]);
+    assert_code(&hs.skima(&["new", "ok", "--description", &"d".repeat(1024)]), 0);
+
+    // An existing skill, a plain file and a dangling link are each refused and left as they were.
+    assert_code(&hs.skima(&["new", "ok", "--description", "Other."]), 1);
+    assert!(fs::read_to_string(hs.source.join("ok/SKILL.md")).unwrap().contains(&"d".repeat(1024)));
+    fs::write(hs.source.join("file"), "x").unwrap();
+    std::os::unix::fs::symlink("nowhere", hs.source.join("dangling")).unwrap();
+    for name in ["file", "dangling"] {
+        let out = hs.skima(&["new", name, "--description", "D."]);
+        assert_code(&out, 1);
+        assert!(stderr(&out).contains("already exists"), "{}", stderr(&out));
+    }
+    assert_eq!(fs::read_to_string(hs.source.join("file")).unwrap(), "x");
 }

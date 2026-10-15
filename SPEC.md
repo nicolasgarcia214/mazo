@@ -1298,7 +1298,7 @@ skima audit   <skill> [--limit 20 | --all] [--max-budget-usd 1] [--resynth] [--d
   `--report` adds the per-channel counts, the unparsed samples and the parser
   canary.
 - Exit codes: 0 for success or clean, 1 for drift, a conflict, a policy
-  failure, a refused `retire` or `prune`, an audit that had candidates and
+  failure, a refused `new`, `retire` or `prune`, an audit that had candidates and
   dropped every record (no candidates is exit 0), or an audit whose stage 2
   was skipped for budget; 2
   for usage errors, including a missing config (F11).

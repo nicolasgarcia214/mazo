@@ -49,6 +49,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima status` | Drift and policy for every home. Writes nothing. |
 | `skima sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
 | `skima init --source <dir>` | Writes the config for a skills directory: one home per existing agent directory, every policy rule off. Refuses to overwrite. |
+| `skima new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry. Does not sync. |
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 
 `usage`, `unused` and `show` scan first, so their numbers are current. Every

@@ -1,4 +1,4 @@
-//! Lifecycle of a skill in the source: `prune` (SPEC F17).
+//! Lifecycle of a skill in the source: `new`, `prune` (SPEC F17).
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
@@ -6,7 +6,77 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::Result;
+use crate::config::Config;
 use crate::inventory::git;
+use crate::ledger::Agent;
+use crate::yaml;
+
+/// `skima new <name> --description <text>` (SPEC F17, D19): writes
+/// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
+/// then prints the `name-only` line for each Claude home under `claude_name_only`.
+/// Exit 2 for a name or description the always-on rules reject, 1 for an
+/// existing entry. It never runs `sync`.
+pub fn new(cfg: &Config, name: &str, description: &str) -> Result<ExitCode> {
+    let skill_md = format!("---\nname: {name}\ndescription: {}\n---\n\n# {name}\n", quoted(description));
+    // Parsed back through the rules `sync` runs, so what is written passes them.
+    let checked = yaml::frontmatter(&skill_md).and_then(|meta| {
+        crate::policy::always_on(&meta, name)?;
+        match yaml::get(&meta, "description").and_then(yaml::string) {
+            Some(d) if d == description => Ok(()),
+            _ => Err("the description does not survive as a YAML string".into()),
+        }
+    });
+    if let Err(e) = checked {
+        return usage(&format!("new {name}: {e}"));
+    }
+    let dir = cfg.source.join(name);
+    match std::fs::create_dir(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            eprintln!("ERROR: new refused: {} already exists", dir.display());
+            return Ok(ExitCode::from(1));
+        }
+        r => r.map_err(|e| format!("{}: {e}", dir.display()))?,
+    }
+    let mut files = vec![("SKILL.md", skill_md)];
+    if cfg.policy.codex_manifest {
+        let manifest =
+            format!("interface:\n  default_prompt: \"Use ${name}.\"\n\npolicy:\n  allow_implicit_invocation: false\n");
+        files.push(("agents/openai.yaml", manifest));
+    }
+    for (rel, text) in files {
+        let path = dir.join(rel);
+        let parent = path.parent().unwrap_or(&dir);
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        println!("wrote {}", path.display());
+    }
+    if cfg.policy.claude_name_only {
+        for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
+            println!("{}: add to skillOverrides: \"{name}\": \"name-only\"", h.settings().display());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// A YAML double-quoted scalar: `"` and `\` escaped, and every control or
+/// line-separating character as `\uXXXX`, so the value stays on one line.
+fn quoted(s: &str) -> String {
+    let mut out = String::from('"');
+    for c in s.chars() {
+        match c {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{feff}') => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
 
 /// `skima prune [<name>] [--yes] [--force]` (SPEC F17, D21): permanently deletes
 /// `<source>/.archive/<name>`, or every archived entry. Exit 2 for a usage error,
