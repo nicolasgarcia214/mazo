@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::Result;
+use crate::history::History;
 
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
@@ -16,15 +17,18 @@ pub struct Inventory {
     pub known: BTreeSet<String>,
     /// The git worktree containing the source, for the authoring rule.
     pub worktree: Option<PathBuf>,
+    /// The source's git history; None outside a git worktree (SPEC §6.3).
+    pub history: Option<History>,
 }
 
 impl Inventory {
     pub fn load(source: &Path) -> Result<Inventory> {
         let skills = canonical_skills(source)?;
-        let mut known = skills.clone();
-        known.extend(git_skill_names(source));
         let worktree = git(source, &["rev-parse", "--show-toplevel"]).map(|s| PathBuf::from(s.trim()));
-        Ok(Inventory { source: source.to_path_buf(), skills, known, worktree })
+        let history = worktree.as_deref().and_then(|w| History::load(source, w));
+        let mut known = skills.clone();
+        known.extend(history.iter().flat_map(History::skill_names));
+        Ok(Inventory { source: source.to_path_buf(), skills, known, worktree, history })
     }
 }
 
@@ -39,18 +43,6 @@ pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
         }
     }
     Ok(out)
-}
-
-/// The basename of the parent of every `SKILL.md` path in the history of the
-/// source (E15: nested layouts such as `skills/claude/goal-audit` yield `goal-audit`).
-fn git_skill_names(source: &Path) -> BTreeSet<String> {
-    let Some(out) = git(source, &["log", "--name-only", "--format=", "--", "."]) else {
-        return BTreeSet::new();
-    };
-    out.lines()
-        .filter(|l| l.ends_with("/SKILL.md"))
-        .filter_map(|l| Path::new(l).parent()?.file_name()?.to_str().map(str::to_string))
-        .collect()
 }
 
 /// Runs `git -C dir args…` and returns stdout on success.
@@ -102,12 +94,4 @@ fn citing_text(dir: &Path) -> String {
     refs.sort();
     parts.extend(refs.iter().filter_map(|p| std::fs::read_to_string(p).ok()));
     parts.join(" ").replace('`', "").split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// When the skill was first committed to the source repo (following renames of
-/// its `SKILL.md`), or None when it has no commit (SPEC F3 `new`).
-pub fn first_commit(source: &Path, skill: &str) -> Option<jiff::Timestamp> {
-    let out = git(source, &["log", "--follow", "--format=%ct", "--", &format!("{skill}/SKILL.md")])?;
-    let secs: i64 = out.lines().last()?.trim().parse().ok()?;
-    jiff::Timestamp::from_second(secs).ok()
 }

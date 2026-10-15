@@ -73,8 +73,7 @@ fn world(source: &Path) -> World {
             ..Policy::default()
         },
     };
-    let skills = inventory::canonical_skills(source).unwrap();
-    let inv = Inventory { source: source.into(), known: skills.clone(), skills, worktree: None };
+    let inv = Inventory::load(source).unwrap();
     let coverage = BTreeMap::from([
         ("claude".to_string(), Coverage { first: Some("2026-09-10T08:00:00Z".into()), last_scan: Some(NOW.into()) }),
         ("codex".to_string(), Coverage { first: Some("2026-03-29T08:00:00Z".into()), last_scan: Some(NOW.into()) }),
@@ -330,7 +329,9 @@ fn usage_shows_the_latest_grade_and_staleness() {
     let input = w.input(&[]);
     assert_eq!(row(&report::usage(&input, &args(), true, false), "unslop")["grade"]["stale"], false);
     write(&repo.path().join("unslop/SKILL.md"), "---\nname: unslop\ndescription: Edited.\n---\n");
-    let text = report::usage(&input, &args(), false, false);
+    // The next report reads the history again.
+    let w = world(repo.path());
+    let text = report::usage(&w.input(&[]), &args(), false, false);
     assert!(text.lines().any(|l| l.starts_with("unslop") && l.ends_with(" 9.1*")), "{text}");
 }
 
@@ -396,7 +397,8 @@ fn evals_latest_date_and_staleness() {
     git(src, &["add", "."], NOW);
     git(src, &["commit", "-q", "-m", "skill and grades"], "2026-02-01T00:00:00Z");
 
-    let e = evals::load(src, "s");
+    let load = || evals::load(&Inventory::load(src).unwrap(), "s");
+    let e = load();
     let g = e.grade.as_ref().unwrap();
     assert!(
         g.eval.file.ends_with("b.md"),
@@ -410,12 +412,12 @@ fn evals_latest_date_and_staleness() {
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
     git(src, &["commit", "-q", "-am", "edit skill"], "2026-03-01T00:00:00Z");
-    assert!(evals::load(src, "s").grade.unwrap().stale, "a later skill commit makes it stale");
+    assert!(load().grade.unwrap().stale, "a later skill commit makes it stale");
 
     write(&src.join(".grades/s/c.md"), "---\ntarget: s\ndate: 2026-04-01\nscore: 9\n---\n");
-    let g = evals::load(src, "s").grade.unwrap();
+    let g = load().grade.unwrap();
     assert!(g.eval.file.ends_with("c.md") && !g.stale, "an uncommitted grade is not stale");
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v3\n---\n");
-    assert!(evals::load(src, "s").grade.unwrap().stale, "uncommitted skill changes make any grade stale");
+    assert!(load().grade.unwrap().stale, "uncommitted skill changes make any grade stale");
 }

@@ -429,6 +429,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
         skills: ["grade".to_string()].into(),
         known: ["grade".to_string(), "argus".to_string(), "gitmoji-conventional-commit".to_string()].into(),
         worktree: None,
+        history: None,
     };
     let first = skima::scan::scan(&cfg, &inv, &data, false).unwrap();
     // No transcript exists here, so line 1 counts too.

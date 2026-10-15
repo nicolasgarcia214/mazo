@@ -131,7 +131,8 @@ Every acceptance criterion is proven by a run (§10), not by reading the code.
   days), and prints that window for each home.
 - A skill whose first commit in the skills repo is newer than the window start,
   or that has no commit yet (`break-invariants` is untracked today), is marked
-  `new` instead.
+  `new` instead. The first commit does not follow renames: a renamed skill's
+  first commit is its rename commit (§6.3 Cost).
 - A skill is `held` when a skill that cites it (§5.3) has a strong event in the
   window. Held skills are listed with their live holders and are not retirement
   candidates.
@@ -1095,17 +1096,23 @@ frontmatter.
   shown (F14), not only the latest.
 - **Grades.** skima reads the frontmatter `target`, `date` and `score`. Let `G`
   be the last commit that touched the grade file
-  (`git log -1 --format=%H -- <grade file>`). The grade is stale when
-  `git rev-list G..HEAD -- <skill>` is non-empty, that is, when a later commit
-  changed the skill. Its length is the `+N` of F2. An edit committed together with the grade does not count.
+  (`git log -1 --format=%H -- <grade file>`). The grade is stale when a
+  commit or merge that is not an ancestor of `G` changed the skill. Their
+  number is the `+N` of F2 (computed as under Cost). An edit committed together with the grade does not count.
   An uncommitted grade is not stale. Uncommitted changes to the skill
   (`git status --porcelain -- <skill>` non-empty) make any grade stale, because
   the text being used is not the text that was graded; with no later commit
   this shows as `+wip`.
 - **Cost.** Version 1 ran two or three `git` processes per skill per report.
-  Version 2 runs one `git log --name-only --format=%H%x00%cI%x00%s` over the
-  source and one `git status --porcelain` per report, and derives first commit,
-  last commit, `+N` and `+wip` for every skill from them.
+  Version 2 runs one `git log --parents -m --name-only --format=%H%x00%P%x00%cI%x00%s`
+  over the source and one `git status --porcelain` per report, and derives
+  first commit, last commit, `+N` and `+wip` for every skill from them. A
+  merge touches a skill when its diff against every parent has a path under
+  it. `+N` counts the commits and merges that touch the skill and are not
+  ancestors of `G` in the source-wide rewritten parent graph. This matches
+  `git rev-list --count G..HEAD -- <skill>` on linear history and ordinary
+  merges, and can differ from it when a merge drops one side's changes to
+  the skill, because git simplifies history per path and skima does not.
 - **Not a repository.** When the source is not in a git worktree, history,
   `+N` and `new` (F3) are omitted, and grades are never marked stale.
 - **`baseline_commit`** is deliberately unused. Only some grades carry it, and
@@ -1357,7 +1364,8 @@ skima/
     main.rs         clap dispatch, exit codes
     config.rs       config discovery, [policy], [judge]; path expansion and Pi normalisation; init
     yaml.rs         saphyr loading, the duplicate-key check, frontmatter extraction (§5.4)
-    inventory.rs    canonical skills, frontmatter, known names, fan-in graph, one-pass git history
+    inventory.rs    canonical skills, frontmatter, known names, fan-in graph
+    history.rs      one-pass git history: first and last commit, +N, +wip
     policy.rs       always-on and configurable rules (§5.4), scan-freshness warning
     links.rs        drift classification; plan() (pure) and apply() (the only link writer)
     lifecycle.rs    new, retire, prune (F17)

@@ -7,6 +7,7 @@ pub mod adapters;
 pub mod classify;
 pub mod config;
 pub mod evals;
+pub mod history;
 pub mod inventory;
 pub mod ledger;
 pub mod lifecycle;

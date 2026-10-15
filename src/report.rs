@@ -254,8 +254,7 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
             let last = view.select(&f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
             let spark_from = input.now.checked_sub(SignedDuration::from_hours(24 * (SPARK_DAYS + 1))).ok();
             let last_30d = view.daily_strong(view.select(&f, Some(skill), spark_from), SPARK_DAYS);
-            let grade =
-                input.inv.skills.contains(skill).then(|| grade_out(&evals::load(&input.inv.source, skill))).flatten();
+            let grade = input.inv.skills.contains(skill).then(|| grade_out(&evals::load(input.inv, skill))).flatten();
             UsageRow {
                 skill: skill.to_string(),
                 sess,
@@ -341,7 +340,12 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
         .iter()
         .filter(|s| !used.contains(s.as_str()))
         .map(|skill| {
-            let is_new = inventory::first_commit(&input.inv.source, skill).is_none_or(|t| start.is_some_and(|s| t > s));
+            // SPEC §6.3: outside a git worktree no skill is new.
+            let is_new = input.inv.history.as_ref().is_some_and(|h| {
+                h.first(skill)
+                    .and_then(|c| c.date.parse::<Timestamp>().ok())
+                    .is_none_or(|t| start.is_some_and(|s| t > s))
+            });
             let (holders, others): (Vec<String>, Vec<String>) =
                 citers(skill).into_iter().partition(|a| used.contains(a.as_str()));
             let (status, holders, cluster) = if is_new {
@@ -431,7 +435,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         })
         .collect();
 
-    let evals = evals::load(&input.inv.source, skill);
+    let evals = evals::load(input.inv, skill);
     let grade = grade_out(&evals);
     let latest_retro = evals.retros.last().map(|r| r.date.clone());
     // Strong loads on days after the latest retro's date, over the whole ledger.

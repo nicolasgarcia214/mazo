@@ -3,7 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::inventory::git;
+use crate::history::History;
+use crate::inventory::Inventory;
 use crate::yaml;
 
 /// One loaded grade or retro file.
@@ -31,10 +32,11 @@ pub struct Evals {
     pub retros: Vec<Eval>,
 }
 
-/// The evaluation artifacts of one skill under `source`.
-pub fn load(source: &Path, skill: &str) -> Evals {
+/// The evaluation artifacts of one skill under the inventory's source.
+pub fn load(inv: &Inventory, skill: &str) -> Evals {
+    let source = &inv.source;
     let grade = read_dir(&source.join(".grades").join(skill)).pop().map(|eval| {
-        let stale = grade_stale(source, skill, &eval.file);
+        let stale = inv.history.as_ref().is_some_and(|h| grade_stale(h, source, skill, &eval.file));
         Grade { eval, stale }
     });
     Evals { grade, retros: read_dir(&source.join(".retros").join(skill)) }
@@ -83,14 +85,6 @@ fn date(text: &str) -> Option<String> {
 /// SPEC §6.3: uncommitted changes to the skill make any grade stale; otherwise
 /// the grade is stale when a commit after `G` (the last commit touching the
 /// grade file) changed the skill. An uncommitted grade has no `G`.
-fn grade_stale(source: &Path, skill: &str, grade: &Path) -> bool {
-    let nonempty = |args: &[&str]| git(source, args).is_some_and(|out| !out.trim().is_empty());
-    if nonempty(&["status", "--porcelain", "--", skill]) {
-        return true;
-    }
-    let grade = grade.to_string_lossy();
-    let Some(g) = git(source, &["log", "-1", "--format=%H", "--", &grade]).map(|s| s.trim().to_string()) else {
-        return false;
-    };
-    !g.is_empty() && nonempty(&["rev-list", &format!("{g}..HEAD"), "--", skill])
+fn grade_stale(history: &History, source: &Path, skill: &str, grade: &Path) -> bool {
+    history.wip(skill) || grade.strip_prefix(source).is_ok_and(|g| history.since(skill, g) > 0)
 }
