@@ -77,6 +77,11 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Write a config for a skills directory, with every rule off.
+    Init {
+        #[arg(long)]
+        source: std::path::PathBuf,
+    },
     /// Permanently delete archived skills whose work is saved in git.
     Prune {
         /// One entry of `.archive/`; every entry when omitted.
@@ -102,7 +107,16 @@ fn main() -> ExitCode {
 }
 
 fn run(cmd: Cmd) -> skima::Result<ExitCode> {
-    let cfg = config::load()?;
+    let path = config::path()?;
+    if let Cmd::Init { source } = &cmd {
+        config::init(&path, source)?;
+        println!("wrote {}", path.display());
+        return Ok(ExitCode::SUCCESS);
+    }
+    let Some(cfg) = config::load(&path)? else {
+        eprintln!("ERROR: no config at {}; run skima init --source <skills dir>", path.display());
+        return Ok(ExitCode::from(2));
+    };
     let inv = Inventory::load(&cfg.source)?;
     let tty = std::io::stdout().is_terminal();
     match cmd {
@@ -125,6 +139,7 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
         Cmd::Prune { name, yes, force } => {
             skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
+        Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }
 

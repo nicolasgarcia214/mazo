@@ -1,11 +1,12 @@
-//! `skima.toml` (SPEC §6.1) with its `[policy]` table, and path expansion, including the Pi directory
-//! normalisation that `install.sh` did in Node (SPEC §5.6).
+//! The config (SPEC §6.1) with its `[policy]` table: discovery, `skima init`, and path expansion,
+//! including the Pi directory normalisation that `install.sh` did in Node (SPEC §5.6).
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{ErrorKind, Write};
 use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::ledger::Agent;
@@ -20,7 +21,7 @@ pub struct Config {
 }
 
 /// The `[policy]` table (SPEC §5.4): every rule off and no authoring skill by default.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
     pub no_disable_model_invocation: bool,
@@ -61,44 +62,53 @@ impl Home {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     source: String,
     #[serde(default)]
     loose: Vec<String>,
-    #[serde(default, rename = "home")]
-    homes: Vec<RawHome>,
     #[serde(default)]
     policy: Policy,
+    #[serde(default, rename = "home")]
+    homes: Vec<RawHome>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawHome {
     name: String,
     agent: Agent,
     path: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     links: BTreeMap<String, String>,
 }
 
-/// `$SKIMA_CONFIG`, else `~/dotfiles/skills/skima.toml`.
-fn config_path() -> Result<PathBuf> {
-    match std::env::var_os("SKIMA_CONFIG").filter(|v| !v.is_empty()) {
-        Some(p) => Ok(PathBuf::from(p)),
-        None => Ok(PathBuf::from(home_dir()?).join("dotfiles/skills/skima.toml")),
+/// `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml` with
+/// `XDG_CONFIG_HOME` defaulting to `~/.config` (SPEC §6.1). Nothing else.
+pub fn path() -> Result<PathBuf> {
+    if let Some(p) = std::env::var_os("SKIMA_CONFIG").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(p));
     }
+    let dir = match std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+        Some(d) => PathBuf::from(d),
+        None => PathBuf::from(home_dir()?).join(".config"),
+    };
+    Ok(dir.join("skima/config.toml"))
 }
 
-pub fn load() -> Result<Config> {
-    load_from(&config_path()?)
-}
-
-fn load_from(path: &Path) -> Result<Config> {
-    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+/// The config at `path`, or `None` when no file is there.
+pub fn load(path: &Path) -> Result<Option<Config>> {
+    // The physical file, so a config symlinked from a skills repo resolves
+    // `source` against that repo (SPEC §6.1).
+    let path = match fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let raw: RawConfig = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let base = path.parent().unwrap_or(Path::new("."));
+    let base = path.parent().unwrap_or(Path::new("/"));
     // `source` is relative to the config file and resolved physically, as
     // install.sh's `pwd -P` did (SPEC §6.1, test_install.py:130).
     let joined = base.join(&raw.source);
@@ -117,7 +127,37 @@ fn load_from(path: &Path) -> Result<Config> {
         };
         homes.push(Home { name: h.name, agent: h.agent, path, links: h.links });
     }
-    Ok(Config { source, loose: raw.loose, homes, policy: raw.policy })
+    Ok(Some(Config { source, loose: raw.loose, homes, policy: raw.policy }))
+}
+
+/// `skima init` (SPEC F11): a config at `path` naming `source` absolutely, a
+/// home for each agent directory under `~` that exists, and every rule off.
+/// Refuses to overwrite.
+pub fn init(path: &Path, source: &Path) -> Result<()> {
+    let abs = fs::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let source = abs.to_str().ok_or_else(|| format!("{}: not UTF-8", abs.display()))?.to_string();
+    let home = PathBuf::from(home_dir()?);
+    let homes =
+        [("claude", Agent::Claude, ".claude"), ("codex", Agent::Codex, ".codex"), ("pi", Agent::Pi, ".pi/agent")]
+            .into_iter()
+            .filter(|(_, _, rel)| home.join(rel).exists())
+            .map(|(name, agent, rel)| RawHome {
+                name: name.into(),
+                agent,
+                path: format!("~/{rel}"),
+                links: BTreeMap::new(),
+            })
+            .collect();
+    let raw = RawConfig { source, loose: Vec::new(), policy: Policy::default(), homes };
+    let text = toml::to_string(&raw).map_err(|e| e.to_string())?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| match e.kind() {
+        ErrorKind::AlreadyExists => format!("{} exists; not overwriting it", path.display()),
+        _ => format!("{}: {e}", path.display()),
+    })?;
+    file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 pub(crate) fn home_dir() -> Result<String> {

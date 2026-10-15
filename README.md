@@ -12,8 +12,12 @@ replaces `skills/install.sh` for linking. SPEC.md is the design;
 cargo install --locked --path ~/projects/skima
 ```
 
-skima reads `~/dotfiles/skills/skima.toml`, or the file named by
-`$SKIMA_CONFIG`:
+skima reads `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml`
+(`~/.config/skima/config.toml` when `XDG_CONFIG_HOME` is unset). Without one,
+every command but `init` exits 2. `skima init --source <skills dir>` writes it:
+a home for each of `~/.claude`, `~/.codex` and `~/.pi/agent` that exists, and
+every policy rule off. It never overwrites an existing file. A config can be a
+symlink; `source` is resolved against the directory of the file it points to.
 
 ```toml
 source = "."                      # the skills directory, relative to this file
@@ -44,6 +48,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima show <skill>` | A skill's daily histogram and recent events, each with the log line it came from. |
 | `skima status` | Drift and policy for every home. Writes nothing. |
 | `skima sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
+| `skima init --source <dir>` | Writes the config for a skills directory: one home per existing agent directory, every policy rule off. Refuses to overwrite. |
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 
 `usage`, `unused` and `show` scan first, so their numbers are current. Every

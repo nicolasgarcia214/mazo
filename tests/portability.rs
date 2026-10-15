@@ -1,5 +1,6 @@
 //! A plain Agent Skills directory under the default config: every `[policy]`
-//! rule off (SPEC D9, §5.4, §10.8).
+//! rule off (SPEC D9, §5.4, §10.8), and a fresh `HOME` from config discovery
+//! through `init` to `sync` (F11).
 
 mod common;
 
@@ -181,4 +182,139 @@ fn always_on_rules_hold_with_every_rule_off() {
     assert!(stderr(&o).contains(&format!("{} is missing", t.source.join("extra.md").display())), "{}", stderr(&o));
     assert_ok(&t.skima(&["sync", "--agent", "claude"]));
     assert!(!t.home.join(".codex").exists(), "the links rule applies to the selected homes only");
+}
+
+/// A fresh `HOME` with no config, `SKIMA_CONFIG` and `XDG_CONFIG_HOME` unset
+/// unless a test sets them (SPEC F11).
+struct Fresh {
+    _temp: tempfile::TempDir,
+    home: PathBuf,
+}
+
+impl Fresh {
+    fn new() -> Fresh {
+        let temp = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(temp.path()).unwrap();
+        Fresh { _temp: temp, home }
+    }
+
+    fn skima(&self, env: &[(&str, &PathBuf)], args: &[&str]) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
+        cmd.args(args)
+            .current_dir(&self.home)
+            .env("HOME", &self.home)
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .env_remove("SKIMA_CONFIG")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("PI_CODING_AGENT_DIR")
+            .env_remove("PI_CODING_AGENT_SESSION_DIR");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output().unwrap()
+    }
+
+    /// `~/skills/plain/SKILL.md` with `name` and `description` only.
+    fn plain_skill(&self) -> PathBuf {
+        let source = self.home.join("skills");
+        common::write(&source.join("plain/SKILL.md"), "---\nname: plain\ndescription: A plain skill.\n---\n");
+        source
+    }
+
+    /// Each discovery case: the environment, and the config path it selects.
+    fn discovery(&self) -> [(Vec<(&'static str, PathBuf)>, PathBuf); 3] {
+        let (explicit, xdg) = (self.home.join("explicit.toml"), self.home.join("xdg"));
+        [
+            (vec![], self.home.join(".config/skima/config.toml")),
+            (vec![("XDG_CONFIG_HOME", xdg.clone())], xdg.join("skima/config.toml")),
+            (vec![("XDG_CONFIG_HOME", xdg), ("SKIMA_CONFIG", explicit.clone())], explicit),
+        ]
+    }
+}
+
+fn env_refs<'a>(env: &'a [(&'static str, PathBuf)]) -> Vec<(&'static str, &'a PathBuf)> {
+    env.iter().map(|(k, v)| (*k, v)).collect()
+}
+
+#[test]
+fn a_missing_config_exits_2_naming_the_discovered_path() {
+    let f = Fresh::new();
+    // The removed default is not a fallback.
+    common::write(&f.home.join("dotfiles/skills/skima.toml"), "source = \".\"\n");
+    for (env, path) in f.discovery() {
+        for cmd in ["status", "sync", "usage", "prune"] {
+            let o = f.skima(&env_refs(&env), &[cmd]);
+            assert_eq!(o.status.code(), Some(2), "{cmd} {env:?}");
+            let want = format!("ERROR: no config at {}; run skima init --source <skills dir>\n", path.display());
+            assert_eq!(stderr(&o), want, "{cmd} {env:?}");
+        }
+    }
+}
+
+#[test]
+fn init_writes_the_discovered_path_and_only_existing_homes() {
+    let f = Fresh::new();
+    let source = f.plain_skill();
+    for (env, path) in f.discovery() {
+        // A relative `--source` is written absolute.
+        assert_ok(&f.skima(&env_refs(&env), &["init", "--source", "skills"]));
+        let v: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+        assert_eq!(v["source"].as_str(), Some(source.to_str().unwrap()), "{env:?}");
+    }
+
+    fs::create_dir(f.home.join(".claude")).unwrap();
+    fs::create_dir_all(f.home.join(".pi/agent")).unwrap();
+    let path = f.home.join("homes.toml");
+    let env = [("SKIMA_CONFIG", &path)];
+    assert_ok(&f.skima(&env, &["init", "--source", "skills"]));
+    let text = fs::read_to_string(&path).unwrap();
+    let v: toml::Table = text.parse().unwrap();
+    assert_eq!(v.keys().collect::<Vec<_>>(), ["home", "loose", "policy", "source"], "{text}");
+    assert_eq!(v["loose"], toml::Value::Array(vec![]), "{text}");
+    let mut policy = v["policy"].as_table().unwrap().clone();
+    assert_eq!(policy.remove("authoring_skills"), Some(toml::Value::Array(vec![])), "{text}");
+    assert_eq!(
+        policy.keys().collect::<Vec<_>>(),
+        ["claude_name_only", "codex_manifest", "no_disable_model_invocation"]
+    );
+    assert!(policy.values().all(|b| *b == toml::Value::Boolean(false)), "{text}");
+    let homes: Vec<[&str; 3]> = v["home"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| [&h["name"], &h["agent"], &h["path"]].map(|s| s.as_str().unwrap()))
+        .collect();
+    assert_eq!(homes, [["claude", "claude", "~/.claude"], ["pi", "pi", "~/.pi/agent"]], "{text}");
+
+    fs::write(&path, "mine\n").unwrap();
+    let o = f.skima(&env, &["init", "--source", "skills"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(stderr(&o).contains("not overwriting"), "{}", stderr(&o));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "mine\n");
+}
+
+#[test]
+fn a_symlinked_config_resolves_source_against_the_physical_file() {
+    let f = Fresh::new();
+    let source = f.plain_skill();
+    fs::create_dir(f.home.join(".codex")).unwrap();
+    common::write(
+        &source.join("skima.toml"),
+        "source = \".\"\n[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n",
+    );
+    fs::create_dir_all(f.home.join(".config/skima")).unwrap();
+    std::os::unix::fs::symlink(source.join("skima.toml"), f.home.join(".config/skima/config.toml")).unwrap();
+    assert_ok(&f.skima(&[], &["sync"]));
+    assert_eq!(fs::read_link(f.home.join(".codex/skills/plain")).unwrap(), source.join("plain"));
+}
+
+#[test]
+fn a_fresh_home_runs_init_then_sync() {
+    let f = Fresh::new();
+    let source = f.plain_skill();
+    common::write(&f.home.join(".claude/settings.json"), "");
+    assert_ok(&f.skima(&[], &["init", "--source", source.to_str().unwrap()]));
+    assert_ok(&f.skima(&[], &["sync"]));
+    assert_eq!(fs::read_link(f.home.join(".claude/skills/plain")).unwrap(), source.join("plain"));
+    assert_ok(&f.skima(&[], &["status"]));
 }
