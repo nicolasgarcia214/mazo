@@ -1,7 +1,7 @@
 //! Strict YAML differential (SPEC §10.5): `strict_yaml.rs` against the
 //! verbatim PyYAML `PolicyLoader` in `tests/policy_loader.py`, over a synthetic
-//! corpus and every real skill, grade and retro file in the real skills
-//! directory (`SKIMA_TEST_SKILLS`, or `~/dotfiles/skills`).
+//! corpus and every skill, grade and retro file in the skills directory under
+//! test (`SKIMA_TEST_SKILLS`, or `tests/fixtures/skills`).
 //! Both sides must agree on accept/reject and on the typed value tree.
 
 mod common;
@@ -487,16 +487,11 @@ fn generated_scalars() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every real input from the real skills directory: SKILL.md, grade and retro
-/// frontmatter, and `agents/openai.yaml`. A missing directory fails the test
-/// unless `SKIMA_SKIP_PYDIFF=1`.
+/// Every input from the skills directory under test: SKILL.md, grade and retro
+/// frontmatter, and `agents/openai.yaml`.
 fn real_files() -> Vec<Case> {
     let root = common::real_skills();
-    if !root.is_dir() {
-        assert!(skip_allowed(), "{} not found; set SKIMA_TEST_SKILLS, or SKIMA_SKIP_PYDIFF=1 to skip", root.display());
-        eprintln!("strict_yaml_diff: {} not found; real files SKIPPED (SKIMA_SKIP_PYDIFF=1)", root.display());
-        return Vec::new();
-    }
+    assert!(root.is_dir(), "{} not found", root.display());
     let mut paths: Vec<(Mode, PathBuf)> = Vec::new();
     for skill in sorted_dirs(&root) {
         for (mode, file) in [(Mode::Frontmatter, "SKILL.md"), (Mode::Load, "agents/openai.yaml")] {

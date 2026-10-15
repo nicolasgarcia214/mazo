@@ -43,7 +43,7 @@ links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 /// `SKILL.md` (test_install.py:12-16 read its own parent).
 pub fn pi_skills() -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(real_skills())
-        .expect("SKIMA_TEST_SKILLS is readable")
+        .expect("the skills directory under test is readable")
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| !n.starts_with('.') && real_skills().join(n).join("SKILL.md").is_file())

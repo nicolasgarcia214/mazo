@@ -761,9 +761,9 @@ these edges:
 - Into `writing-for-agents`, twenty of them, through the
   `../writing-for-agents/references/pi-runtime.md` pointer.
 
-16 of the 29 skills have at least one incoming edge (E4). A fixture test snapshots the
-full edge set of the real repo, so a change in the matcher or in the skills
-shows up as a diff.
+16 of the 29 skills have at least one incoming edge (E4). The tests pin each
+rule on the synthetic `tests/fixtures/skills` tree, so editing a real skill
+cannot break them (§10.1).
 
 ### 5.4 Policy
 
@@ -1369,6 +1369,7 @@ skima/
     html.rs         the self-contained HTML report (F16)
   tests/
     fixtures/{claude,codex,pi}/   one trimmed real record per positive and negative case
+    fixtures/skills/   a synthetic skills tree, the default skills directory under test
     adapters_{claude,codex,pi}.rs  ingest.rs  reports.rs  sync_port.rs  sync.rs
     portability.rs  lifecycle.rs  html.rs  audit.rs
 ```
@@ -1456,11 +1457,13 @@ scrubbed. Each test asserts the exact event list, or that no event is produced.
 - child session: actor `subagent`, root session of the parent
 - run-state JSON file in a sessions directory: skipped
 
-**Fan-in:** the full edge set of the real repo, kept as a snapshot. Besides the
-snapshot, the test asserts the §5.3 counts independently: the seven
-`blast-radius` edges (E4) by source skill, 8 edges into `goal-smart`, 20 into
-`writing-for-agents`, 16 of 29 skills with an incoming edge, and no edge from
-the `interrogate/SKILL.md:12` description clause.
+**Fan-in:** the exact edge set of the synthetic `tests/fixtures/skills` tree,
+which holds one skill per §5.3 rule: a `the B skill` citation, the same
+citation broken across lines, an `owned by B` citation, a `B/` path component,
+a citation in a `references/` file, a description mention that is not an edge,
+and a self-mention that is not an edge. With `SKIMA_TEST_SKILLS` set, a second
+test checks a real repository for invariants only: no self-edges, and every
+edge target is a skill.
 
 **Held:** in a fixture ledger, the goal suite is unused and `writing-for-agents`
 is held by one used skill. `unused` lists the goal skills with a `cluster` note
@@ -1526,8 +1529,8 @@ each against its source record. The two then reconcile.
 - **YAML rules** (§5.4): a duplicate key at any depth, `allow_implicit_invocation`
   spelled `"false"`, `no`, `False` or `!!bool false`, and a non-string
   `description` are each rejected; a plain `false` and quoted and unquoted
-  `date` values load. Every real skill's files load, read from
-  `SKIMA_TEST_SKILLS`.
+  `date` values load. Every skill's files load, read from
+  `SKIMA_TEST_SKILLS`, or from `tests/fixtures/skills` when it is unset.
 - **Golden Codex id.** The pinned value is computed once by an independent
   Python script (`json.dumps(sort_keys=True, separators=(",", ":"),
   ensure_ascii=False)`), not by skima. One fixed payload with nested, unsorted and non-ASCII

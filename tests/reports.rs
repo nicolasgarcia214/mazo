@@ -6,7 +6,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use common::{copy_tree, git, real_skills, write};
+use common::{copy_tree, git, write};
 use serde_json::Value;
 use skima::config::Config;
 use skima::evals;
@@ -106,42 +106,43 @@ fn counts(r: &Value) -> [u64; 6] {
 
 // ---------------------------------------------------------------- fan-in
 
-fn citers(g: &inventory::Graph, b: &str) -> BTreeSet<String> {
-    g.iter().filter(|(_, cited)| cited.contains(b)).map(|(a, _)| a.clone()).collect()
+/// One skill per §5.3 rule in `tests/fixtures/skills`: diagnose-bug cites
+/// `the blast-radius skill`, review-audit-fixes the same broken across lines,
+/// triage-finding `owned by grade`, unslop the `writing-for-agents/` path (not
+/// `upgrade/` or `x-grade/`), and writing-for-agents `the goal-smart skill` in
+/// a reference file. interrogate's description and its `owned by graders`, and
+/// grade's self-mentions, yield nothing.
+#[test]
+fn fan_in_on_the_fixture_tree_matches_each_rule() {
+    let src = common::fixture("skills");
+    let g = inventory::fan_in(&src, &inventory::canonical_skills(&src).unwrap());
+    let edges: Vec<String> = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
+    assert_eq!(
+        edges,
+        [
+            "diagnose-bug->blast-radius",
+            "review-audit-fixes->blast-radius",
+            "triage-finding->grade",
+            "unslop->writing-for-agents",
+            "writing-for-agents->goal-smart",
+        ]
+    );
 }
 
+/// Only with `SKIMA_TEST_SKILLS`: invariants that hold on any skills repository.
 #[test]
-fn fan_in_on_the_real_repo_matches_spec_counts() {
-    let src = real_skills();
+fn fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
+    let Some(src) = common::test_skills_env() else {
+        eprintln!("fan_in real repo: SKIPPED (SKIMA_TEST_SKILLS unset)");
+        return;
+    };
     let skills = inventory::canonical_skills(&src).unwrap();
     let g = inventory::fan_in(&src, &skills);
-    let set = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
-    assert_eq!(
-        citers(&g, "blast-radius"),
-        set(&[
-            "interrogate",
-            "diagnose-bug",
-            "break-invariants",
-            "review-audit-fixes",
-            "validate-resolve-issue",
-            "triage-finding",
-            "validate-findings-backlog"
-        ])
-    );
-    assert_eq!(citers(&g, "goal-smart").len(), 8);
-    assert_eq!(citers(&g, "writing-for-agents").len(), 20);
-    assert_eq!(skills.len(), 29);
-    assert_eq!(skills.iter().filter(|s| !citers(&g, s).is_empty()).count(), 16);
-    // interrogate/SKILL.md:12, in the description, names validate-resolve-issue
-    // and triage-finding as boundaries; neither is an edge.
-    assert!(!g["interrogate"].contains("validate-resolve-issue"));
-    assert!(!g["interrogate"].contains("triage-finding"));
-    assert!(g.iter().all(|(a, cited)| !cited.contains(a)), "no self-edges");
-
-    let actual: String = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a} -> {b}\n"))).collect();
-    let snapshot = common::fixture("reports/fanin_edges.txt");
-    let expected = std::fs::read_to_string(&snapshot).unwrap();
-    assert!(actual == expected, "fan-in edge set changed; new snapshot for {}:\n{actual}", snapshot.display());
+    assert_eq!(g.keys().cloned().collect::<BTreeSet<_>>(), skills);
+    for (a, cited) in &g {
+        assert!(!cited.contains(a), "self-edge {a}");
+        assert!(cited.is_subset(&skills), "{a} cites a non-skill: {cited:?}");
+    }
 }
 
 #[test]

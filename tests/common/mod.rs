@@ -18,12 +18,15 @@ pub fn fixture(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(rel)
 }
 
-/// The real skills directory: `SKIMA_TEST_SKILLS`, or `~/dotfiles/skills`.
+/// A real skills repository, named by `SKIMA_TEST_SKILLS`.
+pub fn test_skills_env() -> Option<PathBuf> {
+    std::env::var_os("SKIMA_TEST_SKILLS").filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// The skills directory under test: `SKIMA_TEST_SKILLS`, or the synthetic
+/// `tests/fixtures/skills` tree.
 pub fn real_skills() -> PathBuf {
-    match std::env::var_os("SKIMA_TEST_SKILLS").filter(|v| !v.is_empty()) {
-        Some(p) => PathBuf::from(p),
-        None => PathBuf::from(std::env::var("HOME").expect("HOME")).join("dotfiles/skills"),
-    }
+    test_skills_env().unwrap_or_else(|| fixture("skills"))
 }
 
 pub fn home(name: &str, agent: Agent, path: &Path) -> Home {
