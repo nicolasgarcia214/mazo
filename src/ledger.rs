@@ -120,22 +120,12 @@ impl Ledger {
     pub fn load(dir: &Path) -> Result<Ledger> {
         let mut ledger = Ledger { dir: dir.to_path_buf(), events: Vec::new(), index: HashMap::new(), _lock: None };
         let path = dir.join("events.jsonl");
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ledger),
-            Err(e) => return Err(format!("{}: {e}", path.display())),
-        };
-        for (n, line) in BufReader::new(file).lines().enumerate() {
-            let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
-            if line.trim().is_empty() {
-                continue;
+        for (n, event) in jsonl::<Event>(&path)? {
+            // A torn line (crash mid-append) is skipped; the next scan re-derives it.
+            match event {
+                Some(event) => ledger.keep(event),
+                None => eprintln!("warning: {}:{n}: unreadable ledger line skipped", path.display()),
             }
-            // A torn last line (crash mid-append) is skipped; the next scan re-derives it.
-            let Ok(event) = serde_json::from_str::<Event>(&line) else {
-                eprintln!("warning: {}:{}: unreadable ledger line skipped", path.display(), n + 1);
-                continue;
-            };
-            ledger.keep(event);
         }
         Ok(ledger)
     }
@@ -268,6 +258,26 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     f.write_all(bytes).map_err(|e| err(&tmp, e))?;
     f.sync_all().map_err(|e| err(&tmp, e))?;
     fs::rename(&tmp, path).map_err(|e| err(path, e))
+}
+
+/// Each non-blank line of the JSONL file at `path`, numbered from 1, parsed as
+/// `T` or `None` when it does not parse; empty when the file is missing. Lines
+/// are split as bytes, so a torn write that cuts a UTF-8 character costs that
+/// line, not the file.
+pub fn jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<(usize, Option<T>)>> {
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let mut lines = Vec::new();
+    for (n, line) in BufReader::new(file).split(b'\n').enumerate() {
+        let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
+        if !line.trim_ascii().is_empty() {
+            lines.push((n + 1, serde_json::from_slice(&line).ok()));
+        }
+    }
+    Ok(lines)
 }
 
 #[cfg(test)]

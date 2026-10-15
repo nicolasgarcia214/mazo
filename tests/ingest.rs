@@ -600,6 +600,20 @@ fn a_torn_ledger_tail_does_not_swallow_the_next_append() {
 }
 
 #[test]
+fn a_torn_ledger_line_that_cuts_a_utf8_character_is_skipped_mid_file_too() {
+    let env = Env::new(&[("slash.jsonl", "slash.jsonl")], &[]);
+    // `é` is 0xC3 0xA9; the crash kept only its first byte.
+    std::fs::create_dir_all(&env.data).unwrap();
+    std::fs::write(env.data.join("events.jsonl"), b"{\"v\":1,\"cwd\":\"/caf\xC3").unwrap();
+    env.scan();
+    // The next append puts the torn line mid-file; later runs still read past it.
+    env.scan();
+    let fresh = env.tmp.path().join("fresh");
+    env.scan_in(&fresh, false);
+    assert_eq!(ids(&env.data), ids(&fresh));
+}
+
+#[test]
 fn coverage_first_is_filled_once_a_home_gets_transcripts() {
     let env = Env::new(&TRANSCRIPTS, &["empty"]);
     env.scan();

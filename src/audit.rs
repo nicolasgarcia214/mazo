@@ -116,13 +116,7 @@ struct RecordedJudge {
 /// Every line of `<data>/audits.jsonl` that parses as `T`; none when the file
 /// is missing.
 fn parsed<T: DeserializeOwned>(data: &Path) -> Result<Vec<T>> {
-    let path = data.join("audits.jsonl");
-    let text = match fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-    };
-    Ok(text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+    Ok(ledger::jsonl(&data.join("audits.jsonl"))?.into_iter().filter_map(|(_, r)| r).collect())
 }
 
 /// Sessions that already have a `session` record for `skill` in `<data>/audits.jsonl`.

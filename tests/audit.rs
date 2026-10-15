@@ -127,6 +127,15 @@ fn selection_takes_main_and_headless_and_skips_audited_weak_probe_and_expired_se
     assert!(audit::audited(&d.join("empty"), "unslop").unwrap().is_empty());
 }
 
+#[test]
+fn a_torn_audit_record_that_cuts_a_utf8_character_costs_only_that_line() {
+    let data = tempfile::tempdir().unwrap();
+    let mut bytes = b"{\"v\":1,\"kind\":\"session\",\"skill\":\"unslop\",\"notes\":\"caf\xC3\n".to_vec();
+    bytes.extend(b"{\"v\":1,\"kind\":\"session\",\"skill\":\"unslop\",\"session\":\"kept\"}\n");
+    fs::write(data.path().join("audits.jsonl"), bytes).unwrap();
+    assert_eq!(audit::audited(data.path(), "unslop").unwrap(), HashSet::from(["kept".to_string()]));
+}
+
 /// The Claude, Codex and Pi condense fixtures, each with a strong `unslop` load.
 fn three_agents(dir: &Path) -> Vec<Event> {
     let codex = format!("{}:7", common::fixture("codex/condense.jsonl").display());
