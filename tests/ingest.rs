@@ -130,6 +130,24 @@ impl Env {
         scan::scan_with(&self.cfg, &self.inv, &self.data, reparse, &|_| adapter).unwrap()
     }
 
+    /// The `skima` binary, configured for this machine with its data under `xdg`.
+    fn cli(&self, xdg: &Path) -> Command {
+        let root = self.tmp.path();
+        let config = root.join("dotfiles/skills/skima.toml");
+        let homes: String = self
+            .cfg
+            .homes
+            .iter()
+            .map(|h| {
+                format!("\n[[home]]\nname = \"{}\"\nagent = \"claude\"\npath = \"{}\"\n", h.name, h.path.display())
+            })
+            .collect();
+        fs::write(&config, format!("source = \".\"\n{homes}")).unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
+        cmd.env("HOME", root).env("XDG_DATA_HOME", xdg).env("SKIMA_CONFIG", &config);
+        cmd
+    }
+
     fn cursors(&self) -> Cursors {
         serde_json::from_slice(&fs::read(self.data.join("cursors.json")).unwrap()).unwrap()
     }
@@ -400,25 +418,9 @@ fn reparse_leaves_cursors_before_a_half_written_last_line() {
 #[test]
 fn concurrent_scan_processes_write_no_duplicate_ids() {
     let env = Env::new(&TRANSCRIPTS, &[]);
-    let root = env.tmp.path();
-    let config = root.join("dotfiles/skills/skima.toml");
-    let home = &env.cfg.homes[0].path;
-    fs::write(
-        &config,
-        format!("source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"{}\"\n", home.display()),
-    )
-    .unwrap();
     for round in 0..8 {
-        let xdg = root.join(format!("xdg{round}"));
-        let run = || {
-            Command::new(env!("CARGO_BIN_EXE_skima"))
-                .arg("scan")
-                .env("HOME", root)
-                .env("XDG_DATA_HOME", &xdg)
-                .env("SKIMA_CONFIG", &config)
-                .spawn()
-                .unwrap()
-        };
+        let xdg = env.tmp.path().join(format!("xdg{round}"));
+        let run = || env.cli(&xdg).arg("scan").spawn().unwrap();
         let (mut a, mut b) = (run(), run());
         assert!(a.wait().unwrap().success() && b.wait().unwrap().success());
         let data = xdg.join("skima");
@@ -427,6 +429,44 @@ fn concurrent_scan_processes_write_no_duplicate_ids() {
         assert!(!lines.is_empty());
         assert_eq!(unique.len(), lines.len(), "round {round}: duplicate ids");
     }
+}
+
+#[test]
+fn scan_off_a_tty_writes_only_its_warnings_to_stderr() {
+    let env = Env::new(&TRANSCRIPTS, &["empty"]);
+    let xdg = env.tmp.path().join("xdg");
+    let path = env.transcript("bench.jsonl");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let unreadable = fs::File::open(&path).is_err(); // false when running as root
+    let stderr = env.tmp.path().join("stderr");
+    let out = env.cli(&xdg).arg("scan").stderr(fs::File::create(&stderr).unwrap()).output().unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(out.status.success());
+    let err = fs::read_to_string(&stderr).unwrap();
+    let warning = format!("warning: claude: {}: ", path.display());
+    let lines: Vec<&str> = err.lines().collect();
+    assert_eq!(lines.len(), usize::from(unreadable), "{err:?}");
+    assert!(lines.iter().all(|l| l.starts_with(&warning)), "{err:?}");
+    assert!(!err.contains("scanning") && !err.contains('\r'), "{err:?}");
+}
+
+#[test]
+fn reparse_prints_each_homes_total_and_the_total_before() {
+    let env = Env::new(&TRANSCRIPTS[..4], &["empty"]);
+    let xdg = env.tmp.path().join("xdg");
+    let data = xdg.join("skima");
+    let stdout = |args: &[&str]| {
+        let out = env.cli(&xdg).args(args).output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap()
+    };
+    assert!(stdout(&["scan"]).starts_with("scan: claude +"));
+    let was = events(&data).len();
+    env.put("pair.jsonl", &fs::read(fixture("pair.jsonl")).unwrap());
+    let out = stdout(&["scan", "--reparse"]);
+    let now = events(&data).len();
+    assert!(now > was);
+    assert_eq!(out, format!("claude {now} events (was {was})\nempty 0 events (was 0)\n"));
 }
 
 /// Every event but `typed`, sorted by id (F1).

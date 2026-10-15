@@ -2,7 +2,9 @@
 //! transcript in scan order, classify, and append under the append rule.
 
 use std::collections::{BTreeMap, HashSet};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::Result;
 use crate::adapters::{self, Adapter, SkillRoots};
@@ -72,6 +74,7 @@ pub fn scan_with<'a>(
     let home_skills: Vec<String> = roots.home_skills.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let filter = Prefilter::new(std::iter::once(source.as_str()).chain(home_skills.iter().map(String::as_str)));
 
+    let mut progress = Progress { tty: std::io::stderr().is_terminal(), start: Instant::now(), shown: false };
     let mut report = ScanReport::default();
     let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut lines: Vec<Event> = Vec::new();
@@ -96,8 +99,10 @@ pub fn scan_with<'a>(
         let first_scan = !coverage.contains_key(&home.name);
         let need_first = coverage.get(&home.name).is_none_or(|c| c.first.is_none());
         let mut earliest: Option<String> = None;
+        let total = files.len();
 
-        for path in files {
+        for (i, path) in files.into_iter().enumerate() {
+            progress.update(&home.name, i + 1, total);
             let key = path.to_string_lossy().into_owned();
             listed.insert(key.clone());
             let chunk = match tail::read(&path, cursors.get(&key), &filter) {
@@ -180,6 +185,35 @@ pub fn scan_with<'a>(
     Ok(report)
 }
 
+/// Whether a scan shows the progress line (SPEC F12).
+pub fn should_show_progress(is_tty: bool, elapsed: Duration) -> bool {
+    is_tty && elapsed > Duration::from_secs(1)
+}
+
+/// The F12 progress line: one `\r`-rewritten stderr line, cleared when the scan ends.
+struct Progress {
+    tty: bool,
+    start: Instant,
+    shown: bool,
+}
+
+impl Progress {
+    fn update(&mut self, home: &str, done: usize, total: usize) {
+        if should_show_progress(self.tty, self.start.elapsed()) {
+            eprint!("\r\x1b[2Kscanning {home} {done}/{total} files");
+            self.shown = true;
+        }
+    }
+}
+
+impl Drop for Progress {
+    fn drop(&mut self) {
+        if self.shown {
+            eprint!("\r\x1b[2K");
+        }
+    }
+}
+
 fn has_canary(chunk: &tail::Chunk) -> bool {
     chunk.lines.iter().any(|(_, l)| CANARY.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
 }
@@ -198,4 +232,19 @@ fn first_timestamp(path: &Path) -> Option<String> {
             serde_json::from_str::<serde_json::Value>(&line).ok()?.get("timestamp")?.as_str().map(str::to_string)
         })
         .min()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_shows_only_on_a_tty_after_one_second() {
+        let second = Duration::from_secs(1);
+        assert!(!should_show_progress(true, second));
+        assert!(should_show_progress(true, second + Duration::from_nanos(1)));
+        for elapsed in [Duration::ZERO, second, second + Duration::from_nanos(1), Duration::from_secs(60)] {
+            assert!(!should_show_progress(false, elapsed));
+        }
+    }
 }

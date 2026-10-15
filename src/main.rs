@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
@@ -179,6 +180,7 @@ fn with_scanned(
 
 fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bool) -> skima::Result<ExitCode> {
     let data = ledger::data_dir()?;
+    let was = if reparse { Some(home_counts(&Ledger::load(&data)?)) } else { None };
     let r = scan::scan(cfg, inv, &data, reparse)?;
     if json {
         let homes: serde_json::Map<String, serde_json::Value> = r
@@ -201,13 +203,22 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
         println!("{}", serde_json::Value::Object(homes));
         return Ok(ExitCode::SUCCESS);
     }
-    let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events.len())).collect();
-    println!("scan: {}", summary.join(" · "));
+    if let Some(was) = was {
+        // `+N` is meaningless after a rewrite (SPEC F12).
+        let now = home_counts(&Ledger::load(&data)?);
+        for name in r.homes.keys() {
+            let count = |c: &BTreeMap<String, usize>| c.get(name).copied().unwrap_or(0);
+            println!("{name} {} events (was {})", count(&now), count(&was));
+        }
+    } else {
+        let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events.len())).collect();
+        println!("scan: {}", summary.join(" · "));
+    }
     r.warn_io_errors();
     if detail {
         let ledger = Ledger::load(&data)?;
         for (name, h) in &r.homes {
-            let mut counts = std::collections::BTreeMap::<Channel, usize>::new();
+            let mut counts = BTreeMap::<Channel, usize>::new();
             for e in ledger.events().iter().filter(|e| &e.home == name) {
                 *counts.entry(e.channel).or_default() += 1;
             }
@@ -226,6 +237,15 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Ledger events per home.
+fn home_counts(ledger: &Ledger) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for e in ledger.events() {
+        *counts.entry(e.home.clone()).or_default() += 1;
+    }
+    counts
 }
 
 fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
