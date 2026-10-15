@@ -1196,9 +1196,11 @@ dropped.
 
 **The judge.** `[judge] agent` picks the command. Each call runs in a fresh,
 empty subdirectory of `<data dir>/audit-runs/`, which is not a git repository,
-removed after the call. skima writes the
-shipped prompt and the input to files in a fresh temporary directory, and
-passes them as the table says. Every flag below exists today (E16):
+removed after the call. skima passes the shipped prompt and the input as the
+table says: for Claude, the prompt is the `--system-prompt` argument value and
+the input goes on stdin, so no file is written; Codex and Pi, which read a
+schema or input from a file, get those files in a fresh temporary directory.
+Every flag below exists today (E16):
 
 | Agent | Command | Structured output | Spend |
 |---|---|---|---|
@@ -1262,7 +1264,7 @@ error (exit 2).
 ```json
 {"v":1,"kind":"session","skill":"unslop","session":"2e112b1e-…","agent":"claude",
  "src":"…/2e112b1e-….jsonl:412","session_ts":"2026-09-15T06:15:31Z",
- "audited_at":"2026-10-15T10:02:11Z","skill_commit":"a1b2c3d",
+ "audited_at":"2026-10-15T10:02:11Z","skill_commit":"a1b2c3d","condensed_chars":18204,
  "judge":{"agent":"claude","model":"sonnet","cost_usd":0.031},
  "prompt":"session-v1","result":{…}}
 {"v":1,"kind":"skill","skill":"unslop","audited_at":"…","sessions":["2e112b1e-…",…],
@@ -1270,6 +1272,9 @@ error (exit 2).
  "abandoned_or_redone":[3,20]},"result":{…}}
 ```
 
+`condensed_chars` is the size of the session as the judge read it; the
+recorded cost per condensed character is what `--dry-run`'s dollar estimate
+uses. `cost_usd` is the session's calls' exact reported cost, retry included.
 The latest `skill` record is the one F14 and F16 show. Older ones stay, so a
 skill's trend is visible across audits. `prompt` names the shipped prompt
 version, so a changed prompt can be told apart from a changed skill.

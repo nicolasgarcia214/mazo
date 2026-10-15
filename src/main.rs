@@ -118,7 +118,7 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// Judge how a skill performs in real sessions. Only --dry-run runs so far.
+    /// Judge how a skill performs in real sessions; reports, never edits the source.
     Audit {
         skill: String,
         /// The most sessions to judge.
@@ -127,6 +127,9 @@ enum Cmd {
         /// Judge every candidate session.
         #[arg(long)]
         all: bool,
+        /// The most the run may spend, in dollars; at least 0.04.
+        #[arg(long, default_value = "1", value_parser = audit::parse_usd)]
+        max_budget_usd: u64,
         /// List the sessions, the judge command and the input estimate; call nothing.
         #[arg(long)]
         dry_run: bool,
@@ -180,8 +183,8 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
             skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
         Cmd::Retire { name, force } => skima::lifecycle::retire(&cfg, &inv, &name, force),
-        Cmd::Audit { skill, limit, all, dry_run } => {
-            cmd_audit(&cfg, &inv, &skill, (!all).then_some(limit), dry_run, tty)
+        Cmd::Audit { skill, limit, all, max_budget_usd, dry_run } => {
+            cmd_audit(&cfg, &inv, &skill, (!all).then_some(limit), max_budget_usd, dry_run, tty)
         }
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
@@ -212,6 +215,7 @@ fn cmd_audit(
     inv: &Inventory,
     skill: &str,
     limit: Option<usize>,
+    budget: u64,
     dry_run: bool,
     tty: bool,
 ) -> skima::Result<ExitCode> {
@@ -222,17 +226,19 @@ fn cmd_audit(
     if !inv.skills.contains(skill) {
         return usage(format!("not a skill in the source: {skill}"));
     }
-    if let Err(e) = audit::command(&cfg.judge, "", "", "") {
-        return usage(e);
+    if budget < 4 * audit::CENT {
+        return usage("--max-budget-usd must be at least 0.04".into());
     }
-    if !dry_run {
-        return usage("judge calls are not implemented yet; run skima audit with --dry-run".into());
-    }
+    let argv = match audit::command(&cfg.judge) {
+        Ok(argv) => argv,
+        Err(e) => return usage(e),
+    };
     let data = ledger::data_dir()?;
     scan::scan(cfg, inv, &data, false)?.warn_io_errors();
     let ledger = Ledger::load(&data)?;
     let candidates = audit::select(ledger.events(), skill, &audit::audited(&data, skill)?, limit);
-    print!("{}", audit::dry_run(skill, &cfg.judge, &candidates, tty)?);
+    let a = audit::Audit { skill, source: &cfg.source, data: &data, judge: &cfg.judge, argv: &argv, budget };
+    print!("{}", if dry_run { audit::dry_run(&a, &candidates, tty)? } else { audit::run(&a, &candidates)? });
     Ok(ExitCode::SUCCESS)
 }
 

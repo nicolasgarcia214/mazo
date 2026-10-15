@@ -20,7 +20,7 @@ regex = "1.11"
 saphyr = "0.2.1"
 saphyr-parser = "0.2"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha1_smol = "1"
 toml = "1"
 url = "2.5"

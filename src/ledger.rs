@@ -142,15 +142,7 @@ impl Ledger {
 
     /// Takes `scan.lock` with a blocking flock, then loads the id set (SPEC §6.2 Locking).
     pub fn open_locked(dir: &Path) -> Result<Ledger> {
-        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let lock_path = dir.join("scan.lock");
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .map_err(|e| format!("{}: {e}", lock_path.display()))?;
-        lock.lock().map_err(|e| format!("{}: {e}", lock_path.display()))?;
+        let lock = lock(dir)?;
         let mut ledger = Ledger::load(dir)?;
         ledger._lock = Some(lock);
         Ok(ledger)
@@ -199,28 +191,46 @@ impl Ledger {
         if lines.is_empty() {
             return Ok(());
         }
-        let path = self.dir.join("events.jsonl");
-        let mut out = to_lines(lines);
-        let err = |e: std::io::Error| format!("{}: {e}", path.display());
-        let mut f = OpenOptions::new().create(true).read(true).append(true).open(&path).map_err(err)?;
-        // A crash mid-append leaves a torn last line. Appending to it would make
-        // the first new event unreadable too, so the new lines start on their own.
-        if f.metadata().map_err(err)?.len() > 0 {
-            let mut last = [0u8];
-            f.seek(SeekFrom::End(-1)).map_err(err)?;
-            f.read_exact(&mut last).map_err(err)?;
-            if last[0] != b'\n' {
-                out.insert(0, '\n');
-            }
-        }
-        f.write_all(out.as_bytes()).map_err(err)?;
-        f.sync_data().map_err(err)
+        append_lines(&self.dir.join("events.jsonl"), to_lines(lines))
     }
 
     /// Replaces the ledger file with `lines` (reparse only).
     pub fn replace(&self, lines: &[Event]) -> Result<()> {
         write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes())
     }
+}
+
+/// Takes `<dir>/scan.lock` with a blocking flock, held until the file is
+/// dropped (SPEC §6.2 Locking). Every writer of the data directory holds it.
+pub fn lock(dir: &Path) -> Result<File> {
+    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join("scan.lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    lock.lock().map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(lock)
+}
+
+/// Appends whole lines to an append-only log. A crash mid-append leaves a torn
+/// last line; appending to it would make the first new line unreadable too, so
+/// the new lines start on their own.
+pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut f = OpenOptions::new().create(true).read(true).append(true).open(path).map_err(err)?;
+    if f.metadata().map_err(err)?.len() > 0 {
+        let mut last = [0u8];
+        f.seek(SeekFrom::End(-1)).map_err(err)?;
+        f.read_exact(&mut last).map_err(err)?;
+        if last[0] != b'\n' {
+            out.insert(0, '\n');
+        }
+    }
+    f.write_all(out.as_bytes()).map_err(err)?;
+    f.sync_data().map_err(err)
 }
 
 pub fn load_coverage(dir: &Path) -> Result<BTreeMap<String, Coverage>> {
