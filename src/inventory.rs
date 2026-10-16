@@ -1,5 +1,5 @@
-//! The canonical skill set, known names from git history (SPEC §4.1, §5.1) and
-//! the fan-in citation graph (SPEC §5.3).
+//! The canonical skill set, known names from git history and
+//! the fan-in citation graph.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ pub struct Inventory {
     pub known: BTreeSet<String>,
     /// The git worktree containing the source, for the authoring rule.
     pub worktree: Option<PathBuf>,
-    /// The source's git history; None outside a git worktree (SPEC §6.3).
+    /// The source's git history; None outside a git worktree.
     pub history: Option<History>,
 }
 
@@ -32,7 +32,7 @@ impl Inventory {
     }
 }
 
-/// SPEC §5.1: any non-hidden child directory of the source that contains `SKILL.md`.
+/// Any non-hidden child directory of the source that contains `SKILL.md`.
 pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
     let entries = std::fs::read_dir(source).map_err(|e| format!("{}: {e}", source.display()))?;
     let mut out = BTreeSet::new();
@@ -52,10 +52,10 @@ pub fn git(dir: &Path, args: &[&str]) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Fan-in edges: citing skill → cited skills (SPEC §5.3). Filled in by `fan_in`.
+/// Fan-in edges: citing skill → cited skills. Filled in by `fan_in`.
 pub type Graph = BTreeMap<String, BTreeSet<String>>;
 
-/// SPEC §5.3: A → B when the body of A's `SKILL.md` (frontmatter dropped) or
+/// A → B when the body of A's `SKILL.md` (frontmatter dropped) or
 /// any `.md` under `A/references/`, with backticks removed and whitespace
 /// collapsed, contains `the B skill`, `owned by B`, or `B/` as a path
 /// component. Self-edges are dropped. Every skill in `skills` gets a key.

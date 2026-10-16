@@ -1,4 +1,4 @@
-//! YAML loading (SPEC §5.4): `saphyr` with the YAML 1.2 core schema, duplicate
+//! YAML loading: `saphyr` with the YAML 1.2 core schema, duplicate
 //! keys rejected at any depth. Scalars are kept as written, so callers apply
 //! the strictness they need where a value is used.
 
@@ -60,7 +60,7 @@ pub fn frontmatter(text: &str) -> crate::Result<Yaml> {
     load(&split_frontmatter(text)?.0)
 }
 
-/// `(frontmatter YAML, body)` per the SPEC §5.4 extraction rules, both joined with `\n`.
+/// `(frontmatter YAML, body)` per the frontmatter extraction rules, both joined with `\n`.
 pub fn split_frontmatter(text: &str) -> crate::Result<(String, String)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let lines: Vec<&str> = text.lines().collect();

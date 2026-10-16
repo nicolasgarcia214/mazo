@@ -1,4 +1,4 @@
-//! The shared reader grammar (SPEC §4.5): does a shell command string load
+//! The shared reader grammar: does a shell command string load
 //! files, and which ones?
 //!
 //! - A load is made only of reader verbs (`cat`, `sed -n 'a,bp'`, `head`, `tail`,

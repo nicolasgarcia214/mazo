@@ -1,5 +1,5 @@
 //! The 18 cases of `dotfiles/skills/tests/test_install.py`, ported to drive
-//! `skima sync` (SPEC §5.7 step 3, §10.5). Line numbers cite test_install.py.
+//! `skima sync`. Line numbers cite test_install.py.
 
 mod common;
 #[path = "fixtures/sync/harness.rs"]
@@ -33,7 +33,7 @@ fn pi_discovers_all_skills_and_is_idempotent() {
         assert_eq!(fs::read_link(fx.target.join(name)).unwrap(), fx.source.join(name));
     }
     assert_eq!(fs::read_link(fx.agent.join("extensions").join(PI_EXTENSION)).unwrap(), fx.source.join(PI_EXTENSION));
-    // :81-82: the Claude and Codex homes are unchanged (§5.7: snapshot).
+    // :81-82: the Claude and Codex homes are unchanged (a snapshot).
     assert_eq!(snapshot(&[&fx.home]), homes_before);
     let inodes: Vec<u64> = expected.iter().map(|n| ino(&fx.target.join(n))).collect();
     let second = fx.skima(&["sync", "--agent", "pi"]);
@@ -70,7 +70,7 @@ fn claude_profiles_must_list_explicit_skills_as_name_only() {
         let r = fx.skima(&["sync"]);
         assert_ne!(r.code(), 0, "{}", r.stdout());
         assert!(r.stderr().contains(needle), "needle {needle:?} not in:\n{}", r.stderr());
-        // :107 (§5.7: snapshot instead of an empty $HOME).
+        // :107 (a snapshot instead of an empty $HOME).
         assert_eq!(fx.snapshot(), before);
         assert!(!exists(&fx.agent));
     };
@@ -86,7 +86,7 @@ fn claude_profiles_must_list_explicit_skills_as_name_only() {
         (&main, wrong.to_string(), "goal-smart"),
         (&main, r#"{"skillOverrides": []}"#.to_string(), "skillOverrides must be an object"),
         (&main, "{".to_string(), "settings.json"),
-        // :118 `settings.work.json` is `.claude-work/settings.json` (§5.7).
+        // :118 `settings.work.json` is `.claude-work/settings.json`.
         (&work, missing.to_string(), ".claude-work/settings.json"),
     ] {
         fx.write_settings(&fx.home);
@@ -261,7 +261,7 @@ fn every_mode_preflights_new_skill_policy_before_any_write() {
         assert_ne!(r.code(), 0);
         assert!(r.stderr().contains("agents/openai.yaml"), "{args:?}: {}", r.stderr());
         assert!(!exists(&fx.agent));
-        // :247 (§5.7: snapshot instead of an empty $HOME).
+        // :247 (a snapshot instead of an empty $HOME).
         assert_eq!(fx.snapshot(), before, "{args:?}");
     }
 }
@@ -305,7 +305,7 @@ fn conflict_in_any_harness_aborts_all_destinations() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(dir.path()).unwrap();
-        // §5.7: valid settings in both Claude homes, so the run fails for the conflict.
+        // Valid settings in both Claude homes, so the run fails for the conflict.
         fx.write_settings(&home);
         let target = home.join(relative);
         fs::create_dir_all(&target).unwrap();
@@ -318,7 +318,7 @@ fn conflict_in_any_harness_aborts_all_destinations() {
         assert_ne!(r.code(), 0, "{relative}");
         assert!(r.stderr().contains("conflicts with a canonical entry"), "{relative}: {}", r.stderr());
         assert_eq!(fs::read_to_string(&conflict).unwrap(), "preserve");
-        // :283-284 (§5.7: snapshot instead of "the conflict is the only file, no links").
+        // :283-284 (a snapshot instead of "the conflict is the only file, no links").
         assert_eq!(snapshot(&[&home]), before, "{relative}");
     }
 }
@@ -330,7 +330,7 @@ fn invalid_cli_arguments_make_no_directories() {
     for args in [&["sync", "--unknown"][..], &["sync", "--agent", "pi", "extra"]] {
         let r = fx.skima(args);
         assert_ne!(r.code(), 0, "{args:?}");
-        assert_eq!(r.code(), 2, "{args:?}: usage errors exit 2 (SPEC §7)");
+        assert_eq!(r.code(), 2, "{args:?}: usage errors exit 2");
         assert!(r.stderr().contains("Usage:"), "{args:?}: {}", r.stderr());
         assert!(!exists(&fx.agent));
     }

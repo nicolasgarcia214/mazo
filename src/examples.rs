@@ -1,5 +1,5 @@
-//! The card's examples (SPEC F15): how to invoke a skill, and real prompts
-//! read from transcripts at display time and never stored (D11).
+//! The card's examples: how to invoke a skill, and real prompts
+//! read from transcripts at display time and never stored.
 
 use std::path::Path;
 
@@ -20,11 +20,11 @@ const MIN_CHARS: usize = 20;
 pub struct Examples {
     /// The invocation on each configured agent.
     pub written: Vec<Invocation>,
-    /// `interface.default_prompt` from `agents/openai.yaml` (E17).
+    /// `interface.default_prompt` from `agents/openai.yaml`.
     pub default_prompt: Option<String>,
     /// Newest project first.
     pub real: Vec<Real>,
-    /// Up to three from the latest audit (F18); the card fills them in.
+    /// Up to three from the latest audit; the card fills them in.
     pub curated: Vec<crate::audit::Example>,
 }
 

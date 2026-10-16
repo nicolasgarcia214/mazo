@@ -1,6 +1,6 @@
 //! A plain Agent Skills directory under the default config: every `[policy]`
-//! rule off (SPEC D9, §5.4, §10.8), and a fresh `HOME` from config discovery
-//! through `init` to `sync` (F11).
+//! rule off, and a fresh `HOME` from config discovery
+//! through `init` to `sync`.
 
 mod common;
 
@@ -185,7 +185,7 @@ fn always_on_rules_hold_with_every_rule_off() {
 }
 
 /// A fresh `HOME` with no config, `SKIMA_CONFIG` and `XDG_CONFIG_HOME` unset
-/// unless a test sets them (SPEC F11).
+/// unless a test sets them.
 struct Fresh {
     _temp: tempfile::TempDir,
     home: PathBuf,

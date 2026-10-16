@@ -1,5 +1,5 @@
-//! Identity, actor, root session, origin and the stored authoring tag
-//! (SPEC §4.1), computed once for every adapter.
+//! Identity, actor, root session, origin and the stored authoring tag,
+//! computed once for every adapter.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ pub struct Classifier<'a> {
 
 impl Classifier<'_> {
     /// The event for `raw`, or `None` for a session whose cwd is inside
-    /// `<data dir>/audit-runs/`: the judge's own runs are never usage (SPEC §4.7).
+    /// `<data dir>/audit-runs/`: the judge's own runs are never usage.
     pub fn event(&self, roots: &mut Roots, raw: Raw, file: &Path) -> Option<Event> {
         if raw.session.cwd.as_deref().is_some_and(|c| Path::new(c).starts_with(self.audit_runs)) {
             return None;
@@ -110,14 +110,14 @@ impl Classifier<'_> {
             Key::Codex { hash, index } => format!("cx:{session}:{hash}:{index}"),
         };
         // A Skill result keeps its name-based origin even after the meta record adds a
-        // path, so a merged event equals a split-then-upgraded one (SPEC §6.2).
+        // path, so a merged event equals a split-then-upgraded one.
         let origin = if raw.name_origin {
             self.name_origin(&raw.skill, raw.channel)
         } else {
             self.path_origin(&raw.skill, raw.path.as_deref())
         };
         let cwd = raw.cwd.or(raw.session.cwd.clone());
-        // Only weak reads can be authoring (SPEC §4.1); the stored part is the cwd rule.
+        // Only weak reads can be authoring; the stored part is the cwd rule.
         let authoring = !raw.channel.strong()
             && cwd.as_deref().is_some_and(|c| {
                 let c = Path::new(c);
@@ -144,8 +144,10 @@ impl Classifier<'_> {
     }
 
     /// Claude Skill results and typed history: the name alone decides. A Skill
-    /// result needs a known name (SPEC §4.1), so renamed or pruned skills keep their
-    /// events; a typed line needs a skill canonical now (SPEC §4.2, E15).
+    /// result needs a known name, so renamed or pruned skills keep their
+    /// events; a typed line needs a skill canonical now, because history has
+    /// no path to check and a name such as `argus` can be an old skill or a
+    /// later plugin command.
     fn name_origin(&self, skill: &str, channel: crate::ledger::Channel) -> Origin {
         let names = if channel == crate::ledger::Channel::Typed { &self.inv.skills } else { &self.inv.known };
         if names.contains(skill) { Origin::Canonical } else { Origin::Other }
@@ -169,7 +171,7 @@ impl Classifier<'_> {
     }
 }
 
-/// SPEC §4.1 Actor, first matching rule wins.
+/// The actor, first matching rule wins.
 pub fn actor(agent: Agent, a: &crate::adapters::ActorInputs) -> Actor {
     let ep = a.entrypoint.as_deref();
     if agent == Agent::Claude && ep.is_some_and(|e| e != "cli" && e != "sdk-cli") {

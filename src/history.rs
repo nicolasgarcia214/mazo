@@ -1,4 +1,4 @@
-//! One-pass git history of the source (SPEC §6.3 Cost): one `git log` and one
+//! One-pass git history of the source: one `git log` and one
 //! `git status` per report, from which every skill's first and last commit,
 //! `+N` and `+wip` are derived.
 
@@ -55,8 +55,8 @@ impl History {
         Some(History { commits: parse_log(&log.unwrap_or_default()), dirty: parse_status(&status, &prefix) })
     }
 
-    /// The basename of the parent of every `SKILL.md` path in the log (E15:
-    /// nested layouts such as `claude/goal-audit` yield `goal-audit`).
+    /// The basename of the parent of every `SKILL.md` path in the log
+    /// (nested layouts such as `claude/goal-audit` yield `goal-audit`).
     pub fn skill_names(&self) -> impl Iterator<Item = String> + '_ {
         self.commits
             .iter()
@@ -77,7 +77,7 @@ impl History {
 
     /// `+N`: commits and merges that touched `skill` and are not ancestors of
     /// `G`, the last commit that touched `file` (source-relative), in the
-    /// source-wide rewritten graph (SPEC §6.3). 0 when `file` was never committed.
+    /// source-wide rewritten graph. 0 when `file` was never committed.
     pub fn since(&self, skill: &str, file: &Path) -> usize {
         let Some(g) = self.commits.iter().find(|c| c.touches(file)) else {
             return 0;

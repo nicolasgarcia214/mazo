@@ -1,4 +1,4 @@
-//! The append-only event ledger (SPEC §6.2): schema, append rule, lock, coverage.
+//! The append-only event ledger: schema, append rule, lock, coverage.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
@@ -38,7 +38,7 @@ pub enum Channel {
 }
 
 impl Channel {
-    /// Strong channels feed the headline `sess` column; weak ones never do (SPEC §4.1).
+    /// Strong channels feed the headline `sess` column; weak ones never do.
     pub fn strong(self) -> bool {
         matches!(self, Channel::Slash | Channel::Tool | Channel::Typed)
     }
@@ -130,7 +130,7 @@ impl Ledger {
         Ok(ledger)
     }
 
-    /// Takes `scan.lock` with a blocking flock, then loads the id set (SPEC §6.2 Locking).
+    /// Takes `scan.lock` with a blocking flock, then loads the id set.
     pub fn open_locked(dir: &Path) -> Result<Ledger> {
         let lock = lock(dir)?;
         let mut ledger = Ledger::load(dir)?;
@@ -163,7 +163,7 @@ impl Ledger {
 
     /// The append rule. Returns the line to append, if any: a new id, or a
     /// `path: null` event upgraded with a path, which copies the stored event and
-    /// sets only `path` (SPEC §6.2).
+    /// sets only `path`.
     pub fn admit(&mut self, event: Event) -> Option<Event> {
         let line = match self.get(&event.id) {
             None => event,
@@ -191,7 +191,7 @@ impl Ledger {
 }
 
 /// Takes `<dir>/scan.lock` with a blocking flock, held until the file is
-/// dropped (SPEC §6.2 Locking). Every writer of the data directory holds it.
+/// dropped. Every writer of the data directory holds it.
 pub fn lock(dir: &Path) -> Result<File> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = dir.join("scan.lock");

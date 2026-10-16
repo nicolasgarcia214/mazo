@@ -1,4 +1,4 @@
-//! Incremental JSONL reading (SPEC §6.2 Cursors): resume offsets, partial-line
+//! Incremental JSONL reading: resume offsets, partial-line
 //! safety, and the byte prefilter that skips almost every line.
 
 use std::collections::BTreeMap;

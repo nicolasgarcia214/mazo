@@ -1,4 +1,4 @@
-//! Pi adapter fixtures (SPEC §10.1 Pi). Each fixture is real session records,
+//! Pi adapter fixtures. Each fixture is real session records,
 //! trimmed to the lines that matter, with prose scrubbed.
 
 mod common;

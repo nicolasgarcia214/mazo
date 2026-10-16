@@ -1,4 +1,4 @@
-//! `skima audit` (SPEC §6.4, F18). Stage 1: selection, the judge's input, one
+//! `skima audit`. Stage 1: selection, the judge's input, one
 //! Claude, Codex or Pi judge call per session, validation of its answer, and
 //! the session records in `audits.jsonl`. Stage 2: one call over every
 //! session record of the skill, the rates skima computes, and the skill
@@ -31,7 +31,7 @@ use crate::inventory::git;
 use crate::ledger::{self, Actor, Agent, Event, name};
 use crate::render::{self, Align};
 
-/// The condensed session's cap (SPEC §6.4 `max_chars`).
+/// The condensed session's cap.
 pub const MAX_CHARS: usize = 60_000;
 
 /// The stage-1 judge prompt, shipped in the binary, and the version records name.
@@ -42,16 +42,16 @@ pub const SESSION_PROMPT_VERSION: &str = "session-v1";
 pub const SKILL_PROMPT: &str = include_str!("../prompts/skill.md");
 pub const SKILL_PROMPT_VERSION: &str = "skill-v1";
 
-/// One cent in micro-dollars: no call starts with a smaller cap (SPEC §6.4, D34).
+/// One cent in micro-dollars: no call starts with a smaller cap.
 pub const CENT: u64 = 10_000;
 
 const ASKED_CHARS: usize = 240;
 const NOTES_CHARS: usize = 400;
 const FINDING_CHARS: usize = 200;
 const FINDINGS: usize = 5;
-/// A run of this many characters shared with the session is a quote (D32).
+/// A run of this many characters shared with the session is a quote.
 const QUOTE_CHARS: usize = 40;
-/// A whole user message of this many characters is a quote (D32).
+/// A whole user message of this many characters is a quote.
 const SHORT_MESSAGE: std::ops::RangeInclusive<usize> = 12..=39;
 
 /// The JSON schema of the judge's answer, passed as `--json-schema`.
@@ -130,7 +130,7 @@ pub fn audited(data: &Path, skill: &str) -> Result<HashSet<String>> {
         .collect())
 }
 
-/// Stage-1 selection (SPEC §6.4, D29): root sessions of any agent with a strong
+/// Stage-1 selection: root sessions of any agent with a strong
 /// load of `skill` by actor `main` or `headless` and no session in `audited`,
 /// newest first and taken round-robin across projects (cwd), up to `limit`
 /// (`None` takes all). A session is condensed from its earliest strong load
@@ -213,7 +213,7 @@ pub struct SkillText {
 
 /// `<source>/<skill>/SKILL.md` as of the last commit before `started` that
 /// touched it, or the current file when there is no repository or no earlier
-/// commit (SPEC §6.4, D30).
+/// commit.
 pub fn skill_at(source: &Path, skill: &str, started: Option<Timestamp>) -> Result<SkillText> {
     let dir = source.join(skill);
     let at = started.and_then(|t| {
@@ -263,7 +263,7 @@ pub const SCHEMA_FILE: &str = "<schema file>";
 pub const RESULT_FILE: &str = "<result file>";
 pub const INPUT_FILE: &str = "@<input file>";
 
-/// The judge's argv (SPEC §6.4, D33) with a stage's shipped prompt and
+/// The judge's argv with a stage's shipped prompt and
 /// schema; a Claude call appends `--max-budget-usd <cap>`.
 pub fn command(judge: &Judge, stage: &Stage) -> Vec<String> {
     let (argv, model): (&[&str], _) = match judge.agent {
@@ -331,7 +331,7 @@ pub fn command(judge: &Judge, stage: &Stage) -> Vec<String> {
 }
 
 /// A non-negative dollar amount from its decimal text (`0.031`, `1`, `3.1e-5`),
-/// truncated to integer micro-dollars without passing through a float (D34).
+/// truncated to integer micro-dollars without passing through a float.
 pub fn parse_usd(text: &str) -> std::result::Result<u64, String> {
     let bad = || format!("not a dollar amount: {text}");
     let (mantissa, exp) = match text.split_once(['e', 'E']) {
@@ -388,7 +388,7 @@ pub struct Finding {
     pub text: String,
 }
 
-/// The judge's answer for one session (SPEC §6.4, D31).
+/// The judge's answer for one session.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Verdict {
@@ -422,12 +422,12 @@ fn records(condensed: &str) -> Vec<(u64, String)> {
     out
 }
 
-/// Lowercased, with every run of whitespace one space (D32).
+/// Lowercased, with every run of whitespace one space.
 fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-/// The first of `texts` that quotes the session (SPEC §6.4, D32): it shares
+/// The first of `texts` that quotes the session: it shares
 /// 40 consecutive characters with a user message, an assistant message or a
 /// tool result, or holds a whole user message of 12 to 39 characters.
 fn quoting<'a>(texts: impl Iterator<Item = &'a str>, records: &[(u64, String)]) -> Option<&'a str> {
@@ -460,7 +460,7 @@ fn quoting<'a>(texts: impl Iterator<Item = &'a str>, records: &[(u64, String)]) 
 }
 
 /// The judge's answer checked against its schema, the lines of `condensed`
-/// and the no-quote rule (SPEC §6.4, D32). The error says what failed.
+/// and the no-quote rule. The error says what failed.
 pub fn validate(answer: Value, condensed: &str) -> std::result::Result<Verdict, String> {
     let v: Verdict = serde_json::from_value(answer).map_err(|e| format!("not the answer schema: {e}"))?;
     let chars = |s: &str| s.chars().count();
@@ -503,7 +503,7 @@ struct ClaudeOutput<'a> {
     structured_output: Option<Value>,
 }
 
-/// One judge call (D33): [`command`]'s argv run in a fresh empty directory
+/// One judge call: [`command`]'s argv run in a fresh empty directory
 /// under `<data>/audit-runs/`, with the files it names in a fresh temporary
 /// directory, both removed after. Claude gets `--max-budget-usd <cap>` and the
 /// input on stdin; Codex gets the prompt and the input on stdin and the scratch
@@ -673,8 +673,8 @@ pub fn codex_auth(homes: &[Home]) -> Result<PathBuf> {
     Ok(home.join("auth.json"))
 }
 
-/// `<data>/codex-judge-home` holding only a symlink to the user's `auth.json`
-/// (D33), made afresh so nothing an earlier call left there survives.
+/// `<data>/codex-judge-home` holding only a symlink to the user's `auth.json`,
+/// made afresh so nothing an earlier call left there survives.
 fn codex_home(a: &Audit) -> Result<PathBuf> {
     let home = a.data.join("codex-judge-home");
     if !a.codex_auth.exists() {
@@ -757,7 +757,7 @@ fn stamp() -> String {
     Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-/// Appends `record` to `audits.jsonl` under `scan.lock` (D35).
+/// Appends `record` to `audits.jsonl` under `scan.lock`.
 fn append(data: &Path, record: &impl Serialize) -> Result<()> {
     let line = serde_json::to_string(record).expect("record serialises") + "\n";
     let _lock = ledger::lock(data)?;
@@ -776,7 +776,7 @@ pub struct Audit<'a> {
     pub codex_auth: &'a Path,
     /// The skill's grades and retros, for stage 2.
     pub evals: &'a Evals,
-    /// The card's usage section (F14), for stage 2.
+    /// The card's usage section, for stage 2.
     pub usage: &'a Value,
 }
 
@@ -799,12 +799,12 @@ pub enum Synthesis {
     Written(Box<SkillRecord>),
     /// Invalid twice; why the last answer failed.
     Dropped(String),
-    /// Under a cent of the budget was left (D34); never without a budget.
+    /// Under a cent of the budget was left; never without a budget.
     Skipped,
 }
 
 /// Runs stage 1 on `candidates`, then stage 2 when stage 1 wrote a session
-/// record or `resynth` is set (SPEC §6.4, D37).
+/// record or `resynth` is set.
 pub fn run<'c>(a: &Audit, candidates: &'c [Candidate], resynth: bool) -> Result<Run<'c>> {
     let mut run = judge_sessions(a, candidates)?;
     if run.judged > 0 || resynth {
@@ -813,7 +813,7 @@ pub fn run<'c>(a: &Audit, candidates: &'c [Candidate], resynth: bool) -> Result<
     Ok(run)
 }
 
-/// Stage 1 (SPEC §6.4): judges `candidates` one at a time; with a budget,
+/// Stage 1: judges `candidates` one at a time; with a budget,
 /// each call is capped at 75% of it minus what is spent, stopping once that is
 /// under a cent.
 /// Each valid answer is appended to `audits.jsonl` under `scan.lock` at once;
@@ -872,7 +872,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
 }
 
 impl Run<'_> {
-    /// False, and the run exits 1 (SPEC §7), when stage 1 dropped every
+    /// False, and the run exits 1, when stage 1 dropped every
     /// session it judged, or stage 2 was due and wrote no record.
     pub fn ok(&self) -> bool {
         (self.judged > 0 || self.dropped == 0) && matches!(self.report, Synthesis::NotDue | Synthesis::Written(_))
@@ -911,7 +911,7 @@ impl Run<'_> {
         out
     }
 
-    /// `audit --json` (D40): the new skill record, the session records written
+    /// `audit --json`: the new skill record, the session records written
     /// and dropped, the spend (null with a judge that reports no cost), and the
     /// sessions left for the next run.
     pub fn json(&self, a: &Audit) -> String {
@@ -931,7 +931,7 @@ const VERDICT_CHARS: usize = 400;
 const REPORT_CHARS: usize = 300;
 const REPORT_ITEMS: usize = 5;
 const REPORT_EXAMPLES: usize = 3;
-/// Stage 2's input cuts (D37).
+/// Stage 2's input cuts.
 const COMMITS: &str = "-30";
 const GRADE_BODY_CHARS: usize = 6_000;
 const RETRO_BODIES: usize = 3;
@@ -994,7 +994,7 @@ pub struct Improvement {
     pub sessions: Vec<String>,
 }
 
-/// A curated example (F15): paraphrased, citing one session.
+/// A curated example: paraphrased, citing one session.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Example {
@@ -1005,7 +1005,7 @@ pub struct Example {
     pub session: String,
 }
 
-/// The stage-2 judge's answer (SPEC §6.4, D37).
+/// The stage-2 judge's answer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SkillReport {
@@ -1033,7 +1033,7 @@ impl Rate {
     }
 }
 
-/// The rates skima computes from session records, never the judge (D38).
+/// The rates skima computes from session records, never the judge.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Rates {
     pub followed: Rate,
@@ -1060,7 +1060,7 @@ impl Rates {
     }
 }
 
-/// A skill record of `audits.jsonl` (D35).
+/// A skill record of `audits.jsonl`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SkillRecord {
     pub v: u32,
@@ -1075,7 +1075,7 @@ pub struct SkillRecord {
 }
 
 /// The latest skill record of each skill in `<data>/audits.jsonl`; older ones
-/// stay in the file (D35).
+/// stay in the file.
 pub fn latest(data: &Path) -> Result<BTreeMap<String, SkillRecord>> {
     Ok(parsed::<SkillRecord>(data)?.into_iter().filter(|r| r.kind == "skill").map(|r| (r.skill.clone(), r)).collect())
 }
@@ -1095,7 +1095,7 @@ struct Judged {
 }
 
 /// The stage-2 answer checked against its schema and the session records it
-/// may cite (SPEC §6.4, D37). The error says what failed.
+/// may cite. The error says what failed.
 fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<SkillReport, String> {
     let r: SkillReport = serde_json::from_value(answer).map_err(|e| format!("not the answer schema: {e}"))?;
     let over = |s: &String, max: usize| s.chars().count() > max;
@@ -1138,7 +1138,7 @@ fn frame(open: &str, text: &str) -> String {
     format!("<{open}>\n{}\n{close}\n", text.trim_end().replace(&close, &format!("<\\/{tag}>")))
 }
 
-/// The stage-2 judge's input (SPEC §6.4, D37): the current `SKILL.md`, its last
+/// The stage-2 judge's input: the current `SKILL.md`, its last
 /// 30 commits, every grade's and retro's frontmatter with the latest grade
 /// body and the latest three retro bodies cut, the card's usage section, and
 /// every session record of the skill.
@@ -1183,7 +1183,7 @@ fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
     .join("\n"))
 }
 
-/// Stage 2 (SPEC §6.4): one call over every session record of the skill; with
+/// Stage 2: one call over every session record of the skill; with
 /// a budget, capped at it minus what is spent, and skipped when that is under
 /// a cent. A valid answer is appended as the skill record with the rates skima
 /// computes; an invalid one is retried once, then dropped.
@@ -1231,13 +1231,13 @@ fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
     Ok(why.map_or(Synthesis::Skipped, Synthesis::Dropped))
 }
 
-/// Input tokens estimated from condensed characters (SPEC §6.4, D36).
+/// Input tokens estimated from condensed characters.
 pub fn estimate_tokens(chars: usize) -> usize {
     chars / 4
 }
 
 /// The dollar cost of `chars` condensed characters at the rate earlier session
-/// records paid per condensed character, with how many records set it (D36).
+/// records paid per condensed character, with how many records set it.
 fn estimate_cost(data: &Path, chars: usize) -> Result<Option<(u64, usize)>> {
     let (mut cost, mut seen, mut n) = (0u128, 0u128, 0usize);
     for r in parsed::<Recorded>(data)? {
@@ -1256,7 +1256,7 @@ fn estimate_cost(data: &Path, chars: usize) -> Result<Option<(u64, usize)>> {
 
 /// `skima audit --dry-run`: each session the audit would judge with its agent,
 /// project and condensed size, the judge command, the token estimate and,
-/// once session records exist, the dollar estimate (D36).
+/// once session records exist, the dollar estimate.
 pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String> {
     let skill = a.skill;
     if candidates.is_empty() {

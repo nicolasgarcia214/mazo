@@ -1,4 +1,4 @@
-//! Reports over the ledger (SPEC F2–F4, F14): usage, unused, the card (show);
+//! Reports over the ledger: usage, unused, the card (show);
 //! collapse, held and cluster.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -59,19 +59,19 @@ pub struct UsageArgs {
     pub authoring: bool,
 }
 
-/// The card shows the audit's top improvements, this many (SPEC F14).
+/// The card shows the audit's top improvements, this many.
 pub const AUDIT_IMPROVEMENTS: usize = 3;
 
 /// `show`'s default window.
 pub const SHOW_SINCE: Since = Since::Days(30);
 
-/// The last line of `usage` and `unused` (SPEC F2).
+/// The last line of `usage` and `unused`.
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade\n";
 
 /// Days in the `30d` sparkline.
 const SPARK_DAYS: i64 = 30;
 
-/// The collapse key (SPEC §4.1 Collapse), within one skill.
+/// The collapse key, within one skill.
 type Key<'e> = (Agent, &'e str, Channel);
 
 /// The ledger as reports see it: parsed timestamps, local days, and the
@@ -123,7 +123,7 @@ impl<'a> View<'a> {
         }
     }
 
-    /// SPEC §4.1: a weak event is authoring when stored so (cwd) or when its
+    /// A weak event is authoring when stored so (cwd) or when its
     /// root session holds a strong authoring-skill event anywhere in the ledger.
     fn is_authoring(&self, e: &Event) -> bool {
         !e.channel.strong() && (e.authoring || self.authoring_sessions.contains(&(e.agent, e.session.as_str())))
@@ -175,7 +175,7 @@ impl<'a> View<'a> {
     }
 
     /// Per home: the effective window start, the later of the report window
-    /// and the home's coverage (SPEC D8), with the earliest typed event.
+    /// and the home's coverage, with the earliest typed event.
     fn coverage(&self, start: Option<Timestamp>) -> Vec<(String, String)> {
         self.input
             .cfg
@@ -188,7 +188,7 @@ impl<'a> View<'a> {
                         None => "no transcripts".to_string(),
                         Some(first) => {
                             let from = start.map_or(first, |s| s.max(first));
-                            // Typed events (SPEC §4.2) reach back before the first transcript.
+                            // Typed events reach back before the first transcript.
                             let typed = self
                                 .events
                                 .iter()
@@ -214,7 +214,7 @@ impl<'a> View<'a> {
     }
 }
 
-/// A grade as reports emit it, with its staleness (SPEC §6.3).
+/// A grade as reports emit it, with its staleness.
 #[derive(Serialize)]
 struct GradeOut {
     #[serde(flatten)]
@@ -263,7 +263,7 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
     let start = view.start(args.since);
     let mut skills: BTreeSet<&str> = input.inv.skills.iter().map(String::as_str).collect();
     if args.all {
-        // Every skill in the ledger, so a retired or pruned one keeps a row (SPEC F17).
+        // Every skill in the ledger, so a retired or pruned one keeps a row.
         skills.extend(input.events.iter().map(|e| e.skill.as_str()));
     }
     let mut rows: Vec<UsageRow> = skills
@@ -339,13 +339,13 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
     render::table(&header, &cells, tty) + &view.coverage_line("coverage", None) + LEGEND
 }
 
-/// Skills that cite `skill` (SPEC §5.3).
+/// Skills that cite `skill`.
 fn citers(graph: &inventory::Graph, skill: &str) -> Vec<String> {
     graph.iter().filter(|(_, cited)| cited.contains(skill)).map(|(a, _)| a.clone()).collect()
 }
 
-/// Why `retire` refuses `skill` (SPEC F17): a strong event in the last `days`
-/// days, or a citing skill with one, which makes it held (F3). Empty when it may go.
+/// Why `retire` refuses `skill`: a strong event in the last `days`
+/// days, or a citing skill with one, which makes it held. Empty when it may go.
 pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
     let view = View::new(input);
     let used = view.used(view.start(Since::Days(days)));
@@ -387,7 +387,7 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
         .iter()
         .filter(|s| !used.contains(s.as_str()))
         .map(|skill| {
-            // SPEC §6.3: outside a git worktree no skill is new.
+            // Outside a git worktree no skill is new.
             let is_new = input.inv.history.as_ref().is_some_and(|h| {
                 h.first(skill)
                     .and_then(|c| c.date.parse::<Timestamp>().ok())
@@ -460,7 +460,7 @@ struct CardHistory<'a> {
 }
 
 /// A skill the card's skill cites, or one citing it, and whether it is held
-/// in the window (SPEC §5.3).
+/// in the window.
 #[derive(Serialize)]
 struct Link {
     skill: String,
@@ -490,7 +490,7 @@ struct CardUsage {
     projects: Vec<Project>,
 }
 
-/// The skill card (SPEC F14): what `show` prints and `show --json` emits.
+/// The skill card: what `show` prints and `show --json` emits.
 #[derive(Serialize)]
 struct Card<'a> {
     skill: &'a str,
@@ -501,7 +501,7 @@ struct Card<'a> {
     total_events: usize,
     description: Option<String>,
     path: PathBuf,
-    /// None outside a git worktree (SPEC §6.3).
+    /// None outside a git worktree.
     history: Option<CardHistory<'a>>,
     /// Newest first.
     grades: Vec<GradeOut>,
@@ -513,7 +513,7 @@ struct Card<'a> {
     cited_by: Vec<Link>,
     usage: CardUsage,
     examples: Examples,
-    /// The latest skill record (F18).
+    /// The latest skill record.
     audit: Option<&'a SkillRecord>,
 }
 
@@ -574,7 +574,7 @@ fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> C
             .len()
     });
 
-    // SPEC §5.3: a skill is held when a skill citing it was used in the window.
+    // A skill is held when a skill citing it was used in the window.
     let used = view.used(start);
     let graph = inventory::fan_in(&inv.source, &inv.skills);
     let link =
@@ -633,13 +633,13 @@ fn card_usage(view: &View, skill: &str, start: Option<Timestamp>) -> CardUsage {
 }
 
 /// The usage section of `skill`'s card over `show`'s default window, which
-/// the audit's stage 2 reads (SPEC §6.4).
+/// the audit's stage 2 reads.
 pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
     let view = View::new(input);
     json!(card_usage(&view, skill, view.start(SHOW_SINCE)))
 }
 
-/// `$HOME` as `~` (SPEC F12 Paths).
+/// `$HOME` as `~`.
 pub fn tilde(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     match path.strip_prefix(home.as_str()) {
@@ -648,7 +648,7 @@ pub fn tilde(path: &str) -> String {
     }
 }
 
-/// A transcript locator as `<agent>:<file name>:<line>` (SPEC F12 Paths).
+/// A transcript locator as `<agent>:<file name>:<line>`.
 fn locator(e: &ShownEvent) -> String {
     let (file, line) = e.src.rsplit_once(':').unwrap_or((e.src, ""));
     let file = Path::new(file).file_name().map_or(file.into(), |n| n.to_string_lossy());
@@ -805,9 +805,9 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
 /// Events listed on each card of the HTML report: `show`'s default `--limit`.
 const REPORT_EVENTS: usize = 20;
 
-/// The model of `skima report` (SPEC F16): the `usage --all` rows and
+/// The model of `skima report`: the `usage --all` rows and
 /// coverage, the grades to run, and every inventory skill's card. The page
-/// renders this value, so it shows nothing the JSON lacks (D12).
+/// renders this value, so it shows nothing the JSON lacks.
 pub fn report(input: &Input, since: Since) -> crate::Result<serde_json::Value> {
     let view = View::new(input);
     let args = UsageArgs { since, agent: None, channel: None, all: true, authoring: false };

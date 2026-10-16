@@ -1,4 +1,4 @@
-//! Codex rollouts (SPEC §4.3): `$name` expansions and shell reads of skill
+//! Codex rollouts: `$name` expansions and shell reads of skill
 //! files, keyed by a hash of the record payload so fork copies collapse.
 
 use std::path::Path;
@@ -87,7 +87,7 @@ impl Adapter for Codex {
     }
 }
 
-/// What the judge keeps of a record (SPEC §6.4): the user's turns from
+/// What the judge keeps of a record: the user's turns from
 /// `event_msg`, and from `response_item` the assistant's text, tool calls and
 /// tool results. `response_item` user messages repeat the turns or carry
 /// `<skill>` bodies, so they keep nothing.
@@ -110,7 +110,7 @@ fn render(v: &Value) -> Vec<String> {
     }
 }
 
-/// SPEC §4.7: an `event_msg` `user_message`, or the `item_completed`
+/// An `event_msg` `user_message`, or the `item_completed`
 /// `UserMessage` that replaced it from 2026-08. A bare `$name` gives way to the
 /// turn before it, and a `<skill>` injection is never the user's.
 fn user_turn(v: &Value) -> Option<String> {

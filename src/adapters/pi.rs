@@ -1,4 +1,4 @@
-//! Pi sessions (SPEC §4.4): `/skill:` expansions, `read` tool calls and `bash`
+//! Pi sessions: `/skill:` expansions, `read` tool calls and `bash`
 //! reads, keyed by entry id and timestamp so fork copies collapse.
 
 use std::path::{Path, PathBuf};
@@ -53,7 +53,7 @@ impl Adapter for Pi {
     }
 }
 
-/// What the judge keeps of an entry (SPEC §6.4): the user's text without
+/// What the judge keeps of an entry: the user's text without
 /// `/skill:` bodies, assistant text, tool calls and tool results.
 fn render(v: &Value) -> Vec<String> {
     if let Some(text) = user_turn(v) {
@@ -79,7 +79,7 @@ fn render(v: &Value) -> Vec<String> {
     }
 }
 
-/// SPEC §4.7: a user `message` entry. A `/skill:` expansion stands for
+/// A user `message` entry. A `/skill:` expansion stands for
 /// `/skill:name args`, and a bare one for nothing, so the walk goes on to the
 /// message before it.
 fn user_turn(v: &Value) -> Option<String> {

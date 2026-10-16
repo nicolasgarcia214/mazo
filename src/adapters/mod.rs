@@ -1,4 +1,4 @@
-//! Adapters turn transcript records into raw events (SPEC §4). Identity, actor,
+//! Adapters turn transcript records into raw events. Identity, actor,
 //! root session and origin are computed once, in `classify`.
 
 pub mod claude;
@@ -26,7 +26,7 @@ pub enum Key {
     Codex { hash: String, index: String },
 }
 
-/// What the actor rules need (SPEC §4.1 Actor).
+/// What the actor rules need.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActorInputs {
     /// Claude `entrypoint`.
@@ -71,7 +71,7 @@ pub struct Raw {
     pub name_origin: bool,
 }
 
-/// Paths that decide whether a file is a skill file (SPEC §4.5).
+/// Paths that decide whether a file is a skill file.
 #[derive(Debug, Clone, Default)]
 pub struct SkillRoots {
     pub source: PathBuf,
@@ -88,7 +88,7 @@ pub struct SkillFile {
 }
 
 impl SkillRoots {
-    /// SPEC §4.5: resolve against `cwd`, then the path either ends in `/SKILL.md`
+    /// Resolve against `cwd`, then the path either ends in `/SKILL.md`
     /// or lies in a `<name>/` child of a home skills dir or the source root, where
     /// `<name>` is a known name or a non-hidden directory containing `SKILL.md`.
     pub fn classify(&self, path: &str, cwd: Option<&str>) -> Option<SkillFile> {
@@ -120,7 +120,7 @@ impl SkillRoots {
 
     /// The skill files a shell command run in `cwd` loads, each with its index
     /// in the command's read list. A command that names a skill's Markdown file
-    /// but is neither a load nor a known non-load goes to `unparsed` (SPEC §4.5).
+    /// but is neither a load nor a known non-load goes to `unparsed`.
     pub fn shell_reads(&self, cmd: &str, cwd: Option<&str>, unparsed: &mut Vec<String>) -> Vec<(usize, SkillFile)> {
         let files = match readcmd::reads(cmd) {
             Reads::Load(files) => files,
@@ -136,7 +136,7 @@ impl SkillRoots {
     }
 
     /// Whether `text` names a skill's Markdown file (`SKILL.md` or another `.md`
-    /// inside a skill directory): the test for an unparsed command (SPEC §4.5).
+    /// inside a skill directory): the test for an unparsed command.
     /// Running a skill's scripts reads no instructions, so it does not count.
     pub fn names_skill_doc(&self, text: &str, cwd: Option<&str>) -> bool {
         text.split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}=,:[]".contains(c))
@@ -149,25 +149,25 @@ impl SkillRoots {
 #[derive(Debug, Default)]
 pub struct Parsed {
     pub raws: Vec<Raw>,
-    /// Commands that name a skill file but match neither reader rule (SPEC §4.5).
+    /// Commands that name a skill file but match neither reader rule.
     pub unparsed: Vec<String>,
     /// The file belongs to an excluded session (Codex guardian review, non-session Pi file).
     pub skipped: bool,
 }
 
 pub trait Adapter {
-    /// Transcript files of a home, sorted by basename (SPEC §6.2 Scan order).
+    /// Transcript files of a home, sorted by basename.
     fn files(&self, home: &Home) -> Vec<PathBuf> {
         jsonl_files(&home.transcripts())
     }
     /// Parses the prefiltered lines of one file. `header` is line 1 of the file.
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
     /// The user-authored text behind the load at `src` (`<file>:<line>`), read
-    /// at display time and never stored (SPEC §4.7). `None` when the file is
+    /// at display time and never stored. `None` when the file is
     /// gone or holds no user turn up to that line.
     fn prompt_at(&self, src: &str) -> Option<String>;
     /// The judge's view of the session window around the strong load at `src`,
-    /// at most `max_chars` characters plus a cut marker (SPEC §6.4). `None`
+    /// at most `max_chars` characters plus a cut marker. `None`
     /// when the file is gone or `src` is not a strong load.
     fn condense(&self, src: &str, max_chars: usize) -> Option<String>;
 }
@@ -182,7 +182,7 @@ pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
 
 /// The first text `authored` reads walking back from the record at `src`
 /// (`<file>:<line>`), that record included: a `/skill:` message holds its own
-/// prompt, a Claude meta record or Codex injection does not (SPEC §4.7).
+/// prompt, a Claude meta record or Codex injection does not.
 fn prompt_back(src: &str, authored: impl Fn(&Value) -> Option<String>) -> Option<String> {
     let t = transcript(src)?;
     authored_back(&t.chunk.lines[..t.line], &authored).map(|(_, text)| text)
@@ -220,7 +220,7 @@ const TOOL_INPUT_CHARS: usize = 200;
 const TOOL_RESULT_CHARS: usize = 500;
 const CUT: &str = "\n[… cut …]\n";
 
-/// SPEC §6.4 condensing, shared by every adapter. The window runs from the
+/// Condensing for the audit judge, shared by every adapter. The window runs from the
 /// prompt behind the strong load at `src` (the load itself when no prompt
 /// precedes it) up to, not including, the first strong load of a different
 /// skill after `src`, the 40th `authored` record after the start, or the end
@@ -296,7 +296,7 @@ fn message_text(content: &Value) -> String {
 }
 
 /// Text the harness puts inside a user turn: reminders, task notifications,
-/// local command output and pasted content (SPEC §4.7).
+/// local command output and pasted content.
 static INJECTED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?s)<system-reminder>.*?</system-reminder>|<task-notification>.*?</task-notification>",

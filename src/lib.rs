@@ -1,6 +1,6 @@
 //! skima: skill usage from agent transcripts, and sync of skill links.
 //!
-//! Four paths (SPEC §9): write `tail → adapters → classify → ledger`, read
+//! Four paths: write `tail → adapters → classify → ledger`, read
 //! `ledger + inventory + evals → report`, sync `config + inventory + policy → links`,
 //! judge `ledger + adapters (condense) → audit`.
 
@@ -24,5 +24,5 @@ pub mod scan;
 pub mod tail;
 pub mod yaml;
 
-/// Errors are reported to the user as one `ERROR: …` line (SPEC §5.5).
+/// Errors are reported to the user as one `ERROR: …` line.
 pub type Result<T> = std::result::Result<T, String>;

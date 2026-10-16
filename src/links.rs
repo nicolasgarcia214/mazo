@@ -1,4 +1,4 @@
-//! Drift classification and sync (SPEC §5.2, §5.5): `plan()` is pure and
+//! Drift classification and sync: `plan()` is pure and
 //! `apply()` is the only writer, so every check happens before any write.
 
 use std::fs;
@@ -133,7 +133,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
     plan_with(cfg, inv, homes, None)
 }
 
-/// The plan `sync` would make if `gone` did not exist (SPEC F17 `retire`): links
+/// The plan `sync` would make if `gone` did not exist (for `retire`): links
 /// into it plan as dangling and a `links` entry under it is missing. `inv` must
 /// already leave out the skill at `gone`.
 pub fn plan_without(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: &Path) -> Plan {
@@ -252,7 +252,7 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Every line that stops `sync` (SPEC §5.4, §5.5): the per-skill rules, the
+/// Every line that stops `sync`: the per-skill rules, the
 /// per-home rules of the selected homes, then the plan's conflicts.
 pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) -> Vec<String> {
     policy::per_skill(cfg, inv)

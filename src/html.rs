@@ -1,5 +1,5 @@
-//! The self-contained HTML report (SPEC F16): one file with inline CSS and
-//! inline SVG, rendered from the JSON model of `report::report` (D12).
+//! The self-contained HTML report: one file with inline CSS and
+//! inline SVG, rendered from the JSON model of `report::report`.
 
 use std::fs::{self, OpenOptions, Permissions};
 use std::io::Write;
@@ -91,7 +91,7 @@ fn anchor(skill: &str) -> String {
     format!("skill-{}", esc(skill))
 }
 
-/// The score as written, then `+N` or `+wip` (SPEC F2).
+/// The score as written, then `+N` or `+wip`.
 fn grade(g: &Value) -> String {
     if g.is_null() {
         return "-".into();
@@ -243,7 +243,7 @@ fn links(ls: &Value) -> String {
     if names.is_empty() { "none".into() } else { names.join(", ") }
 }
 
-/// The card's examples (SPEC F15): the invocation per agent, the manifest's
+/// The card's examples: the invocation per agent, the manifest's
 /// default prompt, and real prompts read from transcripts.
 fn examples(ex: &Value, tz: &TimeZone) -> String {
     let written: Vec<String> = list(&ex["written"])
@@ -289,7 +289,7 @@ fn examples(ex: &Value, tz: &TimeZone) -> String {
     out
 }
 
-/// The latest audit (SPEC F14): its date and session count, verdict, the
+/// The latest audit: its date and session count, verdict, the
 /// rates skima computed and the top three improvements.
 fn audit(a: &Value, tz: &TimeZone) -> String {
     if a.is_null() {
@@ -419,8 +419,8 @@ pub fn render(model: &Value, tz: &TimeZone) -> String {
     )
 }
 
-/// Writes `html` to `path` with mode 0600, replacing any previous file (SPEC
-/// D11): the page shows cwds and prompt excerpts.
+/// Writes `html` to `path` with mode 0600, replacing any previous file:
+/// the page shows cwds and prompt excerpts, the one place prompt text is written.
 pub fn write(path: &Path, html: &str) -> crate::Result<()> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {

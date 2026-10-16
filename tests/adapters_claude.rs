@@ -1,4 +1,4 @@
-//! SPEC §10.1 Claude fixtures. Each fixture is a real record from this machine,
+//! Claude fixtures. Each fixture is a real record from this machine,
 //! trimmed to the fields the adapter reads, with prompt and tool text scrubbed.
 
 mod common;
@@ -284,7 +284,7 @@ fn refused_skill_calls_yield_nothing() {
 
 #[test]
 fn skill_result_without_success_true_yields_nothing() {
-    // SPEC §4.2 row 1 needs `success: true`. No refusal on this machine has a
+    // A Skill result counts only with `success: true`. No refusal on this machine has a
     // `commandName` (they store an error string), so this is the real result
     // of `pair.jsonl` with `success` flipped.
     let dir = tempfile::tempdir().unwrap();
@@ -439,7 +439,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
         policy: Default::default(),
         judge: Default::default(),
     };
-    // `argus` is a known name from git history but not canonical today (E15).
+    // `argus` is a known name from git history but not canonical today.
     let inv = Inventory {
         source: source.clone(),
         skills: ["grade".to_string()].into(),
@@ -468,7 +468,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     assert_eq!(second.homes["claude"].new_events.len(), 0);
 }
 
-/// SPEC §4.1 authoring, through a scan. The source sits in a git worktree
+/// Authoring, through a scan. The source sits in a git worktree
 /// built here; the transcript is the real authoring `Read` of
 /// `subagents/agent-a5b86c28fed127eef.jsonl` (cwd `~/dotfiles`) and the real
 /// `pair.jsonl` Skill call, with `~/dotfiles` and `~/.claude` moved under the
@@ -538,7 +538,7 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
     assert_eq!(got, want);
 }
 
-/// `prompt_at` on line `line` of a fixture (SPEC §4.7).
+/// `prompt_at` on line `line` of a fixture.
 fn prompt(name: &str, line: u64) -> Option<String> {
     Claude.prompt_at(&format!("{}:{line}", fixture(name).display()))
 }
@@ -588,7 +588,7 @@ fn expired_transcript_has_no_prompt() {
     assert_eq!(prompt("slash.jsonl", 3), None, "a line past the end");
 }
 
-/// `condense` at line `line` of `path` with the audit's 60,000-character cap (SPEC §6.4).
+/// `condense` at line `line` of `path` with the audit's 60,000-character cap.
 fn condense_at(path: &Path, line: u64, max_chars: usize) -> Option<String> {
     Claude.condense(&format!("{}:{line}", path.display()), max_chars)
 }

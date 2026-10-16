@@ -1,5 +1,5 @@
 //! `skima audit`: selection, judge input, `--dry-run`, the session records
-//! of stage 1 and the skill record of stage 2 (SPEC §6.4, §10.8).
+//! of stage 1 and the skill record of stage 2.
 
 mod common;
 
@@ -531,7 +531,7 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
     }
     assert!(stderr(&fx.skima(&["audit", "unslop", "--max-budget-usd", "0.039"])).contains("at least 0.04"));
     assert!(fx.calls().is_empty());
-    // Codex and Pi report no dollar figure: `--limit` is their only cap (D34).
+    // Codex and Pi report no dollar figure: `--limit` is their only cap.
     for agent in ["codex", "pi"] {
         let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\n"), three_agents);
         for args in [

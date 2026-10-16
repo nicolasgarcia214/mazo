@@ -1,4 +1,4 @@
-//! Always-on and configurable policy rules (SPEC §5.4), and the
+//! Always-on and configurable policy rules, and the
 //! scan-freshness warning.
 
 use std::collections::BTreeMap;
@@ -73,7 +73,7 @@ fn valid_name(name: &str) -> bool {
     name.split('-').all(ok)
 }
 
-/// Per-home rules for the selected homes (SPEC §5.4), as `(home, line)`.
+/// Per-home rules for the selected homes, as `(home, line)`.
 pub fn home_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<(String, String)> {
     homes.iter().flat_map(|h| per_home(&cfg.policy, inv, h).into_iter().map(|e| (h.name.clone(), e))).collect()
 }
@@ -118,7 +118,7 @@ fn retention_days(home: &Home) -> i64 {
     settings(home).ok().and_then(|v| v["cleanupPeriodDays"].as_i64()).unwrap_or(30)
 }
 
-/// Scan-freshness warnings (SPEC §5.4): a Claude home never scanned, or last
+/// Scan-freshness warnings: a Claude home never scanned, or last
 /// scanned more than retention minus 7 days ago.
 pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff::Timestamp) -> Vec<String> {
     let mut out = Vec::new();

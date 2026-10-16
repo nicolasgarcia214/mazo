@@ -1,4 +1,4 @@
-//! SPEC §10.4 ingest properties and the F1 criteria, run against temporary
+//! Ingest properties, run against temporary
 //! Claude homes built from the real fixtures in `tests/fixtures/claude`.
 
 mod common;
@@ -22,8 +22,8 @@ use tempfile::TempDir;
 
 /// Every Claude transcript fixture: its path under the project directory and
 /// its file under `tests/fixtures/claude`. `pair_copy.jsonl` repeats
-/// `pair.jsonl` the way a Claude fork copies records with their ids (SPEC §6.2
-/// Scan order).
+/// `pair.jsonl` the way a Claude fork copies records with their ids, scanned in
+/// basename order.
 const TRANSCRIPTS: [(&str, &str); 15] = [
     ("attachments.jsonl", "attachments.jsonl"),
     ("bash_two.jsonl", "bash_two.jsonl"),
@@ -478,7 +478,7 @@ fn reparse_prints_each_homes_total_and_the_total_before() {
     assert_eq!(out, format!("claude {now} events (was {was})\nempty 0 events (was 0)\n"));
 }
 
-/// Every event but `typed`, sorted by id (F1).
+/// Every event but `typed`, sorted by id.
 fn comparable(data: &Path) -> Vec<Event> {
     events(data).into_iter().filter(|e| e.channel != Channel::Typed).collect()
 }
@@ -638,7 +638,7 @@ fn a_skill_result_for_a_known_but_removed_skill_stays_canonical() {
 #[test]
 fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
     // One strong load per agent, scanned once with its recorded cwd and once
-    // with that cwd moved under `<data dir>/audit-runs/` (SPEC §4.7).
+    // with that cwd moved under `<data dir>/audit-runs/`.
     let sessions = [
         (Agent::Claude, "claude/pair.jsonl", "/home/nicolas/projects/argus", "projects/p/pair.jsonl"),
         (Agent::Codex, "codex/name_block.jsonl", "/home/nicolas/projects/demo", "2026/07/27/rollout.jsonl"),
@@ -671,7 +671,7 @@ fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
     }
 }
 
-/// SPEC D11, F15: `show` prints a real example read from the transcript and
+/// No prompt text is stored: `show` prints a real example read from the transcript and
 /// writes its text nowhere outside the agent's home.
 #[test]
 fn show_writes_no_example_text() {

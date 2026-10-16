@@ -1,4 +1,4 @@
-//! SPEC §6.3 Cost and Not a repository: one `git log` and one `git status` per
+//! Cost and not a repository: one `git log` and one `git status` per
 //! report give every skill's first and last commit, `+N` and `+wip`.
 
 mod common;
@@ -62,7 +62,7 @@ fn first_last_since_and_wip_from_one_pass() {
     assert_eq!(h.since("a", grade), 2, "two later commits touched a");
     assert_eq!(h.since("b", grade), 0);
     assert_eq!(h.since("a", Path::new(".grades/a/uncommitted.md")), 0);
-    assert!(inv.known.contains("nested"), "known names come from the same log (E15)");
+    assert!(inv.known.contains("nested"), "known names come from the same log");
     assert!(!h.wip("a") && !h.wip("b"));
 
     write(&src.join("b/SKILL.md"), "changed");
@@ -109,7 +109,7 @@ fn parity(src: &Path, skills: &[&str]) -> (Vec<(usize, usize)>, bool) {
     (counts, evals::load(&inv, "s").grades.pop().unwrap().stale())
 }
 
-/// SPEC §6.3: `+N` counts by ancestry. A side branch edits the skill before
+/// `+N` counts by ancestry. A side branch edits the skill before
 /// the grade is committed on the main line, then merges: the edit is newer
 /// than `G` by ancestry, not by date. `t`, edited in G itself, is not.
 #[test]

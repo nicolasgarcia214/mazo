@@ -1,4 +1,4 @@
-//! Lifecycle of a skill in the source: `new`, `retire`, `prune` (SPEC F17).
+//! Lifecycle of a skill in the source: `new`, `retire`, `prune`.
 
 use std::collections::BTreeMap;
 use std::io::BufRead;
@@ -11,7 +11,7 @@ use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent, Ledger};
 use crate::{links, policy, report, scan, yaml};
 
-/// `skima new <name> --description <text>` (SPEC F17, D19): writes
+/// `skima new <name> --description <text>`: writes
 /// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
 /// then prints the `name-only` line for each Claude home under `claude_name_only`.
 /// Exit 2 for a name or description the always-on rules reject, 1 for an
@@ -78,7 +78,7 @@ fn quoted(s: &str) -> String {
     out
 }
 
-/// `skima prune [<name>] [--yes] [--force]` (SPEC F17, D21): permanently deletes
+/// `skima prune [<name>] [--yes] [--force]`: permanently deletes
 /// `<source>/.archive/<name>`, or every archived entry. Exit 2 for a usage error,
 /// 1 for a refusal; a refusal or a declined confirmation deletes nothing.
 pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: bool) -> Result<ExitCode> {
@@ -203,7 +203,7 @@ fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
 /// A strong event in this many days, the skill's or a holder's, makes `retire` refuse.
 const RETIRE_DAYS: u32 = 30;
 
-/// `skima retire <name> [--force]` (SPEC F17, D20): scans first, refuses a held or
+/// `skima retire <name> [--force]`: scans first, refuses a held or
 /// recently used skill unless `force`, and refuses any conflict or policy error
 /// in the sync plan as if the skill were archived, all before any write. Then
 /// moves `<source>/<name>` to `<source>/.archive/<name>` (`git mv` when tracked)

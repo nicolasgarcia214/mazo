@@ -1,4 +1,4 @@
-//! SPEC F16 and §10 Output: the self-contained HTML report.
+//! The self-contained HTML report.
 
 mod common;
 
@@ -393,7 +393,7 @@ fn skill_record(verdict: &str, at: &str) -> String {
     format!("{record}\n")
 }
 
-/// SPEC F14, F16: the usage table carries each skill's latest audit verdict
+/// The usage table carries each skill's latest audit verdict
 /// and the card shows its date, session count, rates, top three improvements
 /// and curated examples, escaped; an older record is not shown.
 #[test]

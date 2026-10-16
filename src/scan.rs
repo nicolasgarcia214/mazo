@@ -1,4 +1,4 @@
-//! The scan driver (SPEC §6.2, F1): for each home, read new lines of every
+//! The scan driver: for each home, read new lines of every
 //! transcript in scan order, classify, and append under the append rule.
 
 use std::collections::{BTreeMap, HashSet};
@@ -41,7 +41,7 @@ impl ScanReport {
     }
 }
 
-/// Markers whose presence in a file without any event trips the canary (SPEC §4.6).
+/// Markers whose presence in a file without any event trips the canary.
 const CANARY: [&str; 3] = ["Base directory for this skill", "<skill>", "<skill name="];
 
 pub fn roots(cfg: &Config, inv: &Inventory) -> SkillRoots {
@@ -52,13 +52,13 @@ pub fn roots(cfg: &Config, inv: &Inventory) -> SkillRoots {
     }
 }
 
-/// Incremental scan, or a full reparse (SPEC §6.2 Reparse) when `reparse` is set.
+/// Incremental scan, or a full reparse when `reparse` is set.
 pub fn scan(cfg: &Config, inv: &Inventory, data: &Path, reparse: bool) -> Result<ScanReport> {
     scan_with(cfg, inv, data, reparse, &adapters::for_agent)
 }
 
 /// [`scan`] with the adapter for each agent supplied by the caller, so a test
-/// can stand in a changed parser rule for `scan --reparse` (SPEC §10.4).
+/// can stand in a changed parser rule for `scan --reparse`.
 pub fn scan_with<'a>(
     cfg: &Config,
     inv: &Inventory,
@@ -187,12 +187,12 @@ pub fn scan_with<'a>(
     Ok(report)
 }
 
-/// Whether a scan shows the progress line (SPEC F12).
+/// Whether a scan shows the progress line.
 pub fn should_show_progress(is_tty: bool, elapsed: Duration) -> bool {
     is_tty && elapsed > Duration::from_secs(1)
 }
 
-/// The F12 progress line: one `\r`-rewritten stderr line, cleared when the scan ends.
+/// The progress line: one `\r`-rewritten stderr line, cleared when the scan ends.
 struct Progress {
     tty: bool,
     start: Instant,

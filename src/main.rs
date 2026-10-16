@@ -197,7 +197,7 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
     }
 }
 
-/// Usage reports scan first, then render, then print freshness warnings (SPEC D3, §5.4).
+/// Usage reports scan first, then render, then print freshness warnings.
 fn with_scanned(
     cfg: &Config,
     inv: &Inventory,
@@ -217,7 +217,7 @@ fn with_scanned(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `skima audit` (SPEC F18): usage errors exit 2 before the scan (D3).
+/// `skima audit`: usage errors exit 2 before the scan.
 fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skima::Result<ExitCode> {
     let (skill, budget) = (args.skill.as_str(), args.max_budget_usd);
     let usage = |msg: String| {
@@ -227,7 +227,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
     if !inv.skills.contains(skill) {
         return usage(format!("not a skill in the source: {skill}"));
     }
-    // Codex and Pi report no dollar figure, so `--limit` is their only cap (D34).
+    // Codex and Pi report no dollar figure, so `--limit` is their only cap.
     let budget = match (cfg.judge.agent, budget) {
         (Agent::Claude, budget) => Some(budget.unwrap_or(1_000_000)),
         (agent, Some(_)) => {
@@ -269,7 +269,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
     Ok(if run.ok() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
 
-/// SPEC F16: the report goes under the data directory, outside any git
+/// The report goes under the data directory, outside any git
 /// repository, unless `--out` says otherwise.
 fn cmd_report(
     cfg: &Config,
@@ -323,7 +323,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(was) = was {
-        // `+N` is meaningless after a rewrite (SPEC F12).
+        // `+N` is meaningless after a rewrite.
         let now = home_counts(&Ledger::load(&data)?);
         for name in r.homes.keys() {
             let count = |c: &BTreeMap<String, usize>| c.get(name).copied().unwrap_or(0);

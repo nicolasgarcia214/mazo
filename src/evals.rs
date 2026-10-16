@@ -1,4 +1,4 @@
-//! `.grades/` and `.retros/` frontmatter and grade staleness (SPEC §6.3).
+//! `.grades/` and `.retros/` frontmatter and grade staleness.
 //! Read at report time; never copied or written.
 
 use std::path::{Path, PathBuf};
@@ -32,14 +32,14 @@ pub struct Grade {
 }
 
 impl Grade {
-    /// SPEC §6.3: the skill changed after the grade, committed or not. An
+    /// The skill changed after the grade, committed or not. An
     /// uncommitted grade has no `G`, so only `wip` can make it stale.
     pub fn stale(&self) -> bool {
         self.since > 0 || self.wip
     }
 
     /// `+N` when commits changed the skill after the grade, else `+wip` when
-    /// only uncommitted changes did, else empty (SPEC F2).
+    /// only uncommitted changes did, else empty.
     pub fn mark(&self) -> String {
         match (self.since, self.wip) {
             (0, false) => String::new(),
@@ -62,7 +62,7 @@ pub fn load(inv: &Inventory, skill: &str) -> Evals {
     let source = &inv.source;
     let history = inv.history.as_ref();
     let wip = history.is_some_and(|h| h.wip(skill));
-    // Outside a git worktree nothing comes after a grade (SPEC §6.3).
+    // Outside a git worktree nothing comes after a grade.
     let since = |file: &Path| history.map_or(0, |h| file.strip_prefix(source).map_or(0, |g| h.since(skill, g)));
     let grades = read_dir(&source.join(".grades").join(skill))
         .into_iter()
@@ -104,7 +104,7 @@ fn read_dir(dir: &Path) -> Vec<Eval> {
     out
 }
 
-/// The leading `YYYY-MM-DD` of a date scalar, quoted or not (SPEC §6.3).
+/// The leading `YYYY-MM-DD` of a date scalar, quoted or not.
 fn date(text: &str) -> Option<String> {
     let d = text.get(..10)?;
     let shape = d.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });

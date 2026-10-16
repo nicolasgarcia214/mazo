@@ -1,4 +1,4 @@
-//! SPEC §10.1 Codex fixtures and the §10.5 golden id. Each fixture is a set of
+//! Codex fixtures and the golden id. Each fixture is a set of
 //! real rollout lines with their text scrubbed; `pipeline.jsonl` line 3,
 //! `guardian.jsonl` line 2 and the `compacted` record in `excluded.jsonl` are
 //! composed from real records, as each test notes.
@@ -297,7 +297,7 @@ fn unreadable_skill_commands_are_counted_unparsed() {
     assert!(p.unparsed[0].contains("$HOME") && p.unparsed[1].contains("${p}"));
 }
 
-/// SPEC §10.5. The hash was computed once, outside skima, with
+/// The golden id. The hash was computed once, outside skima, with
 /// `hashlib.sha1(json.dumps(payload, sort_keys=True, separators=(",", ":"),
 /// ensure_ascii=False).encode()).hexdigest()` in Python 3; the serialisations
 /// agree on this payload (shortest round-trip floats, integers above 2^53
@@ -323,7 +323,7 @@ fn golden_codex_id() {
     assert_eq!(later.raws[0].key, p.raws[0].key);
 }
 
-/// `prompt_at` on line `line` of a fixture (SPEC §4.7).
+/// `prompt_at` on line `line` of a fixture.
 fn prompt(name: &str, line: u64) -> Option<String> {
     Codex.prompt_at(&format!("{}:{line}", fixtures().join(name).display()))
 }

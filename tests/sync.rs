@@ -1,4 +1,4 @@
-//! skima's own permanent sync and status tests (SPEC §10.5), beyond the port
+//! skima's own permanent sync and status tests, beyond the port
 //! of test_install.py.
 
 mod common;

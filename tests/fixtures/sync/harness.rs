@@ -1,4 +1,4 @@
-//! Shared fixture for `tests/sync_port.rs` and `tests/sync.rs` (SPEC §5.7 step 3):
+//! Shared fixture for `tests/sync_port.rs` and `tests/sync.rs`:
 //! a temporary skills source with a `skima.toml` turning every `[policy]` rule on
 //! and listing four `~`-relative homes, a temporary `HOME`, a Pi directory, and
 //! a private `XDG_DATA_HOME`.

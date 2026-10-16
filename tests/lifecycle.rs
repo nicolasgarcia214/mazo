@@ -1,4 +1,4 @@
-//! Lifecycle commands end to end (SPEC §10.8): `new`, `retire`, `prune`.
+//! Lifecycle commands end to end: `new`, `retire`, `prune`.
 
 mod common;
 #[path = "fixtures/sync/harness.rs"]

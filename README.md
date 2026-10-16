@@ -3,7 +3,7 @@
 skima counts how your coding agents use your skills and keeps every agent home
 linked to one skills directory. It reads the session logs that Claude Code,
 Codex and Pi already write, stores each skill load in its own ledger, and
-replaces `skills/install.sh` for linking. SPEC.md is the design.
+replaces `skills/install.sh` for linking.
 
 ## Get started
 
@@ -78,7 +78,7 @@ report prints how far back each home's logs go: "unused since 2026-09-10" is not
 
 ## How accurate the counts are
 
-Measured on 2026-10-13 against this machine's logs (SPEC §10.2, §10.3):
+Measured on 2026-10-13 against this machine's logs:
 
 - **Strong loads** (`slash`, `tool`, `typed`) matched two independent counting
   scripts, written from the spec without reading skima's code, id for id: 191
@@ -107,13 +107,13 @@ once, in `classify.rs`.
 
 ```rust
 pub trait Adapter {
-    /// Transcript files of a home, sorted by basename (SPEC §6.2).
+    /// Transcript files of a home, sorted by basename.
     fn files(&self, home: &Home) -> Vec<PathBuf>;
     /// Raw events from the lines of `chunk`; `header` is line 1 of the file.
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
-    /// The user-authored text behind the load at `src` (`<file>:<line>`) (SPEC §4.7).
+    /// The user-authored text behind the load at `src` (`<file>:<line>`).
     fn prompt_at(&self, src: &str) -> Option<String>;
-    /// The judge's view of the session window around the strong load at `src` (SPEC §6.4).
+    /// The judge's view of the session window around the strong load at `src`.
     fn condense(&self, src: &str, max_chars: usize) -> Option<String>;
 }
 ```

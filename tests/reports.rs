@@ -1,4 +1,4 @@
-//! SPEC §10.1 Fan-in, Held and Evals, plus the report rules of §4.1 (filters,
+//! Fan-in, held and evals, plus the report rules (filters,
 //! collapse, sess, authoring) on small fixture ledgers.
 
 mod common;
@@ -115,7 +115,7 @@ fn counts(r: &Value) -> [u64; 6] {
 
 // ---------------------------------------------------------------- fan-in
 
-/// One skill per §5.3 rule in `tests/fixtures/skills`: diagnose-bug cites
+/// One skill per citation rule in `tests/fixtures/skills`: diagnose-bug cites
 /// `the blast-radius skill`, review-audit-fixes the same broken across lines,
 /// triage-finding `owned by grade`, unslop the `writing-for-agents/` path (not
 /// `upgrade/` or `x-grade/`), and writing-for-agents `the goal-smart skill` in
@@ -417,7 +417,7 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
     assert!(text.contains("retros: 2 strong since the latest\n"), "{text}");
 }
 
-/// The card's sections after the events, in SPEC F14 order, with `$HOME` as
+/// The card's sections after the events, in display order, with `$HOME` as
 /// `~` and short locators in text and full paths in `--json`.
 #[test]
 fn show_prints_the_card() {
@@ -535,7 +535,7 @@ fn show_prints_the_card() {
     assert_eq!(v["audit"], Value::Null);
 }
 
-/// SPEC §6.3 Not a repository: no history section, no `+N`.
+/// Not a repository: no history section, no `+N`.
 #[test]
 fn show_outside_a_git_worktree_omits_history() {
     let dir = tempfile::tempdir().unwrap();
@@ -556,7 +556,7 @@ fn show_outside_a_git_worktree_omits_history() {
 
 // ---------------------------------------------------------------- examples
 
-/// SPEC F15 and §10.8 Real examples, on Claude transcripts whose line `n` is
+/// Real examples, on Claude transcripts whose line `n` is
 /// the user message `msgs[n - 1]`.
 #[test]
 fn show_lists_written_and_real_examples() {

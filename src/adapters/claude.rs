@@ -1,4 +1,4 @@
-//! Claude Code transcripts (SPEC §4.2).
+//! Claude Code transcripts.
 //!
 //! Every event comes from the harness's own structured record: a Skill result
 //! (`toolUseResult.commandName`), an `isMeta` record carrying `Base directory
@@ -47,7 +47,7 @@ impl Adapter for Claude {
     }
 }
 
-/// What the judge keeps of a record (SPEC §6.4): the user's text, assistant
+/// What the judge keeps of a record: the user's text, assistant
 /// text, tool calls and tool results. Meta records, which carry skill bodies,
 /// keep nothing.
 fn render(v: &Value) -> Vec<String> {
@@ -139,7 +139,7 @@ fn user(r: &Record, loads: &mut HashMap<String, usize>, out: &mut Parsed) {
     match v["sourceToolUseID"].as_str() {
         // The meta record of a Skill call: it supplies the path of the result's
         // event, or stands alone when the result is elsewhere or has no
-        // `toolUseResult` (subagents, E5).
+        // `toolUseResult` (subagents).
         Some(id) => match loads.get(id) {
             Some(&i) => {
                 out.raws[i].path.get_or_insert(skill_md);
@@ -173,7 +173,7 @@ fn blocks(content: &Value) -> impl Iterator<Item = &Value> {
     content.as_array().into_iter().flatten()
 }
 
-/// SPEC §4.7: a `typed` history line's `display`, or a user record that is
+/// A `typed` history line's `display`, or a user record that is
 /// neither a `tool_result` nor `isMeta`. A slash command record stands for
 /// `/name args`, and a bare `/name` for nothing, so the walk goes on to the
 /// message before it.
@@ -221,7 +221,7 @@ fn assistant(roots: &SkillRoots, r: &Record, out: &mut Parsed) {
     }
 }
 
-/// One-time `typed` events from `<home>/history.jsonl` (SPEC §4.2 History backfill).
+/// One-time `typed` events from `<home>/history.jsonl` (the history backfill).
 /// A line counts when its `display` is `/<known name>` followed by whitespace or
 /// the end, and no `<sessionId>.jsonl` transcript exists under the home.
 pub fn backfill(home: &Home, known: &BTreeSet<String>) -> Vec<Raw> {

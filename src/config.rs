@@ -1,5 +1,5 @@
-//! The config (SPEC §6.1) with its `[policy]` table: discovery, `skima init`, and path expansion,
-//! including the Pi directory normalisation that `install.sh` did in Node (SPEC §5.6).
+//! The config with its `[policy]` table: discovery, `skima init`, and path expansion,
+//! including the Pi directory normalisation that `install.sh` did in Node.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -21,7 +21,7 @@ pub struct Config {
     pub judge: Judge,
 }
 
-/// The optional `[judge]` table (SPEC §6.4, D28).
+/// The optional `[judge]` table.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Judge {
@@ -36,14 +36,14 @@ impl Default for Judge {
     }
 }
 
-/// The `[policy]` table (SPEC §5.4): every rule off and no authoring skill by default.
+/// The `[policy]` table: every rule off and no authoring skill by default.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
     pub no_disable_model_invocation: bool,
     pub codex_manifest: bool,
     pub claude_name_only: bool,
-    /// Skills whose strong load marks a root session as authoring (SPEC §4.1).
+    /// Skills whose strong load marks a root session as authoring.
     pub authoring_skills: Vec<String>,
 }
 
@@ -103,7 +103,7 @@ struct RawHome {
 }
 
 /// `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml` with
-/// `XDG_CONFIG_HOME` defaulting to `~/.config` (SPEC §6.1). Nothing else.
+/// `XDG_CONFIG_HOME` defaulting to `~/.config`. Nothing else.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("SKIMA_CONFIG").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(p));
@@ -118,7 +118,7 @@ pub fn path() -> Result<PathBuf> {
 /// The config at `path`, or `None` when no file is there.
 pub fn load(path: &Path) -> Result<Option<Config>> {
     // The physical file, so a config symlinked from a skills repo resolves
-    // `source` against that repo (SPEC §6.1).
+    // `source` against that repo.
     let path = match fs::canonicalize(path) {
         Ok(p) => p,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
@@ -128,7 +128,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     let raw: RawConfig = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let base = path.parent().unwrap_or(Path::new("/"));
     // `source` is relative to the config file and resolved physically, as
-    // install.sh's `pwd -P` did (SPEC §6.1, test_install.py:130).
+    // install.sh's `pwd -P` did (test_install.py:130).
     let joined = base.join(&raw.source);
     let source = fs::canonicalize(&joined).map_err(|e| format!("{}: {e}", joined.display()))?;
     let home = home_dir()?;
@@ -152,7 +152,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     Ok(Some(Config { source, loose: raw.loose, homes, policy: raw.policy, judge: raw.judge }))
 }
 
-/// `skima init` (SPEC F11): a config at `path` naming `source` absolutely, a
+/// `skima init`: a config at `path` naming `source` absolutely, a
 /// home for each agent directory under `~` that exists, and every rule off.
 /// Refuses to overwrite.
 pub fn init(path: &Path, source: &Path) -> Result<()> {
@@ -214,7 +214,7 @@ pub fn resolve(base: &Path, p: &str) -> PathBuf {
     out
 }
 
-/// The Pi agent directory from a `PI_CODING_AGENT_DIR`-style value (SPEC §5.6).
+/// The Pi agent directory from a `PI_CODING_AGENT_DIR`-style value.
 /// The skills directory is `<result>/skills`.
 fn pi_agent_dir(value: &str, home: &str, cwd: &Path) -> Result<PathBuf> {
     let invalid = |reason: &str| format!("invalid PI_CODING_AGENT_DIR: {reason}");
