@@ -252,3 +252,13 @@ fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
     assert_eq!(got, want);
     assert!(!got.contains("SKILL_BODY_TEXT") && !got.contains("_TAIL"));
 }
+
+#[test]
+fn child_keeps_its_ids_and_root_after_the_middle_session_is_deleted() {
+    let chain = common::Chain::new(Agent::Pi, [true; 3]);
+    let before = chain.child(&chain.scan(false));
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].1, chain.ids[0]);
+    std::fs::remove_file(&chain.files[1]).unwrap();
+    assert_eq!(chain.child(&chain.scan(true)), before);
+}

@@ -131,13 +131,13 @@ fn fork_header_on_line_one_wins_and_restamped_copies_collapse() {
     assert_eq!(c.session.id, "019d3fad-5b36-7610-81ab-fc1318eb0cce");
     assert_eq!(c.session.parent, Some(Parent::Codex(p.session.id.clone())));
     assert_eq!(
-        codex::parent_of_header(
+        codex::session_of_header(
             &tail::first_line(&day.join("rollout-2026-03-30T11-56-58-019d3fad-5b36-7610-81ab-fc1318eb0cce.jsonl"))
                 .unwrap()
                 .unwrap()
         )
-        .as_deref(),
-        Some("019d3f9f-e9d9-7c50-a727-71c34e2255b3")
+        .and_then(|s| s.parent),
+        Some(Parent::Codex("019d3f9f-e9d9-7c50-a727-71c34e2255b3".into()))
     );
     // A relative `sed -n '1,260p' SKILL.md` run inside the skill.
     assert_eq!(summary(&child), [(4, "argus", Channel::Read, "/home/nicolas/dotfiles/skills/argus/SKILL.md")]);
@@ -361,4 +361,14 @@ fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
     .join("\n");
     assert_eq!(got, want);
     assert!(!got.contains("SKILL_BODY_TEXT") && !got.contains("_TAIL"));
+}
+
+#[test]
+fn child_keeps_its_ids_and_root_after_the_middle_rollout_is_deleted() {
+    let chain = common::Chain::new(Agent::Codex, [true; 3]);
+    let before = chain.child(&chain.scan(false));
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].1, chain.ids[0]);
+    std::fs::remove_file(&chain.files[1]).unwrap();
+    assert_eq!(chain.child(&chain.scan(true)), before);
 }

@@ -1,54 +1,112 @@
 //! Identity, actor, root session, origin and the stored authoring tag,
 //! computed once for every adapter.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::adapters::{Key, Parent, Raw};
+use crate::Result;
+use crate::adapters::{Key, Parent, Raw, Session};
 use crate::config::Home;
 use crate::inventory::Inventory;
-use crate::ledger::{Actor, Agent, Event, Origin};
+use crate::ledger::{self, Actor, Agent, Event, Origin};
 
-/// Walks session chains to their root, caching every lookup for one scan.
+/// `<data dir>/roots.json`: Codex rollout id or Pi session id → its root session id.
+const ROOTS: &str = "roots.json";
+
+/// Walks session chains to their root. A root a walk reaches is stored and
+/// used without walking from then on, so a session keeps it after a file in
+/// its chain is deleted; header lookups are cached for one scan.
 #[derive(Default)]
 pub struct Roots {
-    /// Codex rollout id → its file, built lazily from file names.
-    codex_files: Option<HashMap<String, PathBuf>>,
-    codex_parent: HashMap<String, Option<String>>,
-    pi_header: HashMap<PathBuf, Option<(String, Option<PathBuf>)>>,
+    stored: BTreeMap<String, String>,
+    /// Codex rollout id → its file, per transcripts dir, built lazily from file names.
+    codex_files: HashMap<PathBuf, HashMap<String, PathBuf>>,
+    headers: HashMap<PathBuf, Option<Session>>,
 }
 
 impl Roots {
+    /// The roots stored in `data`; `None` when `roots.json` is missing and
+    /// must be rebuilt with [`Roots::visit`].
+    pub fn load(data: &Path) -> Result<Option<Roots>> {
+        let path = data.join(ROOTS);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(Roots { stored: ledger::read_json(&path)?, ..Roots::default() }))
+    }
+
+    /// Writes the stored roots to `data`; the caller holds the scan lock.
+    pub fn save(&self, data: &Path) -> Result<()> {
+        ledger::write_json(&data.join(ROOTS), &self.stored)
+    }
+
+    /// Walks the session in the transcript `file` of `home` to its root.
+    pub fn visit(&mut self, home: &Home, file: &Path) {
+        if let Some(s) = self.header(home.agent, file) {
+            self.root(home, &s.id, s.parent.as_ref());
+        }
+    }
+
+    /// The root of session `id`: its stored root, else the end of the walk up
+    /// its parents. A walk that reaches a session with no parent, or a stored
+    /// root, stores that root for every session it passed; one that reaches a
+    /// missing file ends at that file's id and stores nothing.
     pub fn root(&mut self, home: &Home, id: &str, parent: Option<&Parent>) -> String {
-        match parent {
-            None => id.to_string(),
-            Some(Parent::Codex(p)) => self.codex_root(home, p),
-            Some(Parent::Pi(file)) => self.pi_root(file).unwrap_or_else(|| id.to_string()),
+        let Some(parent) = parent else { return id.to_string() };
+        if let Some(root) = self.stored.get(id) {
+            return root.clone();
         }
-    }
-
-    fn codex_root(&mut self, home: &Home, start: &str) -> String {
-        let mut id = start.to_string();
+        let mut passed = vec![id.to_string()];
+        let mut parent = parent.clone();
         for _ in 0..64 {
-            let parent = match self.codex_parent.get(&id) {
-                Some(p) => p.clone(),
-                None => {
-                    let p = self.codex_lookup(home, &id);
-                    self.codex_parent.insert(id.clone(), p.clone());
-                    p
-                }
-            };
-            match parent {
-                Some(p) => id = p,
-                None => break,
+            let (id, header) = self.session(home, &parent);
+            if let Some(root) = self.stored.get(&id).cloned() {
+                return self.store(passed, root);
             }
+            match header.map(|s| s.parent) {
+                // A missing file ends the walk at its id and stores nothing.
+                None => return id,
+                Some(None) => return self.store(passed, id),
+                Some(Some(p)) => parent = p,
+            }
+            passed.push(id);
         }
-        id
+        // Matches the old walks: Codex returned the next parent's id, Pi the last header read.
+        match parent {
+            Parent::Codex(id) => id,
+            Parent::Pi(_) => passed.pop().unwrap_or_default(),
+        }
     }
 
-    fn codex_lookup(&mut self, home: &Home, id: &str) -> Option<String> {
-        let files = self.codex_files.get_or_insert_with(|| {
-            crate::adapters::jsonl_files(&home.transcripts())
+    /// Stores `root` for every session in `passed` that has none yet.
+    fn store(&mut self, passed: Vec<String>, root: String) -> String {
+        for id in passed {
+            self.stored.entry(id).or_insert_with(|| root.clone());
+        }
+        root
+    }
+
+    /// The id of the session `parent` names, and its header while its file is
+    /// on disk. A missing Pi file's id comes from its name, `<ts>_<id>.jsonl`.
+    fn session(&mut self, home: &Home, parent: &Parent) -> (String, Option<Session>) {
+        match parent {
+            Parent::Codex(id) => {
+                let header = self.codex_file(home, id).and_then(|f| self.header(Agent::Codex, &f));
+                (id.clone(), header)
+            }
+            Parent::Pi(file) => match self.header(Agent::Pi, file) {
+                Some(s) => (s.id.clone(), Some(s)),
+                None => {
+                    let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                    (stem.rsplit_once('_').map_or(&*stem, |(_, id)| id).to_string(), None)
+                }
+            },
+        }
+    }
+
+    fn codex_file(&mut self, home: &Home, id: &str) -> Option<PathBuf> {
+        let files = self.codex_files.entry(home.transcripts()).or_insert_with_key(|dir| {
+            crate::adapters::jsonl_files(dir)
                 .into_iter()
                 .filter_map(|p| {
                     let stem = p.file_stem()?.to_str()?.to_string();
@@ -58,38 +116,16 @@ impl Roots {
                 })
                 .collect()
         });
-        let path = files.get(id)?;
-        let header = crate::tail::first_line(path).ok()??;
-        crate::adapters::codex::parent_of_header(&header)
+        files.get(id).cloned()
     }
 
-    fn pi_root(&mut self, file: &Path) -> Option<String> {
-        let mut file = file.to_path_buf();
-        let mut last_id = None;
-        for _ in 0..64 {
-            let entry = match self.pi_header.get(&file) {
-                Some(h) => h.clone(),
-                None => {
-                    let h = crate::tail::first_line(&file)
-                        .ok()
-                        .flatten()
-                        .and_then(|l| crate::adapters::pi::session_of_header(&l))
-                        .map(|s| match s.parent {
-                            Some(Parent::Pi(p)) => (s.id, Some(p)),
-                            _ => (s.id, None),
-                        });
-                    self.pi_header.insert(file.clone(), h.clone());
-                    h
-                }
-            };
-            let Some((id, parent)) = entry else { break };
-            last_id = Some(id);
-            match parent {
-                Some(p) => file = p,
-                None => break,
-            }
-        }
-        last_id
+    fn header(&mut self, agent: Agent, file: &Path) -> Option<Session> {
+        let parse = match agent {
+            Agent::Codex => crate::adapters::codex::session_of_header,
+            Agent::Pi => crate::adapters::pi::session_of_header,
+            Agent::Claude => return None,
+        };
+        self.headers.entry(file.to_path_buf()).or_insert_with(|| parse(&crate::tail::first_line(file).ok()??)).clone()
     }
 }
 

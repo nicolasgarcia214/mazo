@@ -128,12 +128,9 @@ fn user_turn(v: &Value) -> Option<String> {
     (!bare && !text.starts_with("<skill>")).then_some(text)
 }
 
-/// The parent rollout id named by a `session_meta` header line, if any.
-pub fn parent_of_header(header: &[u8]) -> Option<String> {
-    match parse_header(header)?.session.parent? {
-        Parent::Codex(id) => Some(id),
-        Parent::Pi(_) => None,
-    }
+/// The session a Codex `session_meta` header line describes; `None` for any other line.
+pub fn session_of_header(line: &[u8]) -> Option<Session> {
+    parse_header(line).map(|h| h.session)
 }
 
 struct Header {

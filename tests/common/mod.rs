@@ -213,3 +213,89 @@ pub fn git(dir: &Path, args: &[&str], date: &str) {
         .unwrap();
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// A grandparent → parent → child session chain of a Codex or Pi home on a
+/// temporary machine, each session one load of its own skill, scanned into
+/// `data` by the library scan.
+pub struct Chain {
+    pub tmp: tempfile::TempDir,
+    pub world: World,
+    pub data: PathBuf,
+    /// Grandparent, parent and child session ids.
+    pub ids: [String; 3],
+    /// Grandparent, parent and child transcripts.
+    pub files: [PathBuf; 3],
+}
+
+impl Chain {
+    /// The chain in a fresh home; `written` picks which of the three transcripts exist.
+    pub fn new(agent: Agent, written: [bool; 3]) -> Chain {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("skills");
+        fs::create_dir_all(&source).unwrap();
+        let world = World::new(&source, &[("home", agent, NOW)]);
+        let dir = world.cfg.homes[0].transcripts().join("2026/10/10");
+        let ids = ["1", "2", "3"].map(|n| format!("019a0000-0000-7000-8000-00000000000{n}"));
+        let files = [0, 1, 2].map(|i| match agent {
+            Agent::Codex => dir.join(format!("rollout-2026-10-10T00-00-0{i}-{}.jsonl", ids[i])),
+            _ => dir.join(format!("2026-10-10T00-00-0{i}-000Z_{}.jsonl", ids[i])),
+        });
+        for i in 0..3 {
+            if !written[i] {
+                continue;
+            }
+            let ts = ago(3 - i as i64);
+            let load = source.join(format!("s{i}/SKILL.md"));
+            let lines = match agent {
+                Agent::Codex => {
+                    let mut meta = serde_json::json!({"id": ids[i], "cwd": "/work", "source": "cli"});
+                    if i > 0 {
+                        meta["forked_from_id"] = ids[i - 1].clone().into();
+                    }
+                    let args = serde_json::json!({"cmd": format!("cat {}", load.display())}).to_string();
+                    [
+                        serde_json::json!({"timestamp": ts, "type": "session_meta", "payload": meta}),
+                        serde_json::json!({"timestamp": ts, "type": "response_item", "payload":
+                            {"type": "function_call", "name": "exec_command", "arguments": args, "call_id": "c"}}),
+                    ]
+                }
+                _ => {
+                    let mut header =
+                        serde_json::json!({"type": "session", "id": ids[i], "timestamp": ts, "cwd": "/work"});
+                    if i > 0 {
+                        header["parentSession"] = files[i - 1].to_str().unwrap().into();
+                    }
+                    let text = format!("<skill name=\"s{i}\" location=\"{}\">\n</skill>", load.display());
+                    [
+                        header,
+                        serde_json::json!({"type": "message", "id": format!("e{i}"), "timestamp": ts,
+                            "message": {"role": "user", "content": [{"type": "text", "text": text}]}}),
+                    ]
+                }
+            };
+            write(&files[i], &lines.map(|l| l.to_string() + "\n").concat());
+        }
+        Chain { data: tmp.path().join("data"), tmp, world, ids, files }
+    }
+
+    /// Scans, or reparses, and returns the ledger.
+    pub fn scan(&self, reparse: bool) -> Vec<Event> {
+        skima::scan::scan(&self.world.cfg, &self.world.inv, &self.data, reparse).unwrap();
+        skima::ledger::Ledger::load(&self.data).unwrap().events().to_vec()
+    }
+
+    /// The `(id, session)` of every event read from the child's transcript.
+    pub fn child(&self, events: &[Event]) -> Vec<(String, String)> {
+        let file = self.files[2].to_string_lossy();
+        events.iter().filter(|e| e.src_file() == file).map(|e| (e.id.clone(), e.session.clone())).collect()
+    }
+
+    pub fn roots_json(&self) -> PathBuf {
+        self.data.join("roots.json")
+    }
+
+    /// `<data>/roots.json`, empty when it is missing.
+    pub fn roots(&self) -> BTreeMap<String, String> {
+        fs::read(self.roots_json()).map_or_else(|_| BTreeMap::new(), |b| serde_json::from_slice(&b).unwrap())
+    }
+}
