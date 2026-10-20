@@ -22,6 +22,7 @@ pub mod render;
 pub mod report;
 pub mod scan;
 pub mod tail;
+pub mod tui;
 pub mod yaml;
 
 /// Errors are reported to the user as one `ERROR: …` line.

@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+pub mod golden;
 pub mod probe;
 pub mod sync;
 
@@ -171,15 +172,21 @@ impl Skima {
 
     /// `skima args…` with `env` set on top of [`Skima::env`] for this run only.
     pub fn command(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
-        cmd.args(args).current_dir(&self.cwd);
+        let mut cmd = self.wrap(env!("CARGO_BIN_EXE_skima"));
+        cmd.args(args).envs(env.iter().copied());
+        cmd
+    }
+
+    /// `program` run as the binary is: in [`Skima::cwd`] with [`Skima::env`].
+    pub fn wrap(&self, program: impl AsRef<OsStr>) -> Command {
+        let mut cmd = Command::new(program);
+        cmd.current_dir(&self.cwd);
         for (k, v) in &self.env {
             match v {
                 Some(v) => cmd.env(k, v),
                 None => cmd.env_remove(k),
             };
         }
-        cmd.envs(env.iter().copied());
         cmd
     }
 
