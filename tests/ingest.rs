@@ -745,3 +745,33 @@ fn a_deleted_roots_json_is_rebuilt_and_a_stored_root_is_never_rewritten() {
         assert_eq!(chain.roots(), edited, "{agent:?}");
     }
 }
+
+#[test]
+fn sessions_seen_before_their_first_load_keep_their_root_after_a_parent_is_deleted() {
+    for (agent, empty_first) in [(Agent::Codex, false), (Agent::Pi, false), (Agent::Codex, true), (Agent::Pi, true)] {
+        let chain = common::Chain::new(agent, [true; 3]);
+        let [_, parent, child] = &chain.files;
+        let text = fs::read_to_string(child).unwrap();
+        let (header, load) = text.split_once('\n').unwrap();
+        let parent_header = fs::read_to_string(parent).unwrap().lines().next().unwrap().to_string();
+        let append = |file: &Path, text: &str| {
+            fs::OpenOptions::new().append(true).open(file).unwrap().write_all(text.as_bytes()).unwrap();
+        };
+        fs::remove_file(parent).unwrap();
+        fs::remove_file(child).unwrap();
+        chain.scan(false);
+        // Parent and child appear with no load, so no event walks their chain;
+        // with `empty_first`, a scan first sees both files empty.
+        common::write(parent, "");
+        common::write(child, "");
+        if empty_first {
+            chain.scan(false);
+        }
+        append(parent, &format!("{parent_header}\n"));
+        append(child, &format!("{header}\n"));
+        chain.scan(false);
+        fs::remove_file(parent).unwrap();
+        append(child, load);
+        assert_eq!(child_sessions(&chain, &chain.scan(false)), [chain.ids[0].clone()], "{agent:?} {empty_first}");
+    }
+}

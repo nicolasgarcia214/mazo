@@ -71,7 +71,11 @@ impl Roots {
             }
             passed.push(id);
         }
-        passed.pop().unwrap_or_default()
+        // Matches the old walks: Codex returned the next parent's id, Pi the last header read.
+        match parent {
+            Parent::Codex(id) => id,
+            Parent::Pi(_) => passed.pop().unwrap_or_default(),
+        }
     }
 
     /// Stores `root` for every session in `passed` that has none yet.
