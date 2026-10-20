@@ -12,7 +12,9 @@ ts               agent  channel actor cwd   src
 description: Writes agent-facing documents. Prose polish is the unslop skill.
 path: <skills>/writing-for-agents
 history: first 2026-01-01 skills, last 2026-01-01 skills
-grades: none
+grades:
+date       score since
+2026-05-01     8
 retros: none
 cites: wfa-helper (held)
 cited by: unslop

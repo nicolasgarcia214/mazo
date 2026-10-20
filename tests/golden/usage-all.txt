@@ -1,6 +1,6 @@
 skill              sess slash tool typed read ref agents last    30d                            grade
 unslop                5     1    4     1    1   1 C      1d ago  ·····················▃▃····▃█·   7+1
-writing-for-agents    1     1    0     0    1   0 CX     6d ago  ·······················█······     -
+writing-for-agents    1     1    0     0    1   0 CX     6d ago  ·······················█······     8
 goal-plan             1     1    0     0    0   0 C      4d ago  ·························█····     -
 goal-smart            1     0    1     0    0   0 C      12d ago ·················█············     -
 fresh                 0     0    0     0    0   0        -       ······························     -

@@ -15,7 +15,8 @@ use skima::report::{self, Since, UsageArgs};
 /// `unslop` given every optional card field: two grades, the later one
 /// before an edit and uncommitted changes, two retros, a default prompt, and
 /// a user prompt in the transcript `<skills>/t.jsonl` for a real example.
-fn fill_unslop(src: &Path) {
+/// `writing-for-agents` gets a fresh grade, after its last commit.
+fn fill(src: &Path) {
     for (date, score) in [("2026-02-01", "6"), ("2026-03-01", "7")] {
         write(&src.join(format!(".grades/unslop/{date}.md")), &format!("---\ndate: {date}\nscore: {score}\n---\n"));
         git(src, &["add", "."], NOW);
@@ -24,6 +25,9 @@ fn fill_unslop(src: &Path) {
     write(&src.join("unslop/notes.md"), "edit\n");
     git(src, &["add", "."], NOW);
     git(src, &["commit", "-q", "-m", "tighten unslop"], "2026-04-01T00:00:00Z");
+    write(&src.join(".grades/writing-for-agents/2026-05-01.md"), "---\ndate: 2026-05-01\nscore: 8\n---\n");
+    git(src, &["add", "."], NOW);
+    git(src, &["commit", "-q", "-m", "grade writing-for-agents"], "2026-05-01T00:00:00Z");
     write(&src.join("unslop/notes.md"), "edit, uncommitted\n");
     write(
         &src.join(".retros/unslop/a.md"),
@@ -87,7 +91,7 @@ fn scrub(out: String, source: &Path, placeholder: &str) -> String {
 #[test]
 fn reports_match_their_golden_files() {
     let repo = report_repo();
-    fill_unslop(repo.path());
+    fill(repo.path());
     let audits = tempfile::tempdir().unwrap();
     write(&audits.path().join("audits.jsonl"), &skill_record("Good on <short> texts", "2026-10-12T10:00:00Z"));
     let mut w = report_world(repo.path());
@@ -113,6 +117,12 @@ fn reports_match_their_golden_files() {
         // The page shows the placeholder escaped, so it renders as written.
         let placeholder = if file.ends_with(".html") { "&lt;skills&gt;" } else { "<skills>" };
         let out = scrub(out, repo.path(), placeholder);
+        // Pretty JSON, so a change is a readable diff.
+        let out = if file.ends_with(".json") {
+            serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(&out).unwrap()).unwrap() + "\n"
+        } else {
+            out
+        };
         let path = dir.join(&file);
         if update {
             fs::create_dir_all(&dir).unwrap();
