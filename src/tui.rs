@@ -202,9 +202,14 @@ impl<'a> App<'a> {
         skill.contains(&self.filter)
     }
 
+    /// The current list: on a card, the one it was opened from.
+    fn list(&self) -> Screen {
+        if self.screen == Screen::Card { self.back } else { self.screen }
+    }
+
     /// The skills the current list shows.
     fn listed(&self) -> Vec<&str> {
-        let skills: Vec<&str> = match self.screen {
+        let skills: Vec<&str> = match self.list() {
             Screen::Unused => self.unused.skills.iter().map(|r| r.skill.as_str()).collect(),
             _ => self.usage.rows.iter().map(|r| r.skill.as_str()).collect(),
         };
@@ -276,6 +281,7 @@ impl<'a> App<'a> {
                 Screen::Unused => {
                     self.unused_since = next_window(self.unused_since);
                     self.unused = report::unused_list(self.input, self.unused_since);
+                    self.clamp();
                 }
                 Screen::Card => {
                     self.card_since = next_window(self.card_since);
@@ -295,10 +301,17 @@ impl<'a> App<'a> {
         true
     }
 
+    /// Keeps the selection on a row of the current list.
+    fn clamp(&mut self) {
+        self.selected = self.selected.min(self.listed().len().saturating_sub(1));
+    }
+
     /// Recounts the usage view and the open card under the current filter.
     fn refresh(&mut self) {
         self.usage = report::usage_table(self.input, &self.args(self.usage_since));
-        self.selected = self.selected.min(self.listed().len().saturating_sub(1));
+        if self.list() == Screen::Usage {
+            self.clamp();
+        }
         if let Some((skill, _)) = self.card {
             self.open(skill);
             self.shift(0);

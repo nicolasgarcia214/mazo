@@ -152,6 +152,27 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert_eq!(colour_of(&screen, "goal-plan", "named by"), ratatui_colour("named by unslop"));
     assert_eq!(colour_of(&screen, "goal-plan", "held by"), Color::Reset);
     assert!(lines.iter().any(|l| l.starts_with("unused · window 60d")), "{lines:#?}");
+
+    // From the last row of 30d, the shorter 60d list keeps a row selected.
+    press(&mut app, KeyCode::Char('w'));
+    press(&mut app, KeyCode::Char('w'));
+    let before = rows(&text(&mut app, 200, 40)).len();
+    for _ in 0..before {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    press(&mut app, KeyCode::Char('w'));
+    let after = rows(&text(&mut app, 200, 40));
+    assert!(after.len() < before, "{after:#?}");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen(), Screen::Card);
+
+    // `a` on a card opened from unused leaves the unused selection where it was.
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen(), Screen::Unused);
+    press(&mut app, KeyCode::Enter);
+    let skill = after.last().unwrap().split_whitespace().next().unwrap();
+    assert!(text(&mut app, 200, 40)[0].starts_with(&format!("{skill}: ")));
 }
 
 #[test]
