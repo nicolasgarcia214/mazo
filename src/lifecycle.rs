@@ -200,10 +200,10 @@ fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// A strong event in this many days, the skill's or a holder's, makes `retire` refuse.
+/// A strong event in this many days, the skill's, a holder's or a namer's, makes `retire` refuse.
 const RETIRE_DAYS: u32 = 30;
 
-/// `skima retire <name> [--force]`: scans first, refuses a held or
+/// `skima retire <name> [--force]`: scans first, refuses a held, named or
 /// recently used skill unless `force`, and refuses any conflict or policy error
 /// in the sync plan as if the skill were archived, all before any write. Then
 /// moves `<source>/<name>` to `<source>/.archive/<name>` (`git mv` when tracked)
