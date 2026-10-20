@@ -8,8 +8,10 @@ use std::path::Path;
 use std::process::Command;
 
 use jiff::tz::TimeZone;
+use serde::Deserialize;
 use serde_json::Value;
 
+use crate::audit::Rates;
 use crate::render::{self, DAY, MINUTE};
 use crate::report::{AUDIT_IMPROVEMENTS, tilde};
 
@@ -287,14 +289,10 @@ fn audit(a: &Value, tz: &TimeZone) -> String {
     if a.is_null() {
         return "<dt>audit</dt><dd>none</dd>".into();
     }
-    let rates: Vec<String> =
-        [("followed", "followed"), ("achieved", "achieved"), ("abandoned_or_redone", "abandoned or redone")]
-            .iter()
-            .map(|(key, label)| {
-                let r = &a["rates"][key];
-                format!("{label} {} of {}", num(&r["n"]), num(&r["of"]))
-            })
-            .collect();
+    // The model is serialized from a `SkillRecord`, so its rates read back.
+    let rates: Vec<String> = Rates::deserialize(&a["rates"])
+        .map(|r| r.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect())
+        .unwrap_or_default();
     let improvements: String = list(&a["result"]["improvements"])
         .iter()
         .take(AUDIT_IMPROVEMENTS)
