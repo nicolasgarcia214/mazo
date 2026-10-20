@@ -234,9 +234,11 @@ fn grade_out(evals: &Evals) -> Option<GradeOut> {
     evals.grades.last().cloned().map(GradeOut::from)
 }
 
-/// The score as written, then `+N` or `+wip`.
-fn grade_cell(g: &Option<GradeOut>) -> String {
-    g.as_ref().map_or("-".into(), |g| format!("{}{}", g.grade.eval.score.as_deref().unwrap_or("?"), g.grade.mark()))
+/// The score as written, then `+N` or `+wip`, painted when `colour`.
+fn grade_cell(g: &Option<GradeOut>, colour: bool) -> String {
+    g.as_ref().map_or("-".into(), |g| {
+        format!("{}{}", g.grade.eval.score.as_deref().unwrap_or("?"), render::paint(&g.mark, colour))
+    })
 }
 
 #[derive(Serialize)]
@@ -332,7 +334,7 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
                 r.agents.clone(),
                 r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| view.relative(t)),
                 render::sparkline(&r.last_30d),
-                grade_cell(&r.grade),
+                grade_cell(&r.grade, tty),
             ]
         })
         .collect();
@@ -442,12 +444,12 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
                 notes.push(format!("cluster: {}", r.cluster.join(", ")));
             }
             if !r.named_by.is_empty() {
-                notes.push(format!("named by {}", r.named_by.join(", ")));
+                notes.push(render::paint(&format!("named by {}", r.named_by.join(", ")), tty));
             }
             if r.weak_only {
                 notes.push("weak-only".into());
             }
-            vec![r.skill.clone(), r.status.into(), notes.join("; ")]
+            vec![r.skill.clone(), render::paint(r.status, tty), notes.join("; ")]
         })
         .collect();
     render::table(&header, &cells, tty) + &view.coverage_line("window", start) + LEGEND

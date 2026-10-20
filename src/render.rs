@@ -1,5 +1,7 @@
-//! Text rendering helpers shared by reports: aligned tables, sparklines and
-//! local timestamps.
+//! Text rendering helpers shared by reports: aligned tables, sparklines,
+//! local timestamps and status colours.
+
+use std::ffi::OsStr;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -11,14 +13,56 @@ pub enum Align {
     Right,
 }
 
+/// Whether a stream gets colour: it is a terminal and `no_color`, the value
+/// of `NO_COLOR`, is unset or empty.
+pub fn colour(tty: bool, no_color: Option<&OsStr>) -> bool {
+    tty && no_color.is_none_or(OsStr::is_empty)
+}
+
+/// `token` in its status colour when `on`: red for `unused` and `ERROR:`,
+/// yellow for `held`, `new`, `warning:`, a `named by` note and a stale
+/// grade's `+N` or `+wip`. Any other token comes back unchanged.
+pub fn paint(token: &str, on: bool) -> String {
+    let code = match token {
+        "unused" | "ERROR:" => "31",
+        "held" | "new" | "warning:" => "33",
+        t if t.starts_with("named by ") || t.starts_with('+') => "33",
+        _ => return token.to_string(),
+    };
+    if on { format!("\x1b[{code}m{token}\x1b[0m") } else { token.to_string() }
+}
+
+/// `line` with a leading `ERROR:` or `warning:` painted.
+pub fn paint_prefix(line: &str, on: bool) -> String {
+    match line.split_once(' ') {
+        Some((head @ ("ERROR:" | "warning:"), rest)) => format!("{} {rest}", paint(head, on)),
+        _ => line.to_string(),
+    }
+}
+
+/// Visible columns of `s`: chars, less `ESC [ … m` colour sequences.
+fn width(s: &str) -> usize {
+    let mut n = 0;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            chars.by_ref().find(|&c| c == 'm');
+        } else {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// An aligned plain-text table, one space between columns, the header bold
-/// when `tty`. Widths count chars, so sparkline cells are one column each.
-/// Trailing spaces are trimmed from every line.
+/// when `tty`. Widths count visible chars, so sparkline cells are one column
+/// each and painted cells keep their alignment. Trailing spaces are trimmed
+/// from every line.
 pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> String {
-    let mut widths: Vec<usize> = header.iter().map(|(h, _)| h.chars().count()).collect();
+    let mut widths: Vec<usize> = header.iter().map(|(h, _)| width(h)).collect();
     for row in rows {
         for (w, cell) in widths.iter_mut().zip(row) {
-            *w = (*w).max(cell.chars().count());
+            *w = (*w).max(width(cell));
         }
     }
     let line = |cells: Vec<&str>| {
@@ -26,9 +70,12 @@ pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> Strin
             .iter()
             .zip(&widths)
             .zip(header)
-            .map(|((c, &w), (_, align))| match align {
-                Align::Left => format!("{c:<w$}"),
-                Align::Right => format!("{c:>w$}"),
+            .map(|((c, &w), (_, align))| {
+                let pad = " ".repeat(w - width(c));
+                match align {
+                    Align::Left => format!("{c}{pad}"),
+                    Align::Right => format!("{pad}{c}"),
+                }
             })
             .collect();
         parts.join(" ").trim_end().to_string()
@@ -83,5 +130,32 @@ mod tests {
     fn table_aligns_by_chars() {
         let t = table(&[("a", Align::Left), ("n", Align::Right)], &[vec!["xyz".into(), "5".into()]], false);
         assert_eq!(t, "a   n\nxyz 5\n");
+    }
+
+    #[test]
+    fn table_aligns_painted_cells_by_visible_width() {
+        let rows = [vec![paint("held", true), "x".into()], vec!["unused".into(), "y".into()]];
+        let t = table(&[("s", Align::Left), ("n", Align::Left)], &rows, false);
+        assert_eq!(t, "s      n\n\x1b[33mheld\x1b[0m   x\nunused y\n");
+    }
+
+    #[test]
+    fn paint_colours_only_status_tokens() {
+        assert_eq!(paint("unused", true), "\x1b[31munused\x1b[0m");
+        assert_eq!(paint("held", true), "\x1b[33mheld\x1b[0m");
+        assert_eq!(paint("+wip", true), "\x1b[33m+wip\x1b[0m");
+        assert_eq!(paint("cluster: a", true), "cluster: a");
+        assert_eq!(paint("unused", false), "unused");
+        assert_eq!(paint_prefix("ERROR: x: y", true), "\x1b[31mERROR:\x1b[0m x: y");
+        assert_eq!(paint_prefix("warning: x", true), "\x1b[33mwarning:\x1b[0m x");
+        assert_eq!(paint_prefix("claude: in sync", true), "claude: in sync");
+    }
+
+    #[test]
+    fn colour_needs_a_tty_and_no_no_color() {
+        assert!(colour(true, None));
+        assert!(colour(true, Some(OsStr::new(""))));
+        assert!(!colour(true, Some(OsStr::new("1"))));
+        assert!(!colour(false, None));
     }
 }
