@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::audit::Rates;
 use crate::render::{self, DAY, MINUTE};
-use crate::report::{AUDIT_IMPROVEMENTS, tilde};
+use crate::report::{self, AUDIT_IMPROVEMENTS, Input, Since, tilde};
 
 const CSS: &str = "
 :root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
@@ -392,12 +392,15 @@ fn card(c: &Value, tz: &TimeZone) -> String {
     )
 }
 
-/// The report page for the model of `report::report`. Times are shown in
-/// `tz`, the zone the model's days were bucketed in.
-pub fn render(model: &Value, tz: &TimeZone) -> String {
+/// The report page for the model of `report::report` over `input` and
+/// `since`. Times are shown in `input.tz`, the zone the model's days were
+/// bucketed in.
+pub fn render(input: &Input, since: Since) -> crate::Result<String> {
+    let model = &report::report(input, since)?;
+    let tz = &input.tz;
     let from = model["since"].as_str().map_or("all time".into(), |d| format!("since {}", esc(d)));
     let cards: String = list(&model["cards"]).iter().map(|c| card(c, tz)).collect();
-    format!(
+    Ok(format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <title>skima report</title><style>{CSS}</style></head>\n<body><h1>skima report</h1>\
@@ -407,7 +410,7 @@ pub fn render(model: &Value, tz: &TimeZone) -> String {
         usage(model, tz),
         coverage(model),
         grades_due(model),
-    )
+    ))
 }
 
 /// Writes `html` to `path` with mode 0600, replacing any previous file:

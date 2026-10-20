@@ -1,0 +1,45 @@
+unslop: since 2026-09-13
+
+day        strong weak
+2026-10-05      1    0 ████████████████████
+2026-10-06      1    0 ████████████████████
+2026-10-11      1    0 ████████████████████
+2026-10-12      2    2 ████████████████████████████████████████
+
+last 7 of 7 events:
+ts               agent  channel actor    cwd    src
+2026-10-12 12:00 claude tool    main     /work  claude:t1.jsonl:1 expired
+2026-10-12 12:00 claude slash   main     /work  claude:s1.jsonl:1 expired
+2026-10-12 12:00 claude read    main     /work  claude:r1.jsonl:1 expired
+2026-10-12 12:00 claude ref     main     /work  claude:f1.jsonl:1 expired
+2026-10-11 12:00 claude tool    subagent /work  claude:sub.jsonl:1 expired
+2026-10-06 12:00 claude tool    main     /notes claude:t.jsonl:1
+2026-10-05 12:00 claude typed   main     /work  claude:tu.jsonl:1 expired
+
+description: Removes slop from prose.
+path: <skills>/unslop
+history: first 2026-01-01 skills, last 2026-04-01 tighten unslop, uncommitted changes
+grades:
+date       score since
+2026-03-01     7 +1
+2026-02-01     6 +1
+retros: 4 strong since the latest
+date       score verdict
+2026-10-05     8 holds up
+2026-04-02     5 too eager
+cites: fresh (held), writing-for-agents (held)
+cited by: none
+strong: claude slash 1, claude tool 3, claude typed 1
+last use: 2026-10-12 (1d ago)
+projects: /work 3, /notes 1
+invoke: claude /unslop, codex $unslop
+default prompt: Use $unslop on this draft.
+examples:
+  2026-10-06 /notes: Tighten the release notes.
+curated:
+  <b>note</b> Asked: Tidy. Happened: Done. Tip: Say the tone. (s1)
+audit: 2026-10-12, 4 sessions, unknown billing: Good on <short> texts
+  followed 3 of 4, achieved 2 of 4, abandoned or redone 1 of 4
+  1. Change 1. (Reason 1.)
+  2. Change 2. (Reason 2.)
+  3. Change 3. (Reason 3.)

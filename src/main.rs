@@ -233,7 +233,8 @@ fn scanned<T>(
     let coverage = ledger::load_coverage(&data)?;
     let audits = audit::latest(&data)?;
     let now = jiff::Timestamp::now();
-    f(&data, &report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &audits, now })
+    let tz = jiff::tz::TimeZone::system();
+    f(&data, &report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &audits, now, tz })
 }
 
 /// Usage reports scan first, then render, then print freshness warnings.
@@ -322,7 +323,7 @@ fn cmd_report(
         None => ledger::data_dir()?.join("report.html"),
     };
     let code = with_scanned(cfg, inv, |input| {
-        let page = html::render(&report::report(input, since)?, &jiff::tz::TimeZone::system());
+        let page = html::render(input, since)?;
         html::write(&path, &page)?;
         Ok(format!("wrote {}\n", path.display()))
     })?;

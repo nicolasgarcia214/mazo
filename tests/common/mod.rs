@@ -34,7 +34,7 @@ pub fn ago(days: i64) -> String {
     now().checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap().to_string()
 }
 
-/// The date of timestamp `ts` in the system zone, as the reports print it.
+/// The date of timestamp `ts` in the system zone, as the binary prints it.
 pub fn local_date(ts: &str) -> String {
     ts.parse::<jiff::Timestamp>().unwrap().to_zoned(jiff::tz::TimeZone::system()).date().to_string()
 }
@@ -88,8 +88,60 @@ impl World {
     }
 
     pub fn input<'a>(&'a self, events: &'a [Event]) -> Input<'a> {
-        Input { cfg: &self.cfg, inv: &self.inv, events, coverage: &self.coverage, audits: &self.audits, now: now() }
+        Input {
+            cfg: &self.cfg,
+            inv: &self.inv,
+            events,
+            coverage: &self.coverage,
+            audits: &self.audits,
+            now: now(),
+            tz: jiff::tz::TimeZone::UTC,
+        }
     }
+}
+
+/// The report fixture: the skills of `fixtures/reports/skills` committed on
+/// 2026-01-01, plus `fresh`, which is never committed.
+pub fn report_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    copy_tree(&fixture("reports/skills"), dir.path(), &|s| s);
+    git(dir.path(), &["init", "-q"], NOW);
+    git(dir.path(), &["add", "."], NOW);
+    git(dir.path(), &["commit", "-q", "-m", "skills"], "2026-01-01T00:00:00Z");
+    write(&dir.path().join("fresh/SKILL.md"), "---\nname: fresh\ndescription: New.\n---\n\nNew.\n");
+    dir
+}
+
+/// When the report fixture homes' coverage starts.
+pub const CLAUDE_FIRST: &str = "2026-09-10T08:00:00Z";
+pub const CODEX_FIRST: &str = "2026-03-29T08:00:00Z";
+
+/// The report fixture homes `claude` and `codex`, with the authoring skills.
+pub fn report_world(source: &Path) -> World {
+    let mut w = World::new(source, &[("claude", Agent::Claude, CLAUDE_FIRST), ("codex", Agent::Codex, CODEX_FIRST)]);
+    w.cfg.policy.authoring_skills = ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into();
+    w
+}
+
+/// A skill record of `unslop` with `verdict`, written at `at`, with four
+/// ranked improvements and a hostile curated example.
+pub fn skill_record(verdict: &str, at: &str) -> String {
+    let session = |s: &str| serde_json::json!([s]);
+    let improvement = |i: usize| serde_json::json!({"change": format!("Change {i}."), "reason": format!("Reason {i}."), "sessions": session("s1")});
+    let rate = |n: usize| serde_json::json!({"n": n, "of": 4, "sessions": &["s1", "s2", "s3", "s4"][..n]});
+    let record = serde_json::json!({
+        "v": 1, "kind": "skill", "skill": "unslop", "audited_at": at, "sessions": ["s1", "s2", "s3", "s4"],
+        "judge": {"agent": "claude", "model": null, "cost_usd": 0.12},
+        "prompt": "skill-v1",
+        "rates": {"followed": rate(3), "achieved": rate(2), "abandoned_or_redone": rate(1)},
+        "result": {
+            "verdict": verdict, "patterns": [], "works": [], "failures": [],
+            "improvements": (1..=4).map(improvement).collect::<Vec<_>>(),
+            "versus_grades": "",
+            "examples": [{"situation": "<b>note</b>", "asked": "Tidy.", "happened": "Done.", "tip": "Say the tone.", "session": "s1"}],
+        },
+    });
+    format!("{record}\n")
 }
 
 /// The `skima` binary run in `cwd` with a private `HOME`, `SKIMA_CONFIG` and

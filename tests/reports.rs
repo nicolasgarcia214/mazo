@@ -6,7 +6,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use common::{NOW, World, ago, copy_tree, event, git, local_date, write};
+use common::{CLAUDE_FIRST, CODEX_FIRST, NOW, ago, copy_tree, event, git, report_repo, report_world, write};
 use serde_json::Value;
 use skima::inventory::{self, Inventory};
 use skima::ledger::{Actor, Agent, Channel, Event, Origin};
@@ -15,28 +15,6 @@ use skima::{evals, render};
 
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
                       +N commits since the grade; +wip uncommitted changes since the grade";
-
-/// The fixture skills committed on 2026-01-01, plus `fresh`, which is never committed.
-fn fixture_repo() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    copy_tree(&common::fixture("reports/skills"), dir.path(), &|s| s);
-    git(dir.path(), &["init", "-q"], NOW);
-    git(dir.path(), &["add", "."], NOW);
-    git(dir.path(), &["commit", "-q", "-m", "skills"], "2026-01-01T00:00:00Z");
-    write(&dir.path().join("fresh/SKILL.md"), "---\nname: fresh\ndescription: New.\n---\n\nNew.\n");
-    dir
-}
-
-/// When the fixture homes' coverage starts.
-const CLAUDE_FIRST: &str = "2026-09-10T08:00:00Z";
-const CODEX_FIRST: &str = "2026-03-29T08:00:00Z";
-
-/// The fixture homes `claude` and `codex`, with the authoring skills.
-fn world(source: &Path) -> World {
-    let mut w = World::new(source, &[("claude", Agent::Claude, CLAUDE_FIRST), ("codex", Agent::Codex, CODEX_FIRST)]);
-    w.cfg.policy.authoring_skills = ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into();
-    w
-}
 
 fn args() -> UsageArgs {
     UsageArgs { since: Since::Days(30), agent: None, channel: None, all: false, authoring: false }
@@ -101,7 +79,7 @@ fn fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
 
 #[test]
 fn fan_in_on_fixtures_ignores_frontmatter_and_name_suffixes() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     let skills = inventory::canonical_skills(repo.path()).unwrap();
     let g = inventory::fan_in(repo.path(), &skills);
     let edges: Vec<String> = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
@@ -123,8 +101,8 @@ fn fan_in_on_fixtures_ignores_frontmatter_and_name_suffixes() {
 
 #[test]
 fn unused_reports_clusters_held_new_and_weak_only() {
-    let repo = fixture_repo();
-    let w = world(repo.path());
+    let repo = report_repo();
+    let w = report_world(repo.path());
     let events = vec![
         event("u1", "unslop", Channel::Tool, "s1", &ago(10)),
         event("p1", "goal-plan", Channel::Read, "s2", &ago(5)),
@@ -165,14 +143,14 @@ fn unused_reports_clusters_held_new_and_weak_only() {
     );
     assert!(!unused_lines.iter().any(|l| l.starts_with("writing-for-agents")), "{text}");
     assert!(text.contains("writing-for-agents held   held by unslop"), "{text}");
-    let window = format!("window: claude since {} · codex since {}", local_date(CLAUDE_FIRST), local_date(&ago(60)));
+    let window = format!("window: claude since {} · codex since {}", &CLAUDE_FIRST[..10], &ago(60)[..10]);
     assert!(text.ends_with(&format!("{window}\n{LEGEND}\n")), "{text}");
 }
 
 #[test]
 fn a_skill_first_committed_inside_the_window_is_new() {
-    let repo = fixture_repo();
-    let w = world(repo.path());
+    let repo = report_repo();
+    let w = report_world(repo.path());
     let input = w.input(&[]);
     let v: Value = serde_json::from_str(&report::unused(&input, Since::Days(400), true, false)).unwrap();
     let new: Vec<&str> = v["skills"]
@@ -191,7 +169,7 @@ fn a_skill_first_committed_inside_the_window_is_new() {
 /// other whole-word name in the tree is already an edge, so none repeats.
 #[test]
 fn mentions_on_fixtures_are_whole_words_that_are_not_edges() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     let skills = inventory::canonical_skills(repo.path()).unwrap();
     let edges = inventory::fan_in(repo.path(), &skills);
     let m = inventory::mentions(repo.path(), &skills, &edges);
@@ -204,14 +182,14 @@ fn mentions_on_fixtures_are_whole_words_that_are_not_edges() {
 /// stays unused, with the namer noted, and is never held by it.
 #[test]
 fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     write(
         &repo.path().join("router/SKILL.md"),
         "---\nname: router\ndescription: Routes.\n---\n\n| Need | Skill |\n|---|---|\n| Pi helpers | wfa-helper |\n",
     );
     git(repo.path(), &["add", "router"], NOW);
     git(repo.path(), &["commit", "-q", "-m", "router"], "2026-01-01T00:00:00Z");
-    let w = world(repo.path());
+    let w = report_world(repo.path());
     let events = vec![event("r1", "router", Channel::Slash, "s1", &ago(5))];
     let input = w.input(&events);
 
@@ -239,7 +217,7 @@ fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
 /// and `usage` only a stale grade's mark; `NO_COLOR=1` turns all of it off.
 #[test]
 fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     write(
         &repo.path().join("router/SKILL.md"),
         "---\nname: router\ndescription: Routes.\n---\n\n| Need | Skill |\n|---|---|\n| Pi helpers | wfa-helper |\n",
@@ -249,7 +227,7 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     git(repo.path(), &["commit", "-q", "-m", "router"], "2026-01-01T00:00:00Z");
     let skill_md = repo.path().join("unslop/SKILL.md");
     write(&skill_md, &(std::fs::read_to_string(&skill_md).unwrap() + "\nEdited.\n"));
-    let w = world(repo.path());
+    let w = report_world(repo.path());
     let events =
         vec![event("r1", "router", Channel::Slash, "s1", &ago(5)), event("u1", "unslop", Channel::Tool, "s2", &ago(5))];
     let input = w.input(&events);
@@ -277,8 +255,8 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
 
 #[test]
 fn usage_collapses_and_applies_default_filters() {
-    let repo = fixture_repo();
-    let w = world(repo.path());
+    let repo = report_repo();
+    let w = report_world(repo.path());
     let d1 = ago(1);
     let typed = "2026-02-24T10:00:00Z";
     let mut probe = event("probe", "unslop", Channel::Tool, "P", &d1);
@@ -341,7 +319,7 @@ fn usage_collapses_and_applies_default_filters() {
     let authoring = report::usage(&input, &UsageArgs { authoring: true, ..args() }, true, false);
     assert_eq!(counts(&row(&authoring, "unslop")), [3, 1, 3, 0, 4, 1], "--authoring adds sessions C and D");
 
-    let mut plain = world(repo.path());
+    let mut plain = report_world(repo.path());
     plain.cfg.policy.authoring_skills.clear();
     let out = report::usage(&plain.input(&events), &args(), true, false);
     assert_eq!(counts(&row(&out, "unslop")), [3, 1, 3, 0, 3, 1], "no authoring_skills: only the cwd rule tags C");
@@ -367,9 +345,9 @@ fn usage_collapses_and_applies_default_filters() {
         lines[lines.len() - 2],
         format!(
             "coverage: claude since {} (typed since {}) · codex since {}",
-            local_date(CLAUDE_FIRST),
-            local_date(typed),
-            local_date(CODEX_FIRST)
+            &CLAUDE_FIRST[..10],
+            &typed[..10],
+            &CODEX_FIRST[..10]
         )
     );
     assert_eq!(*lines.last().unwrap(), LEGEND);
@@ -379,7 +357,7 @@ fn usage_collapses_and_applies_default_filters() {
 
 /// The text and JSON grade of `skill` in a fresh report, which reads the history again.
 fn grade_of(source: &Path, skill: &str) -> (String, Value) {
-    let w = world(source);
+    let w = report_world(source);
     let input = w.input(&[]);
     let text = report::usage(&input, &args(), false, false);
     let line = text.lines().find(|l| l.starts_with(&format!("{skill} "))).unwrap();
@@ -389,7 +367,7 @@ fn grade_of(source: &Path, skill: &str) -> (String, Value) {
 
 #[test]
 fn usage_grade_shows_the_score_then_commits_or_wip_since() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     let src = repo.path();
     write(&src.join(".grades/unslop/g.md"), "---\ntarget: unslop\ndate: 2026-09-01\nscore: 9.1\n---\n");
     git(src, &["add", "."], NOW);
@@ -420,11 +398,11 @@ fn usage_grade_shows_the_score_then_commits_or_wip_since() {
 
 #[test]
 fn show_lists_events_with_expired_locators_and_retro_counts() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     let transcript = repo.path().join("t.jsonl");
     write(&transcript, "{}\n");
     write(&repo.path().join(".retros/unslop/r.md"), "---\nskill: unslop\ndate: \"2026-10-05\"\nscore: 7\n---\n");
-    let w = world(repo.path());
+    let w = report_world(repo.path());
     let mut live = event("live", "unslop", Channel::Tool, "A", &ago(1));
     live.src = format!("{}:1", transcript.display());
     let events = vec![
@@ -461,7 +439,7 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
 /// `~` and short locators in text and full paths in `--json`.
 #[test]
 fn show_prints_the_card() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     let src = repo.path();
     for (date, score) in [("2026-02-01", "6"), ("2026-03-01", "7")] {
         write(&src.join(format!(".grades/unslop/{date}.md")), &format!("---\ndate: {date}\nscore: {score}\n---\n"));
@@ -481,7 +459,7 @@ fn show_prints_the_card() {
     write(&src.join("citer/SKILL.md"), "---\nname: citer\ndescription: Cites.\n---\n\nUse the unslop skill.\n");
 
     let home = std::env::var("HOME").unwrap();
-    let w = world(src);
+    let w = report_world(src);
     let at = |id, skill, channel, session, days, cwd: &str| {
         let mut e = event(id, skill, channel, session, &ago(days));
         e.cwd = Some(cwd.into());
@@ -523,7 +501,7 @@ fn show_prints_the_card() {
         "cites: fresh (held), writing-for-agents (held)\n".into(),
         "cited by: citer\n".into(),
         "strong: claude slash 2, claude tool 2, codex tool 1\n".into(),
-        format!("last use: {} (1d ago)\n", local_date(&ago(1))),
+        format!("last use: {} (1d ago)\n", &ago(1)[..10]),
         "projects: ~/work 2, /srv/a 1, /srv/b 1\n".into(),
         "invoke: claude /unslop, codex $unslop\n".into(),
         "examples: none\n".into(),
@@ -581,7 +559,7 @@ fn show_outside_a_git_worktree_omits_history() {
     let dir = tempfile::tempdir().unwrap();
     copy_tree(&common::fixture("reports/skills"), dir.path(), &|s| s);
     write(&dir.path().join(".grades/unslop/g.md"), "---\ndate: 2026-05-01\nscore: 9\n---\n");
-    let w = world(dir.path());
+    let w = report_world(dir.path());
     assert!(w.inv.history.is_none());
     let input = w.input(&[]);
     let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
@@ -600,7 +578,7 @@ fn show_outside_a_git_worktree_omits_history() {
 /// the user message `msgs[n - 1]`.
 #[test]
 fn show_lists_written_and_real_examples() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     let src = repo.path();
     write(&src.join("unslop/agents/openai.yaml"), "interface:\n  default_prompt: \"Use $unslop on this draft.\"\n");
     let long = "Tighten this paragraph. ".repeat(20);
@@ -624,7 +602,7 @@ fn show_lists_written_and_real_examples() {
     write(&transcript, &lines);
     write(&src.join("a-skill-with-a-long-name/SKILL.md"), "---\nname: a-skill-with-a-long-name\n---\n");
 
-    let w = world(src);
+    let w = report_world(src);
     let of = |skill: &str, id: &str, line: usize, days, cwd: &str| {
         let mut e = event(id, skill, Channel::Tool, id, &ago(days));
         e.cwd = Some(cwd.into());
@@ -698,8 +676,8 @@ fn show_lists_written_and_real_examples() {
 /// No events, no manifest: the invocations alone.
 #[test]
 fn show_without_events_has_no_real_examples() {
-    let repo = fixture_repo();
-    let w = world(repo.path());
+    let repo = report_repo();
+    let w = report_world(repo.path());
     let input = w.input(&[]);
     let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
     assert!(text.ends_with("invoke: claude /unslop, codex $unslop\nexamples: none\naudit: none\n"), "{text}");

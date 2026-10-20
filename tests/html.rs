@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{NOW, Skima, World, ago, copy_tree, event, git, local_date, stderr, stdout, write};
+use common::{NOW, Skima, World, ago, copy_tree, event, git, skill_record, stderr, stdout, write};
 use jiff::tz::TimeZone;
 use regex::Regex;
 use serde_json::Value;
@@ -56,7 +56,7 @@ fn world(source: &Path) -> World {
 }
 
 fn page(w: &World, events: &[Event]) -> String {
-    html::render(&report::report(&w.input(events), Since::Days(30)).unwrap(), &TimeZone::system())
+    html::render(&w.input(events), Since::Days(30)).unwrap()
 }
 
 /// The text of the element with `id`, up to the end of its section.
@@ -297,27 +297,6 @@ fn times_are_local_under_a_fixed_zone() {
     assert!(generated.is_match(&page), "generated to the minute");
 }
 
-/// A skill record of `unslop` with `verdict`, written at `at`, with four
-/// ranked improvements and a hostile curated example.
-fn skill_record(verdict: &str, at: &str) -> String {
-    let session = |s: &str| serde_json::json!([s]);
-    let improvement = |i: usize| serde_json::json!({"change": format!("Change {i}."), "reason": format!("Reason {i}."), "sessions": session("s1")});
-    let rate = |n: usize| serde_json::json!({"n": n, "of": 4, "sessions": &["s1", "s2", "s3", "s4"][..n]});
-    let record = serde_json::json!({
-        "v": 1, "kind": "skill", "skill": "unslop", "audited_at": at, "sessions": ["s1", "s2", "s3", "s4"],
-        "judge": {"agent": "claude", "model": null, "cost_usd": 0.12},
-        "prompt": "skill-v1",
-        "rates": {"followed": rate(3), "achieved": rate(2), "abandoned_or_redone": rate(1)},
-        "result": {
-            "verdict": verdict, "patterns": [], "works": [], "failures": [],
-            "improvements": (1..=4).map(improvement).collect::<Vec<_>>(),
-            "versus_grades": "",
-            "examples": [{"situation": "<b>note</b>", "asked": "Tidy.", "happened": "Done.", "tip": "Say the tone.", "session": "s1"}],
-        },
-    });
-    format!("{record}\n")
-}
-
 /// The usage table carries each skill's latest audit verdict
 /// and the card shows its date, session count, rates, top three improvements
 /// and curated examples, escaped; an older record is not shown.
@@ -342,7 +321,7 @@ fn the_latest_audit_is_in_the_usage_table_and_the_card() {
     assert!(!page.contains("OLD VERDICT"), "only the latest record is shown");
 
     let card = section(&page, "skill-unslop");
-    assert!(card.contains("<dt>audit</dt>") && card.contains(&format!("{}, 4 sessions", local_date(latest))), "{card}");
+    assert!(card.contains("<dt>audit</dt>") && card.contains(&format!("{}, 4 sessions", &latest[..10])), "{card}");
     assert!(card.contains(verdict));
     assert!(card.contains("followed 3 of 4, achieved 2 of 4, abandoned or redone 1 of 4"), "{card}");
     assert!(card.contains("Change 3.") && !card.contains("Change 4."), "the top three improvements");

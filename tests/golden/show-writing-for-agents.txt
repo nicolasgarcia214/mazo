@@ -1,0 +1,26 @@
+writing-for-agents: since 2026-09-13
+
+day        strong weak
+2026-10-07      1    0 ████████████████████████████████████████
+2026-10-10      0    1
+
+last 2 of 2 events:
+ts               agent  channel actor cwd   src
+2026-10-10 12:00 codex  read    main  /work codex:cx.jsonl:1 expired
+2026-10-07 12:00 claude slash   main  /work claude:g1.jsonl:1 expired
+
+description: Writes agent-facing documents. Prose polish is the unslop skill.
+path: <skills>/writing-for-agents
+history: first 2026-01-01 skills, last 2026-01-01 skills
+grades:
+date       score since
+2026-05-01     8
+retros: none
+cites: wfa-helper (held)
+cited by: unslop
+strong: claude slash 1
+last use: 2026-10-07 (6d ago)
+projects: /work 1
+invoke: claude /writing-for-agents, codex $writing-for-agents
+examples: none
+audit: none

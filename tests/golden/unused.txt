@@ -1,0 +1,7 @@
+skill        status notes
+fresh        held   held by unslop
+goal-execute held   held by goal-smart
+goal-plan    held   held by goal-smart; named by unslop
+wfa-helper   held   held by writing-for-agents
+window: claude since 2026-09-13 · codex since 2026-09-13
+legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade
