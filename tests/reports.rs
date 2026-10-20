@@ -8,10 +8,10 @@ use std::path::Path;
 
 use common::{NOW, World, ago, copy_tree, event, git, local_date, write};
 use serde_json::Value;
-use skima::evals;
 use skima::inventory::{self, Inventory};
 use skima::ledger::{Actor, Agent, Channel, Event, Origin};
 use skima::report::{self, Since, UsageArgs};
+use skima::{evals, render};
 
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
                       +N commits since the grade; +wip uncommitted changes since the grade";
@@ -233,6 +233,44 @@ fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
     let text = report::unused(&input, Since::Days(60), false, false);
     let line = text.lines().find(|l| l.starts_with("wfa-helper")).unwrap();
     assert!(line.contains(" unused ") && line.contains("named by router"), "{text}");
+}
+
+/// On a terminal, `unused` paints its status words and the `named by` note
+/// and `usage` only a stale grade's mark; `NO_COLOR=1` turns all of it off.
+#[test]
+fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
+    let repo = fixture_repo();
+    write(
+        &repo.path().join("router/SKILL.md"),
+        "---\nname: router\ndescription: Routes.\n---\n\n| Need | Skill |\n|---|---|\n| Pi helpers | wfa-helper |\n",
+    );
+    write(&repo.path().join(".grades/unslop/g.md"), "---\ntarget: unslop\ndate: 2026-09-01\nscore: 9.1\n---\n");
+    git(repo.path(), &["add", "router", ".grades"], NOW);
+    git(repo.path(), &["commit", "-q", "-m", "router"], "2026-01-01T00:00:00Z");
+    let skill_md = repo.path().join("unslop/SKILL.md");
+    write(&skill_md, &(std::fs::read_to_string(&skill_md).unwrap() + "\nEdited.\n"));
+    let w = world(repo.path());
+    let events =
+        vec![event("r1", "router", Channel::Slash, "s1", &ago(5)), event("u1", "unslop", Channel::Tool, "s2", &ago(5))];
+    let input = w.input(&events);
+    let (red, yellow, reset) = ("\x1b[31m", "\x1b[33m", "\x1b[0m");
+
+    let on = render::colour(true, None);
+    let text = report::unused(&input, Since::Days(60), false, on);
+    let line = |skill: &str| text.lines().find(|l| l.starts_with(&format!("{skill} "))).unwrap();
+    assert!(line("wfa-helper").contains(&format!("{red}unused{reset}")), "{text}");
+    assert!(line("wfa-helper").contains(&format!("{yellow}named by router{reset}")), "{text}");
+    assert!(line("writing-for-agents").contains(&format!("{yellow}held{reset}   held by unslop")), "{text}");
+    assert!(line("fresh").contains(&format!("{yellow}new{reset}")), "{text}");
+    assert!(line("goal-smart").ends_with(&format!("{reset} cluster: goal-execute, goal-plan")), "{text}");
+    let usage = report::usage(&input, &args(), false, on);
+    let unslop = usage.lines().find(|l| l.starts_with("unslop ")).unwrap();
+    assert!(unslop.ends_with(&format!("9.1{yellow}+wip{reset}")), "{usage}");
+    assert_eq!(usage.lines().skip(1).map(|l| l.matches('\x1b').count()).sum::<usize>(), 2, "only the mark: {usage}");
+
+    let off = render::colour(true, Some(std::ffi::OsStr::new("1")));
+    assert!(!report::unused(&input, Since::Days(60), false, off).contains('\x1b'));
+    assert!(!report::usage(&input, &args(), false, off).contains('\x1b'));
 }
 
 // ---------------------------------------------------------------- usage

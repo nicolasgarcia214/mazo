@@ -105,9 +105,58 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 | `skima audit <skill>` | Judges how a skill performs in real sessions: each session not yet audited (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) goes to one call of the `[judge]` agent (Claude or Pi with tools off, Codex in a read-only sandbox with a scratch `CODEX_HOME`), run in an empty directory under the data directory, and each answer that cites real lines and quotes nothing is appended to `audits.jsonl`. With the Claude judge, calls share 75% of `--max-budget-usd` (default 1, at least 0.04) and none starts with less than a cent left; the output names sessions left for the next run. Codex and Pi report no cost, so `--limit` is their only cap and `--max-budget-usd` is a usage error. Never writes inside the source. `--dry-run` lists the sessions with their agent, project and condensed size, the judge command, the billing and, for Pi, the model, an input-token estimate and, once records exist, a dollar estimate, and starts no judge. When any session record was written, or with `--resynth`, one more call writes the skill report over every session record of the skill: a verdict, patterns, ranked improvements and curated examples, with the rates `followed`, `achieved` and `abandoned or redone` computed by skima as `n of N`. With the Claude judge it gets the rest of the budget, and under a cent left skips it and exits 1. A run that drops every session it judged, or drops the skill report, also exits 1. A judge that fails without an answer (a login, key or network failure, or a signal skima did not send) stops the run at once with exit 1, keeps the records already written, and names the sessions not judged as left for the next run. `--json` prints the new skill record, the session records written and dropped, the spend (null for Codex and Pi) and the sessions left. |
 
-`usage`, `unused`, `show`, `report` and `audit` scan first, so their numbers are current. Every
+`usage`, `unused`, `show`, `report`, `audit` and `retire` scan first, so their numbers are current. Every
 report prints how far back each home's logs go: "unused since 2026-09-10" is not
 "never used".
+
+On a terminal, `usage`, `unused` and `status` colour their status tokens:
+`unused` and `ERROR:` in red; `held`, `new`, the `named by` note, `warning:`
+and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
+`NO_COLOR` set to a non-empty value, carries no colour.
+
+## Glossary
+
+Every event has a channel, the way the agent loaded the skill:
+
+- **`slash`**: the user invoked the skill, as `/name` in Claude, `$name` in Codex
+  or a `<skill>` block in Pi.
+- **`tool`**: Claude called its Skill tool on the skill.
+- **`typed`**: a `/name` line in Claude's `history.jsonl` whose session
+  transcript is gone; a one-time backfill.
+- **`read`**: the agent read the skill's `SKILL.md` with a file or shell tool.
+- **`ref`**: the agent read another Markdown file inside the skill's directory.
+
+- **Strong** loads are `slash`, `tool` and `typed`: the skill was used. Only
+  they count towards `sess`, `last` and the sparkline, and only they make a
+  skill used for `unused` and `retire`.
+- **Weak** loads are `read` and `ref`: the agent looked at the skill, which
+  may be authoring rather than following it.
+- **Actor**: who ran the session: `main` (you), `subagent`, `headless` (Claude
+  `sdk-cli` or `codex exec`) or `probe` (any other Claude entrypoint). `usage`
+  leaves out `probe` unless `--all`, and `report`'s usage table always
+  includes it; `unused`, `show` and the report's cards always leave it out.
+
+`unused` gives each skill without a strong load in the window one status:
+
+- **`unused`**: nothing holds it.
+- **`held`**: a skill that cites it was used in the window, so it is still in
+  service; the note names the holders.
+- **`new`**: its first commit is inside the window, or it is not committed
+  yet. Outside a git repository no skill is new.
+
+and these notes:
+
+- **`cluster`**: skills that cite it, none of them used in the window either,
+  so they may go together.
+- **`weak-only`**: it has weak loads in the window and no strong one.
+- **`named by`**: a skill used in the window names it in prose without citing
+  it. It never makes the skill held, but `retire` refuses it without `--force`
+  when the namer was used in the last 30 days.
+
+A grade cell in `usage` is the score as written, then:
+
+- **`+N`**: `N` commits changed the skill after the grade.
+- **`+wip`**: no such commit, but the skill has uncommitted changes.
 
 ## How accurate the counts are
 

@@ -8,7 +8,7 @@ use skima::config::{self, Config, Home};
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Ledger};
 use skima::report::{self, Since, UsageArgs};
-use skima::{audit, html, links, policy, scan};
+use skima::{audit, html, links, policy, render, scan};
 
 #[derive(Parser)]
 #[command(name = "skima", version, about = "Skill usage from agent transcripts, and sync of skill links")]
@@ -27,15 +27,19 @@ enum Cmd {
         /// Per-channel counts, unparsed samples and the parser canary.
         #[arg(long)]
         report: bool,
+        /// Print each home's scan result as JSON.
         #[arg(long)]
         json: bool,
     },
     /// One row per canonical skill: sessions, channel counts, agents, last use.
     Usage {
+        /// The window: <N>d or all; 30 days by default.
         #[arg(long, default_value = "30d")]
         since: Since,
+        /// Only events of this agent.
         #[arg(long, value_enum)]
         agent: Option<Agent>,
+        /// Only events of this channel.
         #[arg(long, value_enum)]
         channel: Option<Channel>,
         /// Include `other` origins and `probe` actors.
@@ -44,28 +48,36 @@ enum Cmd {
         /// Include authoring reads.
         #[arg(long)]
         authoring: bool,
+        /// Print the rows and coverage as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Skills with no strong event in the window.
     Unused {
+        /// The window: <N>d or all; 60 days by default.
         #[arg(long, default_value = "60d")]
         since: Since,
+        /// Print the window and the skills as JSON.
         #[arg(long)]
         json: bool,
     },
     /// One skill's evidence: histogram, recent events with their sources, grades.
     Show {
+        /// The skill to show.
         skill: String,
+        /// The window: <N>d or all; 30 days by default.
         #[arg(long, default_value = "30d")]
         since: Since,
+        /// The most recent events to list.
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Print the whole card as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Write the HTML report: usage, grades to run, and every skill's card.
     Report {
+        /// The window: <N>d or all; 30 days by default.
         #[arg(long, default_value = "30d")]
         since: Since,
         /// Defaults to `<data dir>/report.html`.
@@ -77,26 +89,33 @@ enum Cmd {
     },
     /// Drift and policy of every agent home. Writes nothing.
     Status {
+        /// Only the homes of this agent.
         #[arg(long, value_enum)]
         agent: Option<Agent>,
+        /// Print drift, policy errors, conflicts and warnings as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Link every canonical skill into every agent home (replaces install.sh).
     Sync {
+        /// Only the homes of this agent.
         #[arg(long, value_enum)]
         agent: Option<Agent>,
+        /// Print what would change; write nothing.
         #[arg(long)]
         dry_run: bool,
     },
     /// Write a config for a skills directory, with every rule off.
     Init {
+        /// The skills directory: one subdirectory per skill.
         #[arg(long)]
         source: std::path::PathBuf,
     },
     /// Create a skill that already satisfies the configured policy rules.
     New {
+        /// The skill's directory name.
         name: String,
+        /// The `description` written to its frontmatter.
         #[arg(long)]
         description: String,
     },
@@ -113,6 +132,7 @@ enum Cmd {
     },
     /// Archive a dead skill under `.archive/` and prune its links. Never commits.
     Retire {
+        /// The skill to archive.
         name: String,
         /// Retire a held or named skill, or one used in the last 30 days.
         #[arg(long)]
@@ -124,6 +144,7 @@ enum Cmd {
 
 #[derive(clap::Args)]
 struct AuditArgs {
+    /// The skill to audit.
     skill: String,
     /// The most sessions to judge.
     #[arg(long, default_value_t = 20, conflicts_with = "all")]
@@ -168,7 +189,8 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
         return Ok(ExitCode::from(2));
     };
     let inv = Inventory::load(&cfg.source)?;
-    let tty = std::io::stdout().is_terminal();
+    let no_color = std::env::var_os("NO_COLOR");
+    let tty = render::colour(std::io::stdout().is_terminal(), no_color.as_deref());
     match cmd {
         Cmd::Scan { reparse, report, json } => cmd_scan(&cfg, &inv, reparse, report, json),
         Cmd::Usage { since, agent, channel, all, authoring, json } => {
@@ -185,7 +207,9 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
             with_scanned(&cfg, &inv, |input| report::show(input, &skill, since, limit, json, tty))
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
-        Cmd::Status { agent, json } => cmd_status(&cfg, &inv, agent, json),
+        Cmd::Status { agent, json } => {
+            cmd_status(&cfg, &inv, agent, json, render::colour(std::io::stderr().is_terminal(), no_color.as_deref()))
+        }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
         Cmd::New { name, description } => skima::lifecycle::new(&cfg, &name, &description),
         Cmd::Prune { name, yes, force } => {
@@ -369,7 +393,14 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
 }
 
-fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -> skima::Result<ExitCode> {
+/// `colour` paints the `ERROR:` and `warning:` prefixes on stderr.
+fn cmd_status(
+    cfg: &Config,
+    inv: &Inventory,
+    agent: Option<Agent>,
+    json: bool,
+    colour: bool,
+) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let skill_errors = policy::per_skill(cfg, inv);
     let plan = links::plan(cfg, inv, &homes, None);
@@ -400,11 +431,8 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -
                 println!("{}: {name} {}", e.home, e.state.finding());
             }
         }
-        for e in skill_errors.iter().chain(home_errors().map(|(_, e)| e)) {
-            eprintln!("{e}");
-        }
-        for w in &warnings {
-            eprintln!("{w}");
+        for e in skill_errors.iter().chain(home_errors().map(|(_, e)| e)).chain(&warnings) {
+            eprintln!("{}", render::paint_prefix(e, colour));
         }
     }
     Ok(if failed { ExitCode::from(1) } else { ExitCode::SUCCESS })
@@ -438,4 +466,30 @@ fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) 
         println!("{line}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    /// Every argument of every subcommand, `--help` and `--version` aside.
+    fn undocumented(cmd: &clap::Command, path: &str, out: &mut Vec<String>) {
+        for arg in cmd.get_arguments() {
+            if !matches!(arg.get_id().as_str(), "help" | "version") && arg.get_help().is_none() {
+                out.push(format!("{path} {}", arg.get_id()));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            undocumented(sub, &format!("{path} {}", sub.get_name()), out);
+        }
+    }
+
+    #[test]
+    fn every_argument_has_help_text() {
+        let mut out = Vec::new();
+        undocumented(&Cli::command(), "skima", &mut out);
+        assert_eq!(out, Vec::<String>::new());
+    }
 }
