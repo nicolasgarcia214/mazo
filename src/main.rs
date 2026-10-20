@@ -374,7 +374,7 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
 fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let skill_errors = policy::per_skill(cfg, inv);
-    let plan = links::plan(cfg, inv, &homes);
+    let plan = links::plan(cfg, inv, &homes, None);
     let policy_errors = policy::home_errors(cfg, inv, &homes);
     let home_errors = || policy_errors.iter().chain(&plan.conflicts);
     let data = ledger::data_dir()?;
@@ -414,7 +414,7 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -
 
 fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
-    let plan = links::plan(cfg, inv, &homes);
+    let plan = links::plan(cfg, inv, &homes, None);
     let errors = links::sync_errors(cfg, inv, &homes, &plan);
     if !errors.is_empty() {
         for e in &errors {
