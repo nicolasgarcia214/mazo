@@ -1,9 +1,10 @@
 //! Lifecycle of a skill in the source: `new`, `retire`, `prune`.
 
 use std::collections::BTreeMap;
-use std::io::BufRead;
+use std::io::{BufRead, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 
 use crate::Result;
 use crate::config::{Config, Home};
@@ -147,7 +148,8 @@ fn entries(archive: &Path) -> Vec<String> {
 
 /// Archived files, relative to the source, whose blob (`git hash-object`, which
 /// ignores `.gitignore`) equals neither `HEAD:./<name>/<file>` nor
-/// `HEAD:./.archive/<name>/<file>`. Empty outside a git repository.
+/// `HEAD:./.archive/<name>/<file>`. A symlink, dangling or not, is the blob of
+/// its link text and matches only a `120000` entry. Empty outside a git repository.
 fn unsaved(source: &Path, names: &[String]) -> Result<Vec<String>> {
     if git(source, &["rev-parse", "--is-inside-work-tree"]).is_none() {
         return Ok(Vec::new());
@@ -156,33 +158,67 @@ fn unsaved(source: &Path, names: &[String]) -> Result<Vec<String>> {
     for n in names {
         walk(source, &source.join(".archive").join(n), &mut files)?;
     }
-    if files.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut args = vec!["hash-object", "--"];
-    args.extend(files.iter().map(String::as_str));
-    let hashes = git(source, &args).ok_or("git hash-object failed")?;
+    let is_link = |f: &str| source.join(f).symlink_metadata().is_ok_and(|m| m.is_symlink());
+    let regular: Vec<&str> = files.iter().map(String::as_str).filter(|f| !is_link(f)).collect();
+    let hashes = if regular.is_empty() {
+        String::new()
+    } else {
+        let mut args = vec!["hash-object", "--"];
+        args.extend(&regular);
+        git(source, &args).ok_or("git hash-object failed")?
+    };
+    let mut hashes = hashes.lines();
     let mut ls = vec!["ls-tree", "-r", "-z", "HEAD", "--"];
     let roots: Vec<String> = names.iter().flat_map(|n| [n.clone(), format!(".archive/{n}")]).collect();
     ls.extend(roots.iter().map(String::as_str));
     // No HEAD (no commit yet): nothing is saved.
     let tree = git(source, &ls).unwrap_or_default();
-    let head: BTreeMap<&str, &str> = tree
+    let head: BTreeMap<&str, (&str, &str)> = tree
         .split('\0')
         .filter_map(|rec| {
             let (meta, path) = rec.split_once('\t')?;
-            Some((path, meta.split(' ').nth(2)?))
+            let mut meta = meta.split(' ');
+            Some((path, (meta.next()?, meta.nth(1)?)))
         })
         .collect();
-    Ok(files
-        .iter()
-        .zip(hashes.lines())
-        .filter(|(f, hash)| {
-            let live = f.strip_prefix(".archive/").unwrap_or(f);
-            head.get(f.as_str()) != Some(hash) && head.get(live) != Some(hash)
-        })
-        .map(|(f, _)| f.clone())
-        .collect())
+    let mut unsaved = Vec::new();
+    for f in &files {
+        let paths = [f.as_str(), f.strip_prefix(".archive/").unwrap_or(f)];
+        let saved = if is_link(f) {
+            let blob = link_blob(source, f)?;
+            paths.iter().any(|p| head.get(p) == Some(&("120000", blob.as_str())))
+        } else {
+            let hash = hashes.next().ok_or("git hash-object failed")?;
+            paths.iter().any(|p| head.get(p).is_some_and(|&(_, h)| h == hash))
+        };
+        if !saved {
+            unsaved.push(f.clone());
+        }
+    }
+    Ok(unsaved)
+}
+
+/// The blob git stores for the symlink `<source>/<rel>`: `git hash-object
+/// --stdin` of its link text.
+fn link_blob(source: &Path, rel: &str) -> Result<String> {
+    let path = source.join(rel);
+    let target = std::fs::read_link(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let fail = |e: std::io::Error| format!("git hash-object --stdin: {e}");
+    let mut child = Command::new("git")
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(source)
+        .args(["hash-object", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(fail)?;
+    child.stdin.take().ok_or("git hash-object: no stdin")?.write_all(target.as_os_str().as_bytes()).map_err(fail)?;
+    let out = child.wait_with_output().map_err(fail)?;
+    if !out.status.success() {
+        return Err("git hash-object --stdin failed".into());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
 /// Every non-directory under `dir`, as a path relative to `source`.
