@@ -132,8 +132,8 @@ Every event has a channel, the way the agent loaded the skill:
 - **Weak** loads are `read` and `ref`: the agent looked at the skill, which
   may be authoring rather than following it.
 - **Actor**: who ran the session: `main` (you), `subagent`, `headless` (Claude
-  `sdk-cli` or `codex exec`) or `probe` (any other Claude entrypoint). Reports
-  leave out `probe` unless `--all`.
+  `sdk-cli` or `codex exec`) or `probe` (any other Claude entrypoint). `usage`
+  leaves out `probe` unless `--all`; the other reports always do.
 
 `unused` gives each skill without a strong load in the window one status:
 

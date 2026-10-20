@@ -26,7 +26,9 @@ pub fn paint(token: &str, on: bool) -> String {
     let code = match token {
         "unused" | "ERROR:" => "31",
         "held" | "new" | "warning:" => "33",
-        t if t.starts_with("named by ") || t.starts_with('+') => "33",
+        "+wip" => "33",
+        t if t.starts_with("named by ") => "33",
+        t if t.strip_prefix('+').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) => "33",
         _ => return token.to_string(),
     };
     if on { format!("\x1b[{code}m{token}\x1b[0m") } else { token.to_string() }
@@ -144,6 +146,9 @@ mod tests {
         assert_eq!(paint("unused", true), "\x1b[31munused\x1b[0m");
         assert_eq!(paint("held", true), "\x1b[33mheld\x1b[0m");
         assert_eq!(paint("+wip", true), "\x1b[33m+wip\x1b[0m");
+        assert_eq!(paint("+12", true), "\x1b[33m+12\x1b[0m");
+        assert_eq!(paint("+x", true), "+x");
+        assert_eq!(paint("+", true), "+");
         assert_eq!(paint("cluster: a", true), "cluster: a");
         assert_eq!(paint("unused", false), "unused");
         assert_eq!(paint_prefix("ERROR: x: y", true), "\x1b[31mERROR:\x1b[0m x: y");
