@@ -8,31 +8,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use common::{Skima, stderr, stdout};
 use skima::adapters;
 use skima::audit::{self, Candidate, SkillText};
-use skima::ledger::{Actor, Agent, Channel, Event, Origin};
+use skima::ledger::{Actor, Agent, Channel, Event};
 
 /// Line 5 of the Claude fixture is a strong `unslop` load; its first record is
 /// at 2026-10-14T04:00:01Z.
 const CLAUDE_LOAD: u64 = 5;
 
+/// An `unslop` event of `agent` in its own home, read from `src`.
 fn event(agent: Agent, session: &str, ts: &str, actor: Actor, channel: Channel, cwd: &str, src: String) -> Event {
     Event {
-        v: 1,
-        id: format!("{session}:{ts}:{channel:?}"),
-        ts: ts.into(),
         agent,
         home: skima::ledger::name(agent),
-        agent_version: None,
-        session: session.into(),
         actor,
-        skill: "unslop".into(),
-        origin: Origin::Canonical,
-        channel,
-        path: None,
         cwd: Some(cwd.into()),
-        authoring: false,
         src,
+        ..common::event(&format!("{session}:{ts}:{channel:?}"), "unslop", channel, session, ts)
     }
 }
 
@@ -366,16 +359,8 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
     }
 
     fn skima(&self, args: &[&str]) -> Output {
-        let path = format!("{}:{}", self.root.join("bin").display(), std::env::var("PATH").unwrap());
-        Command::new(env!("CARGO_BIN_EXE_skima"))
-            .args(args)
-            .current_dir(&self.root)
-            .env("HOME", self.root.join("home"))
-            .env("PATH", path)
-            .env("SKIMA_CONFIG", self.root.join("skills/skima.toml"))
-            .env("XDG_DATA_HOME", self.root.join("data"))
-            .output()
-            .unwrap()
+        let root = &self.root;
+        Skima::new(root, &root.join("home"), &root.join("skills/skima.toml"), &root.join("data")).output(args)
     }
 
     fn data(&self) -> PathBuf {
@@ -429,14 +414,6 @@ impl Call {
         let i = self.argv.iter().position(|a| a == flag)?;
         self.argv.get(i + 1).map(String::as_str)
     }
-}
-
-fn stdout(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
 /// Claude sessions `s00`, `s01`, … across three projects, newest first.

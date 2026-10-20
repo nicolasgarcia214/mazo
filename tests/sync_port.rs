@@ -2,14 +2,12 @@
 //! `skima sync`. Line numbers cite test_install.py.
 
 mod common;
-#[path = "fixtures/sync/harness.rs"]
-mod harness;
 
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use harness::*;
+use common::sync::*;
 
 /// :65
 #[test]

@@ -1,14 +1,14 @@
 //! Lifecycle commands end to end: `new`, `retire`, `prune`.
 
 mod common;
-#[path = "fixtures/sync/harness.rs"]
-mod harness;
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
-use skima::ledger::{Actor, Agent, Channel, Event, Origin};
+use common::sync as harness;
+use common::{Skima, stderr, stdout};
+use skima::ledger::{Channel, Event};
 
 const DATE: &str = "2026-01-01T00:00:00Z";
 const LEDGER: &str = "{\"id\":\"x\"}\n";
@@ -52,16 +52,9 @@ impl Fixture {
 
     /// Runs skima with stdin not a terminal, and checks the ledger is untouched.
     fn prune(&self, args: &[&str]) -> Output {
-        let out = Command::new(env!("CARGO_BIN_EXE_skima"))
-            .arg("prune")
-            .args(args)
-            .current_dir(&self.root)
-            .stdin(Stdio::null())
-            .env("HOME", self.root.join("home"))
-            .env("SKIMA_CONFIG", self.source.join("skima.toml"))
-            .env("XDG_DATA_HOME", self.root.join("data"))
-            .output()
-            .unwrap();
+        let run =
+            Skima::new(&self.root, &self.root.join("home"), &self.source.join("skima.toml"), &self.root.join("data"));
+        let out = run.command(&[], &[&["prune"], args].concat()).stdin(Stdio::null()).output().unwrap();
         assert_eq!(fs::read_to_string(self.root.join("data/skima/events.jsonl")).unwrap(), LEDGER);
         out
     }
@@ -69,10 +62,6 @@ impl Fixture {
 
 fn code(out: &Output) -> i32 {
     out.status.code().unwrap()
-}
-
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
 fn archived(fx: &Fixture) -> Vec<String> {
@@ -86,7 +75,7 @@ fn archived(fx: &Fixture) -> Vec<String> {
 }
 
 fn assert_code(out: &Output, want: i32) {
-    assert_eq!(code(out), want, "stdout: {}\nstderr: {}", String::from_utf8_lossy(&out.stdout), stderr(out));
+    assert_eq!(code(out), want, "stdout: {}\nstderr: {}", stdout(out), stderr(out));
 }
 
 #[test]
@@ -213,14 +202,7 @@ impl Homes {
     }
 
     fn skima(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_skima"))
-            .args(args)
-            .current_dir(&self.home)
-            .env("HOME", &self.home)
-            .env("SKIMA_CONFIG", self.source.join("skima.toml"))
-            .env("XDG_DATA_HOME", self.home.join("data"))
-            .output()
-            .unwrap()
+        Skima::new(&self.home, &self.home, &self.source.join("skima.toml"), &self.home.join("data")).output(args)
     }
 
     /// The files under `<source>/<name>`, relative to it.
@@ -276,7 +258,7 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
     assert_eq!(skima::policy::per_skill(&cfg, &inv), Vec::<String>::new());
 
     // One name-only line per Claude home, none for Codex.
-    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stdout = stdout(&out);
     let lines: Vec<(&str, &str)> = stdout.lines().filter_map(|l| l.split_once(": add to skillOverrides: ")).collect();
     let settings = |h: &str| hs.home.join(h).join("settings.json").to_string_lossy().into_owned();
     let paths: Vec<&str> = lines.iter().map(|(p, _)| *p).collect();
@@ -296,7 +278,7 @@ fn new_with_every_rule_off_writes_only_skill_md() {
     let hs = Homes::new("");
     let out = hs.skima(&["new", "plain", "--description", "A plain skill."]);
     assert_code(&out, 0);
-    assert!(!String::from_utf8_lossy(&out.stdout).contains("name-only"));
+    assert!(!stdout(&out).contains("name-only"));
     assert_eq!(hs.files("plain"), ["SKILL.md"]);
     // Not synced: status sees the missing links until sync runs.
     assert!(hs.unlinked("plain"), "new ran sync");
@@ -369,21 +351,15 @@ fn ledger(fx: &harness::Fixture, uses: &[(&str, i64)]) {
         .map(|(skill, days)| {
             let ts = now.checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap();
             let e = Event {
-                v: 1,
-                id: format!("{skill}-{days}"),
-                ts: ts.to_string(),
-                agent: Agent::Claude,
-                home: "claude".into(),
-                agent_version: None,
-                session: format!("s-{skill}"),
-                actor: Actor::Main,
-                skill: skill.to_string(),
-                origin: Origin::Canonical,
-                channel: Channel::Slash,
-                path: None,
                 cwd: None,
-                authoring: false,
                 src: "/nonexistent/t.jsonl:1".into(),
+                ..common::event(
+                    &format!("{skill}-{days}"),
+                    skill,
+                    Channel::Slash,
+                    &format!("s-{skill}"),
+                    &ts.to_string(),
+                )
             };
             serde_json::to_string(&e).unwrap() + "\n"
         })
@@ -404,8 +380,8 @@ fn homes_and_source(fx: &harness::Fixture) -> harness::Snapshot {
 
 fn git_out(dir: &std::path::Path, args: &[&str]) -> String {
     let out = Command::new("git").arg("-C").arg(dir).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
-    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    assert!(out.status.success(), "git {args:?}: {}", stderr(&out));
+    stdout(&out)
 }
 
 fn assert_retired(fx: &harness::Fixture, name: &str) {
