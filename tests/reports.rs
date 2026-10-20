@@ -6,7 +6,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use common::{NOW, World, ago, copy_tree, event, git, write};
+use common::{NOW, World, ago, copy_tree, event, git, local_date, write};
 use serde_json::Value;
 use skima::evals;
 use skima::inventory::{self, Inventory};
@@ -27,12 +27,13 @@ fn fixture_repo() -> tempfile::TempDir {
     dir
 }
 
+/// When the fixture homes' coverage starts.
+const CLAUDE_FIRST: &str = "2026-09-10T08:00:00Z";
+const CODEX_FIRST: &str = "2026-03-29T08:00:00Z";
+
 /// The fixture homes `claude` and `codex`, with the authoring skills.
 fn world(source: &Path) -> World {
-    let mut w = World::new(
-        source,
-        &[("claude", Agent::Claude, "2026-09-10T08:00:00Z"), ("codex", Agent::Codex, "2026-03-29T08:00:00Z")],
-    );
+    let mut w = World::new(source, &[("claude", Agent::Claude, CLAUDE_FIRST), ("codex", Agent::Codex, CODEX_FIRST)]);
     w.cfg.policy.authoring_skills = ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into();
     w
 }
@@ -164,7 +165,8 @@ fn unused_reports_clusters_held_new_and_weak_only() {
     );
     assert!(!unused_lines.iter().any(|l| l.starts_with("writing-for-agents")), "{text}");
     assert!(text.contains("writing-for-agents held   held by unslop"), "{text}");
-    assert!(text.ends_with(&format!("window: claude since 2026-09-10 · codex since 2026-08-14\n{LEGEND}\n")), "{text}");
+    let window = format!("window: claude since {} · codex since {}", local_date(CLAUDE_FIRST), local_date(&ago(60)));
+    assert!(text.ends_with(&format!("{window}\n{LEGEND}\n")), "{text}");
 }
 
 #[test]
@@ -240,6 +242,7 @@ fn usage_collapses_and_applies_default_filters() {
     let repo = fixture_repo();
     let w = world(repo.path());
     let d1 = ago(1);
+    let typed = "2026-02-24T10:00:00Z";
     let mut probe = event("probe", "unslop", Channel::Tool, "P", &d1);
     probe.actor = Actor::Probe;
     let mut other = event("other", "unslop", Channel::Slash, "O", &d1);
@@ -270,7 +273,7 @@ fn usage_collapses_and_applies_default_filters() {
         event("dr", "unslop", Channel::Read, "D", &d1),
         event("dt", "unslop", Channel::Tool, "D", &d1), // strong events are never authoring
         event("old", "unslop", Channel::Tool, "Z", &ago(40)),
-        event("ty", "unslop", Channel::Typed, "Y", "2026-02-24T10:00:00Z"),
+        event("ty", "unslop", Channel::Typed, "Y", typed),
         // goal-execute's only strong event is older than the window.
         event("gx", "goal-execute", Channel::Tool, "Q", &ago(40)),
         // A pruned skill: in the ledger, not in the inventory.
@@ -324,7 +327,12 @@ fn usage_collapses_and_applies_default_filters() {
     assert!(execute.ends_with(&format!(" 0        -      {}     -", "·".repeat(30))), "{text}");
     assert_eq!(
         lines[lines.len() - 2],
-        "coverage: claude since 2026-09-10 (typed since 2026-02-24) · codex since 2026-03-29"
+        format!(
+            "coverage: claude since {} (typed since {}) · codex since {}",
+            local_date(CLAUDE_FIRST),
+            local_date(typed),
+            local_date(CODEX_FIRST)
+        )
     );
     assert_eq!(*lines.last().unwrap(), LEGEND);
     assert!(!text.contains('\x1b'), "no bold off a tty");
@@ -477,7 +485,7 @@ fn show_prints_the_card() {
         "cites: fresh (held), writing-for-agents (held)\n".into(),
         "cited by: citer\n".into(),
         "strong: claude slash 2, claude tool 2, codex tool 1\n".into(),
-        "last use: 2026-10-12 (1d ago)\n".into(),
+        format!("last use: {} (1d ago)\n", local_date(&ago(1))),
         "projects: ~/work 2, /srv/a 1, /srv/b 1\n".into(),
         "invoke: claude /unslop, codex $unslop\n".into(),
         "examples: none\n".into(),

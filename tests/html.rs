@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{NOW, Skima, World, ago, copy_tree, event, git, stderr, stdout, write};
+use common::{NOW, Skima, World, ago, copy_tree, event, git, local_date, stderr, stdout, write};
 use jiff::tz::TimeZone;
 use regex::Regex;
 use serde_json::Value;
@@ -325,9 +325,10 @@ fn skill_record(verdict: &str, at: &str) -> String {
 fn the_latest_audit_is_in_the_usage_table_and_the_card() {
     let repo = repo();
     let data = tempfile::tempdir().unwrap();
+    let latest = "2026-10-12T10:00:00Z";
     let audits = skill_record("OLD VERDICT", "2026-10-01T10:00:00Z")
         + "{\"v\":1,\"kind\":\"session\",\"skill\":\"unslop\",\"session\":\"s1\"}\n"
-        + &skill_record("Good on <short> texts & \"notes\"", "2026-10-12T10:00:00Z");
+        + &skill_record("Good on <short> texts & \"notes\"", latest);
     write(&data.path().join("audits.jsonl"), &audits);
     let mut w = world(repo.path());
     w.audits = skima::audit::latest(data.path()).unwrap();
@@ -341,7 +342,7 @@ fn the_latest_audit_is_in_the_usage_table_and_the_card() {
     assert!(!page.contains("OLD VERDICT"), "only the latest record is shown");
 
     let card = section(&page, "skill-unslop");
-    assert!(card.contains("<dt>audit</dt>") && card.contains("2026-10-12, 4 sessions"), "{card}");
+    assert!(card.contains("<dt>audit</dt>") && card.contains(&format!("{}, 4 sessions", local_date(latest))), "{card}");
     assert!(card.contains(verdict));
     assert!(card.contains("followed 3 of 4, achieved 2 of 4, abandoned or redone 1 of 4"), "{card}");
     assert!(card.contains("Change 3.") && !card.contains("Change 4."), "the top three improvements");

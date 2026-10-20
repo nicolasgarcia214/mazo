@@ -33,6 +33,11 @@ pub fn ago(days: i64) -> String {
     now().checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap().to_string()
 }
 
+/// The date of timestamp `ts` in the system zone, as the reports print it.
+pub fn local_date(ts: &str) -> String {
+    ts.parse::<jiff::Timestamp>().unwrap().to_zoned(jiff::tz::TimeZone::system()).date().to_string()
+}
+
 /// A main-actor Claude event of `skill` from `/work`, read from a transcript
 /// that does not exist.
 pub fn event(id: &str, skill: &str, channel: Channel, session: &str, ts: &str) -> Event {
