@@ -610,7 +610,7 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
         let result = result.map(|r| format!(": {r}")).unwrap_or_default();
         let lines: String = stderr
             .lines()
-            .take(5)
+            .take(STDERR_LINES)
             .map(|l| format!("\n  {}", l.chars().take(STDERR_CHARS).collect::<String>()))
             .collect();
         NoAnswer::Stop(format!("the judge failed without an answer ({}){result}{lines}", output.status))
@@ -651,7 +651,8 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
 /// How long one judge call may run before it is killed and counted as invalid.
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
-/// The most of each stderr line a stopped judge prints.
+/// The most stderr lines a stopped judge prints, and the most of each.
+const STDERR_LINES: usize = 5;
 const STDERR_CHARS: usize = 200;
 
 /// How long a judge past its limit has to exit on SIGTERM before SIGKILL.
@@ -841,6 +842,8 @@ pub struct Run<'c> {
     /// Micro-dollars, both stages; 0 with a judge that reports no cost.
     pub spent: u64,
     pub left: &'c [Candidate],
+    /// A stage-1 judge failed without an answer: `left` starts at its session.
+    pub stopped: bool,
     pub report: Synthesis,
 }
 
@@ -853,8 +856,8 @@ pub enum Synthesis {
     Dropped(String),
     /// Under a cent of the budget was left; never without a budget.
     Skipped,
-    /// A judge of either stage failed without an answer, and the run stopped.
-    Stopped,
+    /// The judge failed without an answer; why.
+    Stopped(String),
 }
 
 /// How judging one session, or the skill, ended.
@@ -911,7 +914,7 @@ fn judge<T>(
 /// record or `resynth` is set and no judge stopped the run.
 pub fn run<'c>(a: &Audit, candidates: &'c [Candidate], resynth: bool) -> Result<Run<'c>> {
     let mut run = judge_sessions(a, candidates)?;
-    if !matches!(run.report, Synthesis::Stopped) && (run.judged > 0 || resynth) {
+    if !run.stopped && (run.judged > 0 || resynth) {
         run.report = synthesize(a, &mut run.spent)?;
     }
     Ok(run)
@@ -925,8 +928,15 @@ pub fn run<'c>(a: &Audit, candidates: &'c [Candidate], resynth: bool) -> Result<
 /// an answer stops the run.
 fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>> {
     let pool = a.budget.map(|b| b / 4 * 3);
-    let mut run =
-        Run { candidates: candidates.len(), judged: 0, dropped: 0, spent: 0, left: &[], report: Synthesis::NotDue };
+    let mut run = Run {
+        candidates: candidates.len(),
+        judged: 0,
+        dropped: 0,
+        spent: 0,
+        left: &[],
+        stopped: false,
+        report: Synthesis::NotDue,
+    };
     for (i, c) in candidates.iter().enumerate() {
         let (skill, input) = input(a.source, c)?;
         let progress = format!("judging {}/{} {}", i + 1, candidates.len(), c.event.session);
@@ -961,7 +971,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
             Ruling::Stopped(why) => {
                 eprintln!("ERROR: {}: {why}", c.event.session);
                 run.left = &candidates[i..];
-                run.report = Synthesis::Stopped;
+                run.stopped = true;
                 break;
             }
         }
@@ -974,7 +984,9 @@ impl Run<'_> {
     /// session it judged, a judge stopped the run, or stage 2 was due and
     /// wrote no record.
     pub fn ok(&self) -> bool {
-        (self.judged > 0 || self.dropped == 0) && matches!(self.report, Synthesis::NotDue | Synthesis::Written(_))
+        !self.stopped
+            && (self.judged > 0 || self.dropped == 0)
+            && matches!(self.report, Synthesis::NotDue | Synthesis::Written(_))
     }
 
     /// The run's summary as text.
@@ -988,14 +1000,14 @@ impl Run<'_> {
             format!("{skill}: {} judged, {} dropped{spend}\n", self.judged, self.dropped)
         };
         if !self.left.is_empty() {
-            let why = if matches!(self.report, Synthesis::Stopped) { "the judge failed" } else { "budget used up" };
+            let why = if self.stopped { "the judge failed" } else { "budget used up" };
             out.push_str(&format!("{why}; left for the next run: {}\n", self.left.len()));
             for c in self.left {
                 out.push_str(&format!("  {} {}\n", name(c.event.agent), c.event.session));
             }
         }
         match &self.report {
-            Synthesis::NotDue | Synthesis::Stopped => {}
+            Synthesis::NotDue => {}
             Synthesis::Written(r) => {
                 out.push_str(&format!("{skill}: skill report over {} sessions: {}\n", r.sessions.len(), r.result.verdict));
                 for (label, rate) in r.rates.labeled() {
@@ -1003,6 +1015,10 @@ impl Run<'_> {
                 }
             }
             Synthesis::Dropped(why) => out.push_str(&format!("{skill}: skill report dropped after one retry: {why}\n")),
+            Synthesis::Stopped(why) => {
+                let why = why.lines().next().unwrap_or_default();
+                out.push_str(&format!("{skill}: skill report stopped: {why}\n"));
+            }
             Synthesis::Skipped => out.push_str(&format!(
                 "{skill}: skill report skipped: ${} of the budget is left, under $0.01; run `skima audit {skill} --resynth`\n",
                 cents(a.budget.unwrap_or_default().saturating_sub(self.spent))
@@ -1316,7 +1332,7 @@ fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
         Ruling::Unfunded(None) => Synthesis::Skipped,
         Ruling::Stopped(why) => {
             eprintln!("ERROR: skill report: {why}");
-            Synthesis::Stopped
+            Synthesis::Stopped(why)
         }
     })
 }

@@ -739,7 +739,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     assert_eq!(fx.skill_records().len(), 1);
     let text = stdout(&out);
     assert!(text.starts_with("unslop: 8 judged, 0 dropped, $0.90 spent of $1.00\n"), "{text}");
-    assert!(text.contains("left for the next run: 4\n"), "{text}");
+    assert!(text.contains("\nbudget used up; left for the next run: 4\n"), "{text}");
     let judged: HashSet<String> = fx.records().iter().map(|r| r["session"].as_str().unwrap().to_string()).collect();
     let named: Vec<&str> = text.lines().skip(2).take(4).map(|l| l.trim().strip_prefix("claude ").unwrap()).collect();
     assert_eq!(named.len(), 4);
@@ -998,9 +998,32 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 2);
-    assert_eq!(stdout(&out), "unslop: 1 judged, 0 dropped, $0.10 spent of $1.00\n");
+    assert_eq!(
+        stdout(&out),
+        "unslop: 1 judged, 0 dropped, $0.10 spent of $1.00\n\
+         unslop: skill report stopped: the judge failed without an answer (exit status: 1): Invalid API key\n"
+    );
     assert!(stderr(&out).contains("ERROR: skill report: the judge failed without an answer"), "{}", stderr(&out));
     assert_eq!(fx.records().len(), 1);
+    assert!(fx.skill_records().is_empty());
+
+    // Sessions the budget left stay the budget's when the stage-2 judge then stops.
+    let fx = Fixture::new("", claude_sessions(12));
+    fx.script("9", &format!("echo '{invalid}'\n{FAIL}"));
+    let out = fx.skima(&["audit", "unslop", "--max-budget-usd", "1"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 9, "eight sessions, then the skill report");
+    let text = stdout(&out);
+    assert!(text.starts_with("unslop: 8 judged, 0 dropped, $0.80 spent of $1.00\n"), "{text}");
+    assert!(text.contains("\nbudget used up; left for the next run: 4\n"), "{text}");
+    assert!(!text.contains("the judge failed;"), "{text}");
+    assert!(
+        text.ends_with(
+            "unslop: skill report stopped: the judge failed without an answer (exit status: 1): Invalid API key\n"
+        ),
+        "{text}"
+    );
+    assert_eq!(fx.records().len(), 8);
     assert!(fx.skill_records().is_empty());
 }
 
