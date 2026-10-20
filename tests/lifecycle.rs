@@ -167,6 +167,49 @@ fn a_gitignore_covering_the_archive_does_not_hide_an_edit() {
     assert_eq!(archived(&fx), ["old"]);
 }
 
+/// An archived skill holding a committed valid link and a committed dangling link.
+fn linked(fx: &Fixture) -> PathBuf {
+    let dir = fx.skill(".archive/linked");
+    std::os::unix::fs::symlink("../SKILL.md", dir.join("references/up")).unwrap();
+    std::os::unix::fs::symlink("nowhere", dir.join("dangling")).unwrap();
+    fx.commit();
+    dir
+}
+
+#[test]
+fn committed_valid_and_dangling_links_are_deleted_without_force() {
+    let fx = Fixture::new(true);
+    linked(&fx);
+    assert_code(&fx.prune(&["linked", "--yes"]), 0);
+    assert!(archived(&fx).is_empty());
+}
+
+#[test]
+fn a_retargeted_link_is_refused_and_named() {
+    let fx = Fixture::new(true);
+    let dir = linked(&fx);
+    fs::remove_file(dir.join("references/up")).unwrap();
+    std::os::unix::fs::symlink("notes.md", dir.join("references/up")).unwrap();
+    let out = fx.prune(&["linked", "--yes"]);
+    assert_code(&out, 1);
+    assert!(stderr(&out).contains(".archive/linked/references/up"), "{}", stderr(&out));
+    assert_eq!(archived(&fx), ["linked"]);
+}
+
+#[test]
+fn a_link_matching_a_committed_regular_file_is_refused() {
+    let fx = Fixture::new(true);
+    let dir = fx.skill(".archive/typed");
+    common::write(&dir.join("references/up"), "../SKILL.md");
+    fx.commit();
+    fs::remove_file(dir.join("references/up")).unwrap();
+    std::os::unix::fs::symlink("../SKILL.md", dir.join("references/up")).unwrap();
+    let out = fx.prune(&["typed", "--yes"]);
+    assert_code(&out, 1);
+    assert!(stderr(&out).contains(".archive/typed/references/up"), "{}", stderr(&out));
+    assert_eq!(archived(&fx), ["typed"]);
+}
+
 #[test]
 fn an_archived_skill_in_a_repository_without_commits_is_refused() {
     let fx = Fixture::new(true);
