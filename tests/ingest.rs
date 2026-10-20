@@ -478,6 +478,21 @@ fn reparse_prints_each_homes_total_and_the_total_before() {
     assert_eq!(out, format!("claude {now} events (was {was})\nempty 0 events (was 0)\n"));
 }
 
+#[test]
+fn scan_json_keeps_every_home_field() {
+    let env = Env::new(&TRANSCRIPTS[..4], &["empty"]);
+    let out = env.cli(&env.tmp.path().join("xdg")).args(["scan", "--json"]).output().unwrap();
+    assert!(out.status.success());
+    let homes: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(homes.keys().collect::<Vec<_>>(), ["claude", "empty"]);
+    for (name, h) in &homes {
+        for key in ["new_events", "files", "io_errors", "unparsed", "unparsed_samples", "canary"] {
+            assert!(h.get(key).is_some(), "{name} has no {key}: {h}");
+        }
+    }
+    assert!(!homes["claude"]["new_events"].as_array().unwrap().is_empty());
+}
+
 /// Every event but `typed`, sorted by id.
 fn comparable(data: &Path) -> Vec<Event> {
     events(data).into_iter().filter(|e| e.channel != Channel::Typed).collect()

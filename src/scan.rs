@@ -6,6 +6,8 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 use crate::Result;
 use crate::adapters::{self, Adapter, Raw, SkillRoots};
 use crate::classify::{Classifier, Roots};
@@ -14,7 +16,7 @@ use crate::inventory::Inventory;
 use crate::ledger::{self, Agent, Channel, Event, Ledger};
 use crate::tail::{self, Cursors, Prefilter};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct HomeReport {
     /// Ledger lines this scan appended (or, on reparse, re-derived).
     pub new_events: Vec<Event>,

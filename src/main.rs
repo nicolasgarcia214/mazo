@@ -302,24 +302,8 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     let was = if reparse { Some(home_counts(&Ledger::load(&data)?)) } else { None };
     let r = scan::scan(cfg, inv, &data, reparse)?;
     if json {
-        let homes: serde_json::Map<String, serde_json::Value> = r
-            .homes
-            .iter()
-            .map(|(name, h)| {
-                (
-                    name.clone(),
-                    serde_json::json!({
-                        "new_events": h.new_events,
-                        "files": h.files,
-                        "io_errors": h.io_errors,
-                        "unparsed": h.unparsed,
-                        "unparsed_samples": h.unparsed_samples,
-                        "canary": h.canary,
-                    }),
-                )
-            })
-            .collect();
-        println!("{}", serde_json::Value::Object(homes));
+        // Through a `Value`, so the keys print sorted.
+        println!("{}", serde_json::to_value(&r.homes).map_err(|e| e.to_string())?);
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(was) = was {
