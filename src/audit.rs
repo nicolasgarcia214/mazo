@@ -608,14 +608,18 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
     let failed = || format!("({}): {}", output.status, stderr.lines().next().unwrap_or_default());
     let stop = |result: Option<&str>| {
         let result = result.map(|r| format!(": {r}")).unwrap_or_default();
-        let lines: String = stderr.lines().take(5).map(|l| format!("\n  {l}")).collect();
+        let lines: String = stderr
+            .lines()
+            .take(5)
+            .map(|l| format!("\n  {}", l.chars().take(STDERR_CHARS).collect::<String>()))
+            .collect();
         NoAnswer::Stop(format!("the judge failed without an answer ({}){result}{lines}", output.status))
     };
     // No answer stops the run after a nonzero exit and is retried after a zero one.
     let exited = |answer: std::result::Result<Value, String>| {
-        answer.map_err(
-            |e| if output.status.success() { NoAnswer::Retry(format!("{e} {}", failed())) } else { stop(None) },
-        )
+        answer.map_err(|e| {
+            if output.status.success() { NoAnswer::Retry(format!("{e} {}", failed())) } else { stop(Some(&e)) }
+        })
     };
     Ok(match a.judge.agent {
         Agent::Claude => {
@@ -646,6 +650,9 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
 
 /// How long one judge call may run before it is killed and counted as invalid.
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// The most of each stderr line a stopped judge prints.
+const STDERR_CHARS: usize = 200;
 
 /// How long a judge past its limit has to exit on SIGTERM before SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(5);
@@ -825,8 +832,8 @@ pub struct Audit<'a> {
     pub usage: &'a Value,
 }
 
-/// What a run did: stage 1's counts and spend, the sessions the budget left
-/// for the next run, and stage 2's result.
+/// What a run did: stage 1's counts and spend, the sessions the budget or a
+/// stopped judge left for the next run, and stage 2's result.
 pub struct Run<'c> {
     pub candidates: usize,
     pub judged: usize,
@@ -953,6 +960,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
             }
             Ruling::Stopped(why) => {
                 eprintln!("ERROR: {}: {why}", c.event.session);
+                run.left = &candidates[i..];
                 run.report = Synthesis::Stopped;
                 break;
             }
@@ -980,7 +988,8 @@ impl Run<'_> {
             format!("{skill}: {} judged, {} dropped{spend}\n", self.judged, self.dropped)
         };
         if !self.left.is_empty() {
-            out.push_str(&format!("budget used up; left for the next run: {}\n", self.left.len()));
+            let why = if matches!(self.report, Synthesis::Stopped) { "the judge failed" } else { "budget used up" };
+            out.push_str(&format!("{why}; left for the next run: {}\n", self.left.len()));
             for c in self.left {
                 out.push_str(&format!("  {} {}\n", name(c.event.agent), c.event.session));
             }

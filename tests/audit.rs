@@ -946,7 +946,9 @@ fn a_call_whose_output_is_no_json_stops_the_run_at_no_cost() {
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
-    assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n");
+    let text = stdout(&out);
+    assert!(text.starts_with("unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n"), "{text}");
+    assert!(text.contains("the judge failed; left for the next run: 3\n"), "{text}");
     assert!(stderr(&out).contains("the judge failed without an answer"), "{}", stderr(&out));
     assert!(fx.records().is_empty());
 }
@@ -963,7 +965,11 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
-    assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n");
+    assert_eq!(
+        stdout(&out),
+        "unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n\
+         the judge failed; left for the next run: 2\n  claude s00\n  claude s01\n"
+    );
     let err = stderr(&out);
     assert!(
         err.contains("ERROR: s00: the judge failed without an answer (exit status: 1): Invalid API key\n"),
@@ -978,7 +984,10 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 2);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert_eq!(v, serde_json::json!({"record": null, "written": 1, "dropped": 0, "spent_usd": 0.1, "left": []}));
+    assert_eq!(
+        v,
+        serde_json::json!({"record": null, "written": 1, "dropped": 0, "spent_usd": 0.1, "left": ["s01", "s02"]})
+    );
     assert!(stderr(&out).contains("ERROR: s01: the judge failed without an answer (exit status: 1)\n  err1\n"));
     assert_eq!(fx.records().len(), 1);
     assert!(fx.skill_records().is_empty());
@@ -999,26 +1008,39 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
 fn a_codex_or_pi_judge_that_exits_nonzero_without_its_result_stops_the_run() {
     for agent in ["codex", "pi"] {
         let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\n"), claude_sessions(2));
-        fx.script("1", FAIL);
+        // Pi reports why on stdout; Codex writes no result file.
+        let (stdout_text, why) = match agent {
+            "pi" => (pi_stream("", "error"), "no answer (overloaded)"),
+            _ => (String::new(), "no answer in the -o file"),
+        };
+        fx.script("1", &format!("printf '%s' '{stdout_text}'\n{FAIL}"));
         let out = fx.skima(&["audit", "unslop"]);
         assert_eq!(out.status.code(), Some(1), "{agent}: {}", stderr(&out));
         assert_eq!(fx.calls().len(), 1, "{agent}");
-        assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped\n", "{agent}");
+        let want =
+            "unslop: 0 judged, 0 dropped\nthe judge failed; left for the next run: 2\n  claude s00\n  claude s01\n";
+        assert_eq!(stdout(&out), want, "{agent}");
         let err = stderr(&out);
-        assert!(err.contains("ERROR: s00: the judge failed without an answer (exit status: 1)\n  err1\n"), "{err}");
+        let want = format!("ERROR: s00: the judge failed without an answer (exit status: 1): {why}\n  err1\n");
+        assert!(err.contains(&want), "{err}");
     }
 }
 
 #[test]
 fn a_claude_judge_killed_by_a_signal_skima_did_not_send_stops_the_run_at_its_cap() {
     let fx = Fixture::new("", claude_sessions(2));
-    fx.script("1", "echo dying >&2\nkill -9 $$\n");
+    // A stderr line is cut to 200 characters.
+    let long = "y".repeat(300);
+    fx.script("1", &format!("echo dying >&2\necho {long} >&2\nkill -9 $$\n"));
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1);
-    assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped, $0.75 spent of $1.00\n");
+    let text = stdout(&out);
+    assert!(text.starts_with("unslop: 0 judged, 0 dropped, $0.75 spent of $1.00\n"), "{text}");
     let err = stderr(&out);
-    assert!(err.contains("ERROR: s00: the judge failed without an answer (signal: 9 (SIGKILL))\n  dying\n"), "{err}");
+    let want =
+        format!("ERROR: s00: the judge failed without an answer (signal: 9 (SIGKILL))\n  dying\n  {}\n", &long[..200]);
+    assert!(err.contains(&want), "{err}");
 }
 
 #[test]
