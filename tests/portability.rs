@@ -4,9 +4,12 @@
 
 mod common;
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
+
+use common::{Skima, stderr, stdout};
 
 /// Every configurable rule's violation at once: `disable-model-invocation` in
 /// the frontmatter, no `agents/openai.yaml`, no Claude `settings.json`.
@@ -52,16 +55,8 @@ impl Tree {
     }
 
     fn skima(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_skima"))
-            .args(args)
-            .current_dir(&self.home)
-            .env("HOME", &self.home)
-            .env("SKIMA_CONFIG", self.source.join("skima.toml"))
-            .env("XDG_DATA_HOME", self.home.join("data"))
-            .env_remove("PI_CODING_AGENT_DIR")
-            .env_remove("PI_CODING_AGENT_SESSION_DIR")
-            .output()
-            .unwrap()
+        let mut run = Skima::new(&self.home, &self.home, &self.source.join("skima.toml"), &self.home.join("data"));
+        run.set("PI_CODING_AGENT_DIR", None).set("PI_CODING_AGENT_SESSION_DIR", None).output(args)
     }
 
     fn link(&self, home: &str, rel: &str) -> PathBuf {
@@ -69,12 +64,8 @@ impl Tree {
     }
 }
 
-fn stderr(o: &Output) -> String {
-    String::from_utf8_lossy(&o.stderr).into_owned()
-}
-
 fn assert_ok(o: &Output) {
-    assert!(o.status.success(), "stdout:\n{}\nstderr:\n{}", String::from_utf8_lossy(&o.stdout), stderr(o));
+    assert!(o.status.success(), "stdout:\n{}\nstderr:\n{}", stdout(o), stderr(o));
 }
 
 #[test]
@@ -198,20 +189,12 @@ impl Fresh {
         Fresh { _temp: temp, home }
     }
 
-    fn skima(&self, env: &[(&str, &PathBuf)], args: &[&str]) -> Output {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
-        cmd.args(args)
-            .current_dir(&self.home)
-            .env("HOME", &self.home)
-            .env("XDG_DATA_HOME", self.home.join("data"))
-            .env_remove("SKIMA_CONFIG")
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("PI_CODING_AGENT_DIR")
-            .env_remove("PI_CODING_AGENT_SESSION_DIR");
-        for (k, v) in env {
-            cmd.env(k, v);
+    fn skima(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
+        let mut run = Skima::new(&self.home, &self.home, &self.home.join("skima.toml"), &self.home.join("data"));
+        for key in ["SKIMA_CONFIG", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"] {
+            run.set(key, None);
         }
-        cmd.output().unwrap()
+        run.command(env, args).output().unwrap()
     }
 
     /// `~/skills/plain/SKILL.md` with `name` and `description` only.
@@ -232,8 +215,8 @@ impl Fresh {
     }
 }
 
-fn env_refs<'a>(env: &'a [(&'static str, PathBuf)]) -> Vec<(&'static str, &'a PathBuf)> {
-    env.iter().map(|(k, v)| (*k, v)).collect()
+fn env_refs<'a>(env: &'a [(&'static str, PathBuf)]) -> Vec<(&'static str, &'a OsStr)> {
+    env.iter().map(|(k, v)| (*k, v.as_os_str())).collect()
 }
 
 #[test]
@@ -265,7 +248,7 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     fs::create_dir(f.home.join(".claude")).unwrap();
     fs::create_dir_all(f.home.join(".pi/agent")).unwrap();
     let path = f.home.join("homes.toml");
-    let env = [("SKIMA_CONFIG", &path)];
+    let env = [("SKIMA_CONFIG", path.as_os_str())];
     assert_ok(&f.skima(&env, &["init", "--source", "skills"]));
     let text = fs::read_to_string(&path).unwrap();
     let v: toml::Table = text.parse().unwrap();
@@ -330,7 +313,7 @@ fn relative_home_paths_resolve_against_the_config_file_not_the_cwd() {
          [[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"../agents/codex\"\n\
          [[home]]\nname = \"pi\"\nagent = \"pi\"\npath = \"../agents/pi\"\n",
     );
-    assert_ok(&f.skima(&[("SKIMA_CONFIG", &config)], &["sync"]));
+    assert_ok(&f.skima(&[("SKIMA_CONFIG", config.as_os_str())], &["sync"]));
     for agent in ["codex", "pi"] {
         let link = f.home.join("agents").join(agent).join("skills/plain");
         assert_eq!(fs::read_link(&link).unwrap(), source.join("plain"), "{agent}");
@@ -344,7 +327,7 @@ fn two_homes_with_one_name_are_an_error() {
     let config = source.join("skima.toml");
     let home = "[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n";
     common::write(&config, &format!("source = \".\"\n{home}{home}"));
-    let o = f.skima(&[("SKIMA_CONFIG", &config)], &["status"]);
+    let o = f.skima(&[("SKIMA_CONFIG", config.as_os_str())], &["status"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(stderr(&o).contains("two homes are named \"codex\""), "{}", stderr(&o));
 }

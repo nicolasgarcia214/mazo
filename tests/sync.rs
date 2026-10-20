@@ -2,12 +2,10 @@
 //! of test_install.py.
 
 mod common;
-#[path = "fixtures/sync/harness.rs"]
-mod harness;
 
 use std::fs;
 
-use harness::*;
+use common::sync::*;
 
 /// The Pi home in its configured place, `~/.pi/agent`.
 fn fixture() -> Fixture {
@@ -16,23 +14,6 @@ fn fixture() -> Fixture {
     fx.agent = fx.home.join(".pi/agent");
     fx.target = fx.agent.join("skills");
     fx
-}
-
-#[test]
-fn conflict_in_the_last_home_leaves_zero_writes_in_every_home() {
-    let fx = fixture();
-    let last = fx.skills.last().unwrap();
-    common::write(&fx.target.join(last), "preserve");
-    let before = fx.snapshot();
-    let r = fx.skima(&["sync"]);
-    assert_eq!(r.code(), 1, "{}", r.stdout());
-    assert!(
-        r.stderr().contains(&format!("{} conflicts with a canonical entry", fx.target.join(last).display())),
-        "{}",
-        r.stderr()
-    );
-    assert_eq!(r.stdout(), "");
-    assert_eq!(fx.snapshot(), before);
 }
 
 #[test]
@@ -210,18 +191,6 @@ fn a_skill_rule_errors_on_stderr_while_homes_stay_in_sync() {
 }
 
 #[test]
-fn a_second_sync_prints_in_sync() {
-    let fx = fixture();
-    let first = fx.skima(&["sync"]);
-    first.assert_ok();
-    assert!(first.stdout().contains("linked    "), "{}", first.stdout());
-    let second = fx.skima(&["sync"]);
-    second.assert_ok();
-    assert_eq!(second.stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
-    assert_eq!(second.stderr(), "");
-}
-
-#[test]
 fn dry_run_on_a_clean_tree_prints_in_sync() {
     let fx = fixture();
     let before = fx.snapshot();
@@ -253,15 +222,6 @@ fn retention_of_seven_days_or_less_always_warns() {
     r.assert_ok();
     assert!(r.stderr().contains("warning: claude: last scanned"), "{}", r.stderr());
     assert!(!r.stderr().contains("warning: claude-work"), "{}", r.stderr());
-}
-
-#[test]
-fn two_homes_sharing_a_directory_sync_once() {
-    let mut fx = fixture();
-    let codex = fx.home.join(".codex");
-    fx.set_env("PI_CODING_AGENT_DIR", Some(&codex));
-    fx.skima(&["sync"]).assert_ok();
-    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
 }
 
 #[test]

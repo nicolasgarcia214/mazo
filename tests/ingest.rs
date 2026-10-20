@@ -10,10 +10,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use common::{Skima, stderr};
 use serde_json::Value;
 use skima::adapters::claude::Claude;
 use skima::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
-use skima::config::{Config, Home};
+use skima::config::Config;
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Event, Ledger};
 use skima::scan::{self, ScanReport};
@@ -147,9 +148,7 @@ impl Env {
 
     /// The `skima` binary, configured for this machine with its data under `xdg`.
     fn cli(&self, xdg: &Path) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
-        cmd.env("HOME", self.tmp.path()).env("XDG_DATA_HOME", xdg).env("SKIMA_CONFIG", self.config());
-        cmd
+        Skima::new(self.tmp.path(), self.tmp.path(), &self.config(), xdg).command(&[], &[])
     }
 
     fn cursors(&self) -> Cursors {
@@ -311,9 +310,6 @@ fn reparse_keeps_the_stored_event_when_a_surviving_file_shares_its_id() {
 struct Rule<F: Fn(&Path, &Chunk, &mut Parsed)>(F);
 
 impl<F: Fn(&Path, &Chunk, &mut Parsed)> Adapter for Rule<F> {
-    fn files(&self, home: &Home) -> Vec<PathBuf> {
-        Claude.files(home)
-    }
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let mut parsed = Claude.parse(roots, path, header, chunk);
         (self.0)(path, chunk, &mut parsed);
@@ -430,7 +426,7 @@ fn concurrent_scan_processes_write_no_duplicate_ids() {
         let run = || env.cli(&xdg).arg("scan").stderr(Stdio::piped()).spawn().unwrap();
         let (a, b) = (run(), run());
         for out in [a.wait_with_output().unwrap(), b.wait_with_output().unwrap()] {
-            assert!(out.status.success(), "round {round}: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(out.status.success(), "round {round}: {}", stderr(&out));
         }
         let data = xdg.join("skima");
         let lines = ledger_lines(&data);
@@ -693,7 +689,7 @@ fn show_writes_no_example_text() {
     let env = Env::new(&TRANSCRIPTS, &[]);
     let xdg = env.tmp.path().join("xdg");
     let out = env.cli(&xdg).args(["show", "gitmoji-conventional-commit"]).output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "{}", stderr(&out));
     let prompt = "/gitmoji-conventional-commit [scrubbed]";
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains(&format!(": {prompt}\n")), "{stdout}");

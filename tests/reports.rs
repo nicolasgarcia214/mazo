@@ -6,48 +6,15 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use common::{copy_tree, git, write};
+use common::{NOW, World, ago, copy_tree, event, git, write};
 use serde_json::Value;
-use skima::audit::SkillRecord;
-use skima::config::{Config, Policy};
 use skima::evals;
 use skima::inventory::{self, Inventory};
-use skima::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
-use skima::report::{self, Input, Since, UsageArgs};
-
-const NOW: &str = "2026-10-13T12:00:00Z";
+use skima::ledger::{Actor, Agent, Channel, Event, Origin};
+use skima::report::{self, Since, UsageArgs};
 
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
                       +N commits since the grade; +wip uncommitted changes since the grade";
-
-fn now() -> jiff::Timestamp {
-    NOW.parse().unwrap()
-}
-
-/// `days` days before NOW, as a ledger timestamp.
-fn ago(days: i64) -> String {
-    now().checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap().to_string()
-}
-
-fn ev(id: &str, skill: &str, channel: Channel, session: &str, ts: &str) -> Event {
-    Event {
-        v: 1,
-        id: id.into(),
-        ts: ts.into(),
-        agent: Agent::Claude,
-        home: "claude".into(),
-        agent_version: None,
-        session: session.into(),
-        actor: Actor::Main,
-        skill: skill.into(),
-        origin: Origin::Canonical,
-        channel,
-        path: None,
-        cwd: Some("/work".into()),
-        authoring: false,
-        src: format!("/nonexistent/{id}.jsonl:1"),
-    }
-}
 
 /// The fixture skills committed on 2026-01-01, plus `fresh`, which is never committed.
 fn fixture_repo() -> tempfile::TempDir {
@@ -60,37 +27,14 @@ fn fixture_repo() -> tempfile::TempDir {
     dir
 }
 
-struct World {
-    cfg: Config,
-    inv: Inventory,
-    coverage: BTreeMap<String, Coverage>,
-    audits: BTreeMap<String, SkillRecord>,
-}
-
+/// The fixture homes `claude` and `codex`, with the authoring skills.
 fn world(source: &Path) -> World {
-    let home = |name: &str, agent| common::home(name, agent, &source.join(name));
-    let cfg = Config {
-        source: source.into(),
-        loose: vec![],
-        homes: vec![home("claude", Agent::Claude), home("codex", Agent::Codex)],
-        policy: Policy {
-            authoring_skills: ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into(),
-            ..Policy::default()
-        },
-        judge: Default::default(),
-    };
-    let inv = Inventory::load(source).unwrap();
-    let coverage = BTreeMap::from([
-        ("claude".to_string(), Coverage { first: Some("2026-09-10T08:00:00Z".into()), last_scan: Some(NOW.into()) }),
-        ("codex".to_string(), Coverage { first: Some("2026-03-29T08:00:00Z".into()), last_scan: Some(NOW.into()) }),
-    ]);
-    World { cfg, inv, coverage, audits: BTreeMap::new() }
-}
-
-impl World {
-    fn input<'a>(&'a self, events: &'a [Event]) -> Input<'a> {
-        Input { cfg: &self.cfg, inv: &self.inv, events, coverage: &self.coverage, audits: &self.audits, now: now() }
-    }
+    let mut w = World::new(
+        source,
+        &[("claude", Agent::Claude, "2026-09-10T08:00:00Z"), ("codex", Agent::Codex, "2026-03-29T08:00:00Z")],
+    );
+    w.cfg.policy.authoring_skills = ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into();
+    w
 }
 
 fn args() -> UsageArgs {
@@ -181,10 +125,10 @@ fn unused_reports_clusters_held_new_and_weak_only() {
     let repo = fixture_repo();
     let w = world(repo.path());
     let events = vec![
-        ev("u1", "unslop", Channel::Tool, "s1", &ago(10)),
-        ev("p1", "goal-plan", Channel::Read, "s2", &ago(5)),
+        event("u1", "unslop", Channel::Tool, "s1", &ago(10)),
+        event("p1", "goal-plan", Channel::Read, "s2", &ago(5)),
         // Outside the 60-day window: does not make goal-execute used.
-        ev("x1", "goal-execute", Channel::Slash, "s0", &ago(90)),
+        event("x1", "goal-execute", Channel::Slash, "s0", &ago(90)),
     ];
     let input = w.input(&events);
     let v: Value = serde_json::from_str(&report::unused(&input, Since::Days(60), true, false)).unwrap();
@@ -246,25 +190,25 @@ fn usage_collapses_and_applies_default_filters() {
     let repo = fixture_repo();
     let w = world(repo.path());
     let d1 = ago(1);
-    let mut probe = ev("probe", "unslop", Channel::Tool, "P", &d1);
+    let mut probe = event("probe", "unslop", Channel::Tool, "P", &d1);
     probe.actor = Actor::Probe;
-    let mut other = ev("other", "unslop", Channel::Slash, "O", &d1);
+    let mut other = event("other", "unslop", Channel::Slash, "O", &d1);
     other.origin = Origin::Other;
-    let mut stored_authoring = ev("auth", "unslop", Channel::Read, "C", &d1);
+    let mut stored_authoring = event("auth", "unslop", Channel::Read, "C", &d1);
     stored_authoring.authoring = true;
-    let mut sub = ev("sub", "unslop", Channel::Tool, "B", &ago(2));
+    let mut sub = event("sub", "unslop", Channel::Tool, "B", &ago(2));
     sub.actor = Actor::Subagent;
-    let mut codex_a = ev("cx1", "unslop", Channel::Read, "A", &d1);
+    let mut codex_a = event("cx1", "unslop", Channel::Read, "A", &d1);
     codex_a.agent = Agent::Codex;
-    let mut codex_b = ev("cx2", "unslop", Channel::Read, "A", &d1);
+    let mut codex_b = event("cx2", "unslop", Channel::Read, "A", &d1);
     codex_b.agent = Agent::Codex;
     let events = vec![
-        ev("t1", "unslop", Channel::Tool, "A", &d1),
-        ev("t2", "unslop", Channel::Tool, "A", &d1), // same (agent, session, skill, channel)
-        ev("s1", "unslop", Channel::Slash, "A", &d1),
-        ev("r1", "unslop", Channel::Read, "A", &d1),
-        ev("r2", "unslop", Channel::Read, "A", &d1), // a second chunk of the same file
-        ev("f1", "unslop", Channel::Ref, "A", &d1),
+        event("t1", "unslop", Channel::Tool, "A", &d1),
+        event("t2", "unslop", Channel::Tool, "A", &d1), // same (agent, session, skill, channel)
+        event("s1", "unslop", Channel::Slash, "A", &d1),
+        event("r1", "unslop", Channel::Read, "A", &d1),
+        event("r2", "unslop", Channel::Read, "A", &d1), // a second chunk of the same file
+        event("f1", "unslop", Channel::Ref, "A", &d1),
         sub,
         codex_a,
         codex_b,
@@ -272,15 +216,15 @@ fn usage_collapses_and_applies_default_filters() {
         other,
         stored_authoring,
         // Report-time authoring: session D also loads `grade`.
-        ev("g1", "grade", Channel::Tool, "D", &d1),
-        ev("dr", "unslop", Channel::Read, "D", &d1),
-        ev("dt", "unslop", Channel::Tool, "D", &d1), // strong events are never authoring
-        ev("old", "unslop", Channel::Tool, "Z", &ago(40)),
-        ev("ty", "unslop", Channel::Typed, "Y", "2026-02-24T10:00:00Z"),
+        event("g1", "grade", Channel::Tool, "D", &d1),
+        event("dr", "unslop", Channel::Read, "D", &d1),
+        event("dt", "unslop", Channel::Tool, "D", &d1), // strong events are never authoring
+        event("old", "unslop", Channel::Tool, "Z", &ago(40)),
+        event("ty", "unslop", Channel::Typed, "Y", "2026-02-24T10:00:00Z"),
         // goal-execute's only strong event is older than the window.
-        ev("gx", "goal-execute", Channel::Tool, "Q", &ago(40)),
+        event("gx", "goal-execute", Channel::Tool, "Q", &ago(40)),
         // A pruned skill: in the ledger, not in the inventory.
-        ev("pr", "pruned", Channel::Tool, "R", &ago(90)),
+        event("pr", "pruned", Channel::Tool, "R", &ago(90)),
     ];
     let input = w.input(&events);
 
@@ -385,13 +329,13 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
     write(&transcript, "{}\n");
     write(&repo.path().join(".retros/unslop/r.md"), "---\nskill: unslop\ndate: \"2026-10-05\"\nscore: 7\n---\n");
     let w = world(repo.path());
-    let mut live = ev("live", "unslop", Channel::Tool, "A", &ago(1));
+    let mut live = event("live", "unslop", Channel::Tool, "A", &ago(1));
     live.src = format!("{}:1", transcript.display());
     let events = vec![
         live,
-        ev("gone", "unslop", Channel::Slash, "B", &ago(3)),
-        ev("before", "unslop", Channel::Tool, "C", &ago(10)),
-        ev("weak", "unslop", Channel::Read, "D", &ago(3)),
+        event("gone", "unslop", Channel::Slash, "B", &ago(3)),
+        event("before", "unslop", Channel::Tool, "C", &ago(10)),
+        event("weak", "unslop", Channel::Read, "D", &ago(3)),
     ];
     let input = w.input(&events);
     assert!(report::show(&input, "nope", Since::Days(30), 20, false, false).is_err());
@@ -443,7 +387,7 @@ fn show_prints_the_card() {
     let home = std::env::var("HOME").unwrap();
     let w = world(src);
     let at = |id, skill, channel, session, days, cwd: &str| {
-        let mut e = ev(id, skill, channel, session, &ago(days));
+        let mut e = event(id, skill, channel, session, &ago(days));
         e.cwd = Some(cwd.into());
         e.src = format!("{home}/t/{id}.jsonl:7");
         e
@@ -586,7 +530,7 @@ fn show_lists_written_and_real_examples() {
 
     let w = world(src);
     let of = |skill: &str, id: &str, line: usize, days, cwd: &str| {
-        let mut e = ev(id, skill, Channel::Tool, id, &ago(days));
+        let mut e = event(id, skill, Channel::Tool, id, &ago(days));
         e.cwd = Some(cwd.into());
         e.src = format!("{}:{line}", transcript.display());
         e
@@ -598,7 +542,7 @@ fn show_lists_written_and_real_examples() {
     probe.actor = Actor::Probe;
     let mut weak = at("weak", 4, 0, "/w");
     weak.channel = Channel::Read;
-    let gone = ev("gone", "unslop", Channel::Slash, "gone", &ago(5));
+    let gone = event("gone", "unslop", Channel::Slash, "gone", &ago(5));
     let events = vec![
         sub,
         probe,

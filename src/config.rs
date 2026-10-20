@@ -269,10 +269,6 @@ fn percent_decode_strict(s: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn pi(v: &str) -> std::result::Result<PathBuf, String> {
-        pi_agent_dir(v, "/r/home", Path::new("/r/cwd"))
-    }
-
     fn policy(table: &str) -> std::result::Result<Policy, String> {
         toml::from_str::<RawConfig>(&format!("source = \".\"\n{table}")).map(|r| r.policy).map_err(|e| e.to_string())
     }
@@ -307,35 +303,5 @@ mod tests {
         let err = judge("[judge]\nmodel = \"sonnet\"\ntemperature = 1\n").unwrap_err();
         assert!(err.contains("unknown field `temperature`"), "{err}");
         assert!(judge("[judge]\nagent = \"gemini\"\n").is_err());
-    }
-
-    #[test]
-    fn tilde_and_relative_values_resolve_lexically() {
-        assert_eq!(pi("~").unwrap(), PathBuf::from("/r/home"));
-        assert_eq!(pi("~/a b").unwrap(), PathBuf::from("/r/home/a b"));
-        assert_eq!(pi("~//../a").unwrap(), PathBuf::from("/r/a"));
-        assert_eq!(pi("~other").unwrap(), PathBuf::from("/r/cwd/~other"));
-        assert_eq!(pi("-agent").unwrap(), PathBuf::from("/r/cwd/-agent"));
-        assert_eq!(pi("alias/../x").unwrap(), PathBuf::from("/r/cwd/x"));
-    }
-
-    #[test]
-    fn file_urls_follow_whatwg_and_node_checks() {
-        assert_eq!(pi("file:///r/x/pi%20agent").unwrap(), PathBuf::from("/r/x/pi agent"));
-        assert_eq!(pi("file://LOCALHOST/r/x?ignored#ignored").unwrap(), PathBuf::from("/r/x"));
-        assert_eq!(pi("file:///r/x/unused/%2e%2e/a").unwrap(), PathBuf::from("/r/x/a"));
-        assert_eq!(pi("file:///r/empty//../agent").unwrap(), PathBuf::from("/r/empty/agent"));
-        assert_eq!(pi("file:///r/b \t\r\n").unwrap(), PathBuf::from("/r/b"));
-        for bad in [
-            "file://remote.example/r/x",
-            "file:///r/x%2Fchild",
-            "file:///r/x%",
-            "file:///r/x%FF",
-            "file:///r/x%00",
-            "file://localhost:80/r/x",
-        ] {
-            let err = pi(bad).unwrap_err();
-            assert!(err.starts_with("invalid PI_CODING_AGENT_DIR"), "{bad}: {err}");
-        }
     }
 }

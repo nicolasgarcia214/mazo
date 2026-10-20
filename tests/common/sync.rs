@@ -1,17 +1,15 @@
-//! Shared fixture for `tests/sync_port.rs` and `tests/sync.rs`:
+//! Shared fixture for `tests/sync_port.rs`, `tests/sync.rs` and `tests/lifecycle.rs`:
 //! a temporary skills source with a `skima.toml` turning every `[policy]` rule on
 //! and listing four `~`-relative homes, a temporary `HOME`, a Pi directory, and
 //! a private `XDG_DATA_HOME`.
-
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
-use crate::common::real_skills;
+use super::{Skima, real_skills};
 
 pub const PI_EXTENSION: &str = "pi-explicit-skills.ts";
 
@@ -70,8 +68,7 @@ pub struct Fixture {
     pub data: PathBuf,
     pub skills: Vec<String>,
     overrides: Vec<String>,
-    /// Environment overrides; `None` removes the variable.
-    pub env: BTreeMap<String, Option<String>>,
+    run: Skima,
 }
 
 impl Fixture {
@@ -87,12 +84,8 @@ impl Fixture {
         let home = root.join("home");
         fs::create_dir(&home).unwrap();
         let data = root.join("xdg data");
-        let mut env = BTreeMap::new();
-        env.insert("HOME".into(), Some(s(&home)));
-        env.insert("PI_CODING_AGENT_DIR".into(), Some(s(&agent)));
-        env.insert("SKIMA_CONFIG".into(), Some(s(&source.join("skima.toml"))));
-        env.insert("XDG_DATA_HOME".into(), Some(s(&data)));
-        env.insert("PI_CODING_AGENT_SESSION_DIR".into(), None);
+        let mut run = Skima::new(&root, &home, &source.join("skima.toml"), &data);
+        run.set("PI_CODING_AGENT_DIR", Some(agent.as_os_str())).set("PI_CODING_AGENT_SESSION_DIR", None);
         let mut fx = Fixture {
             target: agent.join("skills"),
             _temp: temp,
@@ -103,7 +96,7 @@ impl Fixture {
             data,
             skills: pi_skills(),
             overrides: Vec::new(),
-            env,
+            run,
         };
         for name in fx.skills.clone() {
             fx.add_skill(&name);
@@ -145,7 +138,7 @@ impl Fixture {
     }
 
     pub fn set_env(&mut self, key: &str, value: Option<&Path>) {
-        self.env.insert(key.into(), value.map(s));
+        self.run.set(key, value.map(Path::as_os_str));
     }
 
     pub fn skima(&self, args: &[&str]) -> Run {
@@ -153,15 +146,7 @@ impl Fixture {
     }
 
     pub fn skima_in(&self, cwd: &Path, args: &[&str]) -> Run {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skima"));
-        cmd.args(args).current_dir(cwd);
-        for (k, v) in &self.env {
-            match v {
-                Some(v) => cmd.env(k, v),
-                None => cmd.env_remove(k),
-            };
-        }
-        Run(cmd.output().unwrap())
+        Run(self.run.command(&[], args).current_dir(cwd).output().unwrap())
     }
 
     /// `skima sync --agent pi` must fail with an `ERROR:` before creating the
@@ -186,10 +171,10 @@ impl Run {
         self.0.status.code().expect("exited")
     }
     pub fn stdout(&self) -> String {
-        String::from_utf8_lossy(&self.0.stdout).into_owned()
+        super::stdout(&self.0)
     }
     pub fn stderr(&self) -> String {
-        String::from_utf8_lossy(&self.0.stderr).into_owned()
+        super::stderr(&self.0)
     }
     pub fn assert_ok(&self) -> &Run {
         assert_eq!(self.code(), 0, "stdout:\n{}\nstderr:\n{}", self.stdout(), self.stderr());

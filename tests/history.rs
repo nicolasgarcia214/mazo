@@ -7,11 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{git, write};
-use jiff::Timestamp;
+use common::{Skima, World, git, stderr, write};
 use skima::evals;
 use skima::inventory::Inventory;
-use skima::report::{self, Input, Since};
+use skima::report::{self, Since};
 
 /// `git add -A` and commit everything under `repo` on `date`.
 fn commit(repo: &Path, subject: &str, date: &str) {
@@ -163,22 +162,13 @@ fn outside_a_worktree_history_is_absent_and_no_grade_is_stale() {
     let src = tmp.path();
     skill(src, "s");
     write(&src.join(".grades/s/g.md"), "---\ndate: 2026-01-01\nscore: 7\n---\n");
-    let inv = Inventory::load(src).unwrap();
-    assert!(inv.history.is_none() && inv.worktree.is_none());
-    let g = evals::load(&inv, "s").grades.pop().unwrap();
+    let w = World::new(src, &[]);
+    assert!(w.inv.history.is_none() && w.inv.worktree.is_none());
+    let g = evals::load(&w.inv, "s").grades.pop().unwrap();
     assert!(!g.stale());
 
-    let cfg = skima::config::Config {
-        source: src.into(),
-        loose: vec![],
-        homes: vec![],
-        policy: Default::default(),
-        judge: Default::default(),
-    };
-    let coverage = Default::default();
-    let now: Timestamp = "2026-10-13T12:00:00Z".parse().unwrap();
-    let input = Input { cfg: &cfg, inv: &inv, events: &[], coverage: &coverage, audits: &Default::default(), now };
-    let v: serde_json::Value = serde_json::from_str(&report::unused(&input, Since::Days(60), true, false)).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&report::unused(&w.input(&[]), Since::Days(60), true, false)).unwrap();
     assert_eq!(v["skills"][0]["status"], "unused", "no new flag without history");
 }
 
@@ -222,23 +212,12 @@ fn a_report_runs_one_log_and_one_status_whatever_the_skill_count() {
             ),
         );
         Command::new("chmod").arg("+x").arg(bin.join("git")).status().unwrap();
-        let path = std::env::join_paths(
-            std::iter::once(bin.clone()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-        )
-        .unwrap();
+        let run = Skima::new(&root, &root, &config, &root.join("xdg"));
 
         for args in [&["usage", "--json"][..], &["unused", "--json"], &["show", "s0", "--json"]] {
             let _ = fs::remove_file(&log);
-            let out = Command::new(env!("CARGO_BIN_EXE_skima"))
-                .args(args)
-                .current_dir(&root)
-                .env("PATH", &path)
-                .env("HOME", &root)
-                .env("XDG_DATA_HOME", root.join("xdg"))
-                .env("SKIMA_CONFIG", &config)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            let out = run.output(args);
+            assert!(out.status.success(), "{args:?}: {}", stderr(&out));
             let calls: Vec<String> = fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
             let sub = |c: &String| c.split(' ').nth(3).unwrap_or("").to_string();
             let subs: Vec<String> = calls.iter().map(sub).collect();
