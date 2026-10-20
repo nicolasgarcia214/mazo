@@ -4,6 +4,7 @@
 mod common;
 
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -233,7 +234,11 @@ fn an_expired_session_takes_no_turn_in_the_round_robin() {
 /// else `replies/default` with `LINE` set to the first line its input cites;
 /// to stdout or the `-o` file. The Codex stub also leaves its `CODEX_HOME`, that
 /// home's listing and where its `auth.json` points, then writes a session and
-/// a log into that home, as Codex would.
+/// a log into that home, as Codex would. `claude auth status` is no call: it
+/// leaves its environment in `auth_status_env`, its working directory in
+/// `auth_status_pwd` and that directory's listing in `auth_status_ls`, and
+/// prints `auth_status`, else
+/// a claude.ai login.
 struct Fixture {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -293,12 +298,20 @@ impl Fixture {
         let r = root.display();
         let stub = format!(
             r#"#!/bin/sh
+if [ "$1 $2" = "auth status" ]; then
+  env >> {r}/auth_status_env
+  pwd > {r}/auth_status_pwd
+  ls -A > {r}/auth_status_ls
+  cat {r}/auth_status 2>/dev/null || echo '{{"loggedIn":true,"authMethod":"claude.ai"}}'
+  exit
+fi
 mkdir -p {r}/calls
 n=$(($(ls {r}/calls | wc -l) + 1))
 c={r}/calls/$n
 mkdir "$c"
 for a in "$@"; do printf '%s\0' "$a"; done > "$c/argv"
 pwd > "$c/pwd"
+env > "$c/env"
 ls -A > "$c/ls"
 cat > "$c/stdin"
 in="$c/stdin"
@@ -337,7 +350,7 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
             common::write(&root.join("bin").join(agent), &stub);
             Command::new("chmod").arg("+x").arg(root.join("bin").join(agent)).status().unwrap();
         }
-        common::write(&root.join("home/.codex/auth.json"), "{\"token\":\"t\"}\n");
+        common::write(&root.join("home/.codex/auth.json"), "{\"auth_mode\":\"chatgpt\",\"token\":\"t\"}\n");
         common::write(&root.join("home/.pi/agent/auth.json"), "{}\n");
         let fx = Fixture { _temp: temp, root };
         fx.reply("default", "0.1", &answer("LINE"));
@@ -366,8 +379,20 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
     }
 
     fn skima(&self, args: &[&str]) -> Output {
+        self.skima_env(&[], args)
+    }
+
+    /// `skima args…` with `env` set for this run.
+    fn skima_env(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
         let root = &self.root;
-        Skima::new(root, &root.join("home"), &root.join("skills/skima.toml"), &root.join("data")).output(args)
+        let skima = Skima::new(root, &root.join("home"), &root.join("skills/skima.toml"), &root.join("data"));
+        skima.command(env, args).output().unwrap()
+    }
+
+    /// The environments `claude auth status` ran in, one `env` listing after
+    /// another; none when it never ran.
+    fn auth_status_env(&self) -> Option<String> {
+        fs::read_to_string(self.root.join("auth_status_env")).ok()
     }
 
     fn data(&self) -> PathBuf {
@@ -497,7 +522,8 @@ fn dry_run_estimates_dollars_from_the_recorded_cost_per_character() {
     );
     let text = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
     let micros = total as u64 * 100;
-    let want = format!("cost: about ${}, at the rate of 2 earlier session records\n", audit::cents(micros));
+    let want =
+        format!("cost: about ${} API-equivalent, at the rate of 2 earlier session records\n", audit::cents(micros));
     assert!(text.ends_with(&want), "{text}");
     assert!(fx.calls().is_empty());
 }
@@ -629,7 +655,10 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     let records = fx.records();
     assert_eq!(records.len(), 2);
     for r in &records {
-        assert_eq!(r["judge"], serde_json::json!({"agent": "codex", "model": "gpt-5", "cost_usd": null}));
+        assert_eq!(
+            r["judge"],
+            serde_json::json!({"agent": "codex", "model": "gpt-5", "cost_usd": null, "billing": "subscription"})
+        );
     }
     // Stage 2 has no cap to pass and the skill schema in its file; its record has no cost.
     let report = &calls[2];
@@ -638,7 +667,10 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     assert!(!report.argv.contains(&"--max-budget-usd".to_string()));
     assert_eq!(fx.left(report, "codex_home_ls").unwrap(), "auth.json\n");
     let skill = &fx.skill_records()[0];
-    assert_eq!(skill["judge"], serde_json::json!({"agent": "codex", "model": "gpt-5", "cost_usd": null}));
+    assert_eq!(
+        skill["judge"],
+        serde_json::json!({"agent": "codex", "model": "gpt-5", "cost_usd": null, "billing": "subscription"})
+    );
     assert_eq!(skill["rates"]["followed"]["of"], 2);
     let json: serde_json::Value =
         serde_json::from_str(&stdout(&fx.skima(&["audit", "unslop", "--resynth", "--json"]))).unwrap();
@@ -701,7 +733,10 @@ fn the_pi_judge_reads_its_input_file_and_its_final_message_is_validated() {
     assert!(fx.left(report, "input").unwrap().starts_with("<skill name=\"unslop\">"));
     assert!(!report.argv.contains(&"--max-budget-usd".to_string()));
     let skill = &fx.skill_records()[0];
-    assert_eq!(skill["judge"], serde_json::json!({"agent": "pi", "model": "sonnet", "cost_usd": null}));
+    assert_eq!(
+        skill["judge"],
+        serde_json::json!({"agent": "pi", "model": "sonnet", "cost_usd": null, "billing": "subscription"})
+    );
     assert_eq!(skill["sessions"], serde_json::json!(["c", "p"]));
     for (call, c) in calls.iter().zip([&candidates[0], &candidates[0], &candidates[1], &candidates[2]]) {
         let file = call.argv.last().unwrap().strip_prefix('@').unwrap();
@@ -718,7 +753,10 @@ fn the_pi_judge_reads_its_input_file_and_its_final_message_is_validated() {
     let sessions: Vec<&str> = records.iter().map(|r| r["session"].as_str().unwrap()).collect();
     assert_eq!(sessions, ["c", "p"]);
     for r in &records {
-        assert_eq!(r["judge"], serde_json::json!({"agent": "pi", "model": "sonnet", "cost_usd": null}));
+        assert_eq!(
+            r["judge"],
+            serde_json::json!({"agent": "pi", "model": "sonnet", "cost_usd": null, "billing": "subscription"})
+        );
         assert_eq!(r["result"]["outcome"], "achieved");
     }
     assert!(!fx.data().join("codex-judge-home").exists());
@@ -738,7 +776,10 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     assert_eq!(fx.records().len(), 8);
     assert_eq!(fx.skill_records().len(), 1);
     let text = stdout(&out);
-    assert!(text.starts_with("unslop: 8 judged, 0 dropped, $0.90 spent of $1.00\n"), "{text}");
+    assert!(
+        text.starts_with("unslop: 8 judged, 0 dropped, $0.90 API-equivalent spent of $1.00 API-equivalent\n"),
+        "{text}"
+    );
     assert!(text.contains("\nbudget used up; left for the next run: 4\n"), "{text}");
     let judged: HashSet<String> = fx.records().iter().map(|r| r["session"].as_str().unwrap().to_string()).collect();
     let named: Vec<&str> = text.lines().skip(2).take(4).map(|l| l.trim().strip_prefix("claude ").unwrap()).collect();
@@ -756,7 +797,11 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     assert_eq!(all[24], "0.25", "stage 2 gets $1 - $0.744");
     assert!(!all.contains(&"0.00".to_string()));
     // $0.744 in stage 1 and $0.10 for the skill report.
-    assert!(stdout(&out).starts_with("unslop: 24 judged, 0 dropped, $0.84 spent of $1.00\n"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).starts_with("unslop: 24 judged, 0 dropped, $0.84 API-equivalent spent of $1.00 API-equivalent\n"),
+        "{}",
+        stdout(&out)
+    );
 
     // $0.30 a call: stage 1 judges 3 sessions for $0.90 and stage 2 gets $0.10.
     let fx = Fixture::new("", claude_sessions(12));
@@ -776,8 +821,14 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     assert_eq!(fx.records().len(), 2);
     assert!(fx.skill_records().is_empty());
     let text = stdout(&out);
-    assert!(text.starts_with("unslop: 2 judged, 0 dropped, $1.00 spent of $1.00\n"), "{text}");
-    assert!(text.contains("unslop: skill report skipped: $0.00 of the budget is left, under $0.01"), "{text}");
+    assert!(
+        text.starts_with("unslop: 2 judged, 0 dropped, $1.00 API-equivalent spent of $1.00 API-equivalent\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("unslop: skill report skipped: $0.00 API-equivalent of the budget is left, under $0.01"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -810,7 +861,7 @@ fn costs_are_read_from_their_decimal_text_into_micro_dollars() {
     fx.reply("default", "0.1234567", &answer("LINE"));
     fx.skima(&["audit", "unslop"]);
     let line = fs::read_to_string(fx.data().join("audits.jsonl")).unwrap();
-    assert!(line.contains("\"cost_usd\":0.123456}"), "{line}");
+    assert!(line.contains("\"cost_usd\":0.123456,"), "{line}");
 }
 
 #[test]
@@ -850,7 +901,10 @@ fn session_records_hold_every_field_and_are_judged_once() {
         assert!(r["audited_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
         assert_eq!(r["skill_commit"], serde_json::Value::Null, "the source is no repository");
         assert_eq!(r["condensed_chars"], c.condensed.chars().count());
-        assert_eq!(r["judge"], serde_json::json!({"agent": "claude", "model": "sonnet", "cost_usd": 0.1}));
+        assert_eq!(
+            r["judge"],
+            serde_json::json!({"agent": "claude", "model": "sonnet", "cost_usd": 0.1, "billing": "subscription"})
+        );
         assert_eq!(r["prompt"], "session-v1");
         let result: audit::Verdict = serde_json::from_value(r["result"].clone()).unwrap();
         assert_eq!(result.outcome, audit::Outcome::Achieved);
@@ -890,7 +944,11 @@ fn an_invalid_answer_is_retried_once_then_dropped() {
         "\n<rejected-answer>\nYour previous answer was rejected: cites L999, which is not in the session. \
          Answer again with that fixed.\n</rejected-answer>\n"
     );
-    assert!(stdout(&out).starts_with("unslop: 2 judged, 1 dropped, $0.60 spent of $1.00\n"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).starts_with("unslop: 2 judged, 1 dropped, $0.60 API-equivalent spent of $1.00 API-equivalent\n"),
+        "{}",
+        stdout(&out)
+    );
     let err = stderr(&out);
     assert!(err.contains("warning: x: judge answer dropped after one retry"), "{err}");
     assert!(err.contains("quotes the session"), "{err}");
@@ -947,7 +1005,10 @@ fn a_call_whose_output_is_no_json_stops_the_run_at_no_cost() {
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
     let text = stdout(&out);
-    assert!(text.starts_with("unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n"), "{text}");
+    assert!(
+        text.starts_with("unslop: 0 judged, 0 dropped, $0.00 API-equivalent spent of $1.00 API-equivalent\n"),
+        "{text}"
+    );
     assert!(text.contains("the judge failed; left for the next run: 3\n"), "{text}");
     assert!(stderr(&out).contains("the judge failed without an answer"), "{}", stderr(&out));
     assert!(fx.records().is_empty());
@@ -967,7 +1028,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
     assert_eq!(
         stdout(&out),
-        "unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n\
+        "unslop: 0 judged, 0 dropped, $0.00 API-equivalent spent of $1.00 API-equivalent\n\
          the judge failed; left for the next run: 2\n  claude s00\n  claude s01\n"
     );
     let err = stderr(&out);
@@ -1000,7 +1061,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     assert_eq!(fx.calls().len(), 2);
     assert_eq!(
         stdout(&out),
-        "unslop: 1 judged, 0 dropped, $0.10 spent of $1.00\n\
+        "unslop: 1 judged, 0 dropped, $0.10 API-equivalent spent of $1.00 API-equivalent\n\
          unslop: skill report stopped: the judge failed without an answer (exit status: 1): Invalid API key\n"
     );
     assert!(stderr(&out).contains("ERROR: skill report: the judge failed without an answer"), "{}", stderr(&out));
@@ -1014,7 +1075,10 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 9, "eight sessions, then the skill report");
     let text = stdout(&out);
-    assert!(text.starts_with("unslop: 8 judged, 0 dropped, $0.80 spent of $1.00\n"), "{text}");
+    assert!(
+        text.starts_with("unslop: 8 judged, 0 dropped, $0.80 API-equivalent spent of $1.00 API-equivalent\n"),
+        "{text}"
+    );
     assert!(text.contains("\nbudget used up; left for the next run: 4\n"), "{text}");
     assert!(!text.contains("the judge failed;"), "{text}");
     assert!(
@@ -1059,7 +1123,10 @@ fn a_claude_judge_killed_by_a_signal_skima_did_not_send_stops_the_run_at_its_cap
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1);
     let text = stdout(&out);
-    assert!(text.starts_with("unslop: 0 judged, 0 dropped, $0.75 spent of $1.00\n"), "{text}");
+    assert!(
+        text.starts_with("unslop: 0 judged, 0 dropped, $0.75 API-equivalent spent of $1.00 API-equivalent\n"),
+        "{text}"
+    );
     let err = stderr(&out);
     let want =
         format!("ERROR: s00: the judge failed without an answer (signal: 9 (SIGKILL))\n  dying\n  {}\n", &long[..200]);
@@ -1278,7 +1345,10 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
     assert_eq!(r["skill"], "unslop");
     assert!(r["audited_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
     assert_eq!(r["sessions"], serde_json::json!(["s00", "s01"]));
-    assert_eq!(r["judge"], serde_json::json!({"agent": "claude", "model": "sonnet", "cost_usd": 0.1}));
+    assert_eq!(
+        r["judge"],
+        serde_json::json!({"agent": "claude", "model": "sonnet", "cost_usd": 0.1, "billing": "subscription"})
+    );
     assert_eq!(r["prompt"], "skill-v1");
     assert_eq!(r["result"], skill_answer("s00"));
 
@@ -1287,7 +1357,7 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
     let text = stdout(&show);
     let date = common::local_date(r["audited_at"].as_str().unwrap());
     let verdict = skill_answer("s00")["verdict"].as_str().unwrap().to_string();
-    assert!(text.contains(&format!("audit: {date}, 2 sessions: {verdict}\n")), "{text}");
+    assert!(text.contains(&format!("audit: {date}, 2 sessions, subscription billing: {verdict}\n")), "{text}");
     assert!(!text.contains("OLD VERDICT"), "{text}");
     assert!(text.contains("  followed 2 of 2, achieved 2 of 2, abandoned or redone 0 of 2\n"), "{text}");
     assert!(
@@ -1320,4 +1390,234 @@ fn json_prints_the_skill_record_the_counts_and_the_spend() {
     let idle = fx.skima(&["audit", "unslop", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&idle)).unwrap();
     assert_eq!(v, serde_json::json!({"record": null, "written": 0, "dropped": 0, "spent_usd": 0, "left": []}));
+}
+
+/// The variables that bill an API key or a cloud account instead of a login.
+const BILLED: [&str; 7] = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+];
+
+#[test]
+fn under_subscription_no_judge_call_sees_a_billing_variable_and_under_api_every_one_does() {
+    let env: Vec<(&str, &OsStr)> = BILLED.iter().map(|v| (*v, OsStr::new("set"))).collect();
+    let has = |listing: &str, var: &str| listing.lines().any(|l| l == format!("{var}=set"));
+    for agent in ["claude", "codex", "pi"] {
+        let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\n"), claude_sessions(1));
+        if agent != "claude" {
+            fx.raw_reply("default", &answer("LINE").to_string());
+            fx.raw_reply("skill", &skill_answer("SESSION").to_string());
+        }
+        if agent == "pi" {
+            fx.raw_reply("default", &pi_stream(&answer("LINE").to_string(), "stop"));
+            fx.raw_reply("skill", &pi_stream(&skill_answer("SESSION").to_string(), "stop"));
+        }
+        let out = fx.skima_env(&env, &["audit", "unslop"]);
+        assert_eq!(out.status.code(), Some(0), "{agent}: {}", stderr(&out));
+        let calls = fx.calls();
+        assert_eq!(calls.len(), 2, "{agent}");
+        for call in &calls {
+            let listing = fx.left(call, "env").unwrap();
+            assert!(listing.contains("PATH="), "{agent}: {listing}");
+            assert!(BILLED.iter().all(|v| !has(&listing, v)), "{agent}: {listing}");
+        }
+        // Claude's login check runs once, in the environment the calls get.
+        match fx.auth_status_env() {
+            Some(listing) if agent == "claude" => {
+                assert_eq!(listing.lines().filter(|l| l.starts_with("PATH=")).count(), 1, "one check per run");
+                assert!(BILLED.iter().all(|v| !has(&listing, v)), "{listing}");
+            }
+            None if agent != "claude" => {}
+            other => panic!("{agent}: auth status ran as {other:?}"),
+        }
+
+        let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\nbilling = \"api\"\n"), claude_sessions(1));
+        fx.raw_reply("1", &fs::read_to_string(fx.root.join("replies/default")).unwrap());
+        fx.skima_env(&env, &["audit", "unslop", "--limit", "1"]);
+        let calls = fx.calls();
+        assert!(!calls.is_empty(), "{agent}");
+        let listing = fx.left(&calls[0], "env").unwrap();
+        assert!(BILLED.iter().all(|v| has(&listing, v)), "{agent}: {listing}");
+        assert_eq!(fx.auth_status_env(), None, "{agent}: api billing has no login check");
+    }
+}
+
+#[test]
+fn a_claude_login_that_would_bill_otherwise_exits_2_before_any_judge_call() {
+    let fx = Fixture::new("", claude_sessions(2));
+    common::write(&fx.root.join("auth_status"), "{\"loggedIn\":true,\"authMethod\":\"api_key_helper\"}\n");
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        stderr(&out),
+        "ERROR: the Claude judge would bill api_key_helper; log in with claude /login, or set billing = \"api\" under [judge]\n"
+    );
+    assert_eq!(stdout(&out), "");
+    assert!(fx.auth_status_env().is_some());
+    assert!(fx.calls().is_empty() && fx.lines().is_empty());
+    // The check runs where a judge call would, not in skima's working directory.
+    let pwd = fs::read_to_string(fx.root.join("auth_status_pwd")).unwrap();
+    assert!(Path::new(pwd.trim_end()).starts_with(fx.data().join("audit-runs")), "{pwd}");
+    assert_eq!(fs::read_to_string(fx.root.join("auth_status_ls")).unwrap(), "");
+    assert_eq!(fs::read_dir(fx.data().join("audit-runs")).unwrap().count(), 0, "the check's directory is left");
+
+    // An OAuth token is a login; so is claude.ai, the stub's default.
+    common::write(&fx.root.join("auth_status"), "{\"loggedIn\":true,\"authMethod\":\"oauth_token\"}\n");
+    assert_eq!(fx.skima(&["audit", "unslop", "--limit", "1"]).status.code(), Some(0));
+    assert_eq!(fx.calls().len(), 2);
+}
+
+#[test]
+fn a_codex_judge_without_a_chatgpt_login_in_the_configured_home_is_never_started() {
+    let fx = Fixture::new("[judge]\nagent = \"codex\"\n", claude_sessions(1));
+    fx.raw_reply("default", &answer("LINE").to_string());
+    fx.raw_reply("skill", &skill_answer("SESSION").to_string());
+    // `~/.codex` holds a ChatGPT login, but the configured Codex home is read.
+    let home = fx.root.join("home/codex");
+    common::write(&home.join("auth.json"), "{\"auth_mode\":\"apikey\",\"OPENAI_API_KEY\":\"k\"}\n");
+    let config = fx.root.join("skills/skima.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let codex = format!("[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"{}\"\n", home.display());
+    fs::write(&config, format!("{text}{codex}")).unwrap();
+
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let want = format!(
+        "ERROR: {}: no ChatGPT login for the Codex judge; run codex login, or set billing = \"api\" under [judge]\n",
+        home.join("auth.json").display()
+    );
+    assert_eq!(stderr(&out), want);
+    assert!(fx.calls().is_empty());
+    assert!(!fx.data().join("codex-judge-home").exists());
+
+    // An unreadable or malformed `auth.json` refuses too, and says why.
+    let needs = "; the Codex judge needs a ChatGPT login: run codex login, or set billing = \"api\" under [judge]\n";
+    common::write(&home.join("auth.json"), "{not json\n");
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.starts_with(&format!("ERROR: {}: not JSON: ", home.join("auth.json").display())), "{err}");
+    assert!(err.ends_with(needs), "{err}");
+    fs::remove_file(home.join("auth.json")).unwrap();
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.starts_with(&format!("ERROR: {}: No such file", home.join("auth.json").display())), "{err}");
+    assert!(err.ends_with(needs), "{err}");
+    assert!(fx.calls().is_empty());
+
+    common::write(&home.join("auth.json"), "{\"auth_mode\":\"chatgpt\"}\n");
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 2);
+    assert_eq!(fx.left(&fx.calls()[0], "auth").unwrap().trim_end(), home.join("auth.json").display().to_string());
+}
+
+#[test]
+fn a_run_that_starts_no_judge_call_checks_no_login() {
+    let refused = "{\"loggedIn\":true,\"authMethod\":\"api_key_helper\"}\n";
+    let fx = Fixture::new("", three_agents);
+    common::write(&fx.root.join("auth_status"), refused);
+    let out = fx.skima(&["audit", "unslop", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+
+    let idle = Fixture::new("", |_| Vec::new());
+    common::write(&idle.root.join("auth_status"), refused);
+    let out = idle.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "unslop: no session to judge\n");
+    for fx in [&fx, &idle] {
+        assert_eq!(fx.auth_status_env(), None, "auth status ran");
+        assert!(fx.calls().is_empty());
+    }
+    // Once every session is judged, `--resynth` still starts a call, so it checks.
+    fs::remove_file(fx.root.join("auth_status")).unwrap();
+    assert_eq!(fx.skima(&["audit", "unslop"]).status.code(), Some(0));
+    let calls = fx.calls().len();
+    common::write(&fx.root.join("auth_status"), refused);
+    assert_eq!(fx.skima(&["audit", "unslop"]).status.code(), Some(0), "nothing left to judge");
+    let out = fx.skima(&["audit", "unslop", "--resynth"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), calls);
+}
+
+#[test]
+fn dry_run_names_the_billing_and_the_pi_judges_model() {
+    let fx = Fixture::new("", three_agents);
+    assert!(stdout(&fx.skima(&["audit", "unslop", "--dry-run"])).contains("\nbilling: subscription\ninput: "));
+    let fx = Fixture::new("[judge]\nagent = \"codex\"\nbilling = \"api\"\n", three_agents);
+    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    assert!(dry.contains("\nbilling: api\ninput: "), "{dry}");
+
+    let fx = Fixture::new("[judge]\nagent = \"pi\"\n", three_agents);
+    let settings = fx.root.join("home/.pi/agent/settings.json");
+    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let want = format!(
+        "\nbilling: subscription\nmodel: unknown; {} names no defaultProvider and defaultModel\n",
+        settings.display()
+    );
+    assert!(dry.contains(&want), "{dry}");
+    common::write(&settings, "{\"defaultProvider\":\"openrouter\",\"defaultModel\":\"anthropic/claude-sonnet\"}\n");
+    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    assert!(dry.contains("\nbilling: subscription\nmodel: openrouter/anthropic/claude-sonnet\ninput: "), "{dry}");
+    let fx = Fixture::new("[judge]\nagent = \"pi\"\nmodel = \"sonnet\"\nbilling = \"api\"\n", three_agents);
+    common::write(
+        &fx.root.join("home/.pi/agent/settings.json"),
+        "{\"defaultProvider\":\"openrouter\",\"defaultModel\":\"x\"}\n",
+    );
+    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    assert!(dry.contains("\nbilling: api\nmodel: sonnet\ninput: "), "{dry}");
+    assert!(fx.calls().is_empty());
+}
+
+#[test]
+fn api_billing_prints_plain_dollars_and_records_say_who_paid() {
+    let fx = Fixture::new("[judge]\nbilling = \"api\"\n", claude_sessions(1));
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped, $0.20 spent of $1.00\n"), "{}", stdout(&out));
+    for r in fx.lines() {
+        assert_eq!(r["judge"]["billing"], "api", "{r}");
+    }
+    let text = stdout(&fx.skima(&["show", "unslop"]));
+    assert!(text.contains(", 1 sessions, api billing: "), "{text}");
+}
+
+#[test]
+fn a_record_written_before_billing_was_recorded_reads_as_unknown() {
+    let fx = Fixture::new("", claude_sessions(1));
+    fx.skima(&["audit", "unslop"]);
+    let mut record = fx.skill_records().pop().unwrap();
+    record["judge"].as_object_mut().unwrap().remove("billing");
+    fs::write(fx.data().join("audits.jsonl"), format!("{record}\n")).unwrap();
+
+    let show = fx.skima(&["show", "unslop"]);
+    assert_eq!(show.status.code(), Some(0), "{}", stderr(&show));
+    assert!(stdout(&show).contains(", 1 sessions, unknown billing: "), "{}", stdout(&show));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&fx.skima(&["show", "unslop", "--json"]))).unwrap();
+    assert_eq!(json["audit"]["judge"]["billing"], serde_json::Value::Null);
+    let page = fx.root.join("report.html");
+    let out = fx.skima(&["report", "--out", page.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(fs::read_to_string(&page).unwrap().contains(", 1 sessions, unknown billing</span>"));
+}
+
+#[test]
+fn a_judge_failure_under_subscription_names_api_billing() {
+    let hint = "hint: to judge with an API key instead, set billing = \"api\" under [judge]\n";
+    for (billing, stage) in [("subscription", "1"), ("subscription", "2"), ("api", "1")] {
+        let fx = Fixture::new(&format!("[judge]\nbilling = \"{billing}\"\n"), claude_sessions(1));
+        fx.script(stage, &format!("echo 'Not logged in'\n{FAIL}"));
+        let out = fx.skima(&["audit", "unslop"]);
+        assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+        let err = stderr(&out);
+        assert!(err.contains("the judge failed without an answer"), "{err}");
+        assert_eq!(err.ends_with(hint), billing == "subscription", "{billing} {stage}: {err}");
+        assert_eq!(err.matches("hint:").count(), usize::from(billing == "subscription"), "{err}");
+    }
 }

@@ -28,11 +28,31 @@ pub struct Judge {
     pub agent: Agent,
     /// Passed as `--model` (`-m` for Codex); unset means the agent's own default.
     pub model: Option<String>,
+    pub billing: Billing,
 }
 
 impl Default for Judge {
     fn default() -> Judge {
-        Judge { agent: Agent::Claude, model: None }
+        Judge { agent: Agent::Claude, model: None, billing: Billing::Subscription }
+    }
+}
+
+/// Who pays for the judge's calls. Under `Subscription` every call runs
+/// without the variables that would bill an API key or a cloud account, after
+/// a login check; under `Api` the environment passes unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Billing {
+    Subscription,
+    Api,
+}
+
+impl Billing {
+    pub fn name(self) -> &'static str {
+        match self {
+            Billing::Subscription => "subscription",
+            Billing::Api => "api",
+        }
     }
 }
 
@@ -292,10 +312,15 @@ mod tests {
     }
 
     #[test]
-    fn judge_table_takes_agent_and_model_only() {
+    fn judge_table_takes_agent_model_and_billing_only() {
         for table in ["", "[judge]\n"] {
             let j = judge(table).unwrap();
-            assert_eq!((j.agent, j.model), (Agent::Claude, None), "{table:?}");
+            assert_eq!((j.agent, j.model, j.billing), (Agent::Claude, None, Billing::Subscription), "{table:?}");
+        }
+        assert_eq!(judge("[judge]\nbilling = \"subscription\"\n").unwrap().billing, Billing::Subscription);
+        assert_eq!(judge("[judge]\nbilling = \"api\"\n").unwrap().billing, Billing::Api);
+        for bad in ["\"API\"", "\"apikey\"", "\"\"", "true"] {
+            assert!(judge(&format!("[judge]\nbilling = {bad}\n")).is_err(), "{bad}");
         }
         let j = judge("[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\n").unwrap();
         assert_eq!((j.agent, j.model.as_deref()), (Agent::Codex, Some("gpt-5")));

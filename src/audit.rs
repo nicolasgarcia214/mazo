@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder};
 use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::os::unix::fs::DirBuilderExt;
@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters;
-use crate::config::{Home, Judge};
+use crate::config::{Billing, Home, Judge};
 use crate::evals::Evals;
 use crate::inventory::git;
 use crate::ledger::{self, Actor, Agent, Event, name};
@@ -531,6 +531,98 @@ struct ClaudeOutput<'a> {
     structured_output: Option<Value>,
 }
 
+/// The variables that bill an API key or a cloud account instead of a login:
+/// Claude's key and token, its cloud routes, and the keys Codex and Pi may read.
+const BILLED: [&str; 7] = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+];
+
+/// Removes [`BILLED`] from `cmd`'s environment under `subscription`.
+fn scrub(cmd: &mut Command, billing: Billing) {
+    if billing == Billing::Subscription {
+        for var in BILLED {
+            cmd.env_remove(var);
+        }
+    }
+}
+
+/// How long `claude auth status` may run before the login check fails.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Under `subscription`, the check a run makes once before its first judge
+/// call, in the environment and the kind of fresh empty directory the calls
+/// get: Claude's `auth status` must report a claude.ai or OAuth-token login,
+/// and the user's Codex `auth.json` a ChatGPT login. Pi picks its provider
+/// from its own settings, so it is not checked. The error says what would be
+/// billed, or why the login could not be read.
+pub fn login(a: &Audit) -> Result<()> {
+    if a.judge.billing == Billing::Api {
+        return Ok(());
+    }
+    match a.judge.agent {
+        Agent::Claude => {
+            let (_, dir) = run_dir(a.data)?;
+            let checked = claude_login(OsStr::new("claude"), &dir, AUTH_TIMEOUT);
+            fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            checked
+        }
+        Agent::Codex => {
+            let path = a.codex_auth.display();
+            let unread = |why: String| {
+                format!(
+                    "{path}: {why}; the Codex judge needs a ChatGPT login: run codex login, or set billing = \"api\" under [judge]"
+                )
+            };
+            let bytes = fs::read(a.codex_auth).map_err(|e| unread(e.to_string()))?;
+            let auth: Value = serde_json::from_slice(&bytes).map_err(|e| unread(format!("not JSON: {e}")))?;
+            if auth["auth_mode"] == "chatgpt" {
+                return Ok(());
+            }
+            Err(format!(
+                "{path}: no ChatGPT login for the Codex judge; run codex login, or set billing = \"api\" under [judge]"
+            ))
+        }
+        Agent::Pi => Ok(()),
+    }
+}
+
+/// `program auth status` run in `dir` without [`BILLED`], killed after
+/// `limit`: Ok for a claude.ai or OAuth-token login.
+fn claude_login(program: &OsStr, dir: &Path, limit: Duration) -> Result<()> {
+    let mut cmd = Command::new(program);
+    cmd.args(["auth", "status"]).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    scrub(&mut cmd, Billing::Subscription);
+    let failed = |e: std::io::Error| format!("claude auth status: {e}");
+    let check = "check it with claude auth status, or set billing = \"api\" under [judge]";
+    let Some(out) = wait(cmd.spawn().map_err(failed)?, None, limit).map_err(failed)? else {
+        let secs = limit.as_secs();
+        return Err(format!("claude auth status gave no answer within {secs} seconds; {check}"));
+    };
+    let status: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    match (out.status.success(), status["authMethod"].as_str()) {
+        (true, Some("claude.ai" | "oauth_token")) => Ok(()),
+        (_, Some(method)) if !matches!(method, "claude.ai" | "oauth_token") => Err(format!(
+            "the Claude judge would bill {method}; log in with claude /login, or set billing = \"api\" under [judge]"
+        )),
+        _ => Err(format!("could not read the Claude judge's login from claude auth status ({}); {check}", out.status)),
+    }
+}
+
+/// A fresh empty directory under `<data>/audit-runs/`, and its unique name.
+fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
+    let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
+    let runs = data.join("audit-runs");
+    let dir = runs.join(&unique);
+    fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    Ok((unique, dir))
+}
+
 /// One judge call: [`command`]'s argv run in a fresh empty directory
 /// under `<data>/audit-runs/`, with the files it names in a fresh temporary
 /// directory, both removed after. Claude gets `--max-budget-usd <cap>` and the
@@ -544,10 +636,7 @@ struct ClaudeOutput<'a> {
 /// Codex or Pi judge that exited nonzero with no answer.
 fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
     let argv = command(a.judge, stage);
-    let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
-    let runs = a.data.join("audit-runs");
-    let dir = runs.join(&unique);
-    fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let (unique, dir) = run_dir(a.data)?;
     let scratch = if a.judge.agent == Agent::Codex { Some(codex_home(a)?) } else { None };
     let files = std::env::temp_dir().join(format!("skima-judge-{unique}"));
     let result = files.join("result.json");
@@ -586,6 +675,7 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
         if let Some(home) = &scratch {
             cmd.env("CODEX_HOME", home);
         }
+        scrub(&mut cmd, a.judge.billing);
         wait(cmd.spawn()?, stdin, JUDGE_TIMEOUT)
     });
     let written = fs::read(&result);
@@ -719,11 +809,20 @@ fn retry<'i>(input: &'i str, why: Option<&str>) -> Cow<'i, str> {
 
 /// The user's Codex `auth.json`: in the configured Codex home, else `~/.codex`.
 pub fn codex_auth(homes: &[Home]) -> Result<PathBuf> {
-    let home = match homes.iter().find(|h| h.agent == Agent::Codex) {
+    Ok(agent_home(homes, Agent::Codex, ".codex")?.join("auth.json"))
+}
+
+/// The user's Pi `settings.json`: in the configured Pi home, else `~/.pi/agent`.
+pub fn pi_settings(homes: &[Home]) -> Result<PathBuf> {
+    Ok(agent_home(homes, Agent::Pi, ".pi/agent")?.join("settings.json"))
+}
+
+/// The configured home of `agent`, else `~/<default>`.
+fn agent_home(homes: &[Home], agent: Agent, default: &str) -> Result<PathBuf> {
+    Ok(match homes.iter().find(|h| h.agent == agent) {
         Some(h) => h.path.clone(),
-        None => PathBuf::from(crate::config::home_dir()?).join(".codex"),
-    };
-    Ok(home.join("auth.json"))
+        None => PathBuf::from(crate::config::home_dir()?).join(default),
+    })
 }
 
 /// `<data>/codex-judge-home` holding only a symlink to the user's `auth.json`,
@@ -793,6 +892,9 @@ pub struct JudgeRecord {
     pub model: Option<String>,
     /// None from a judge that reports no cost (Codex, Pi).
     pub cost_usd: Option<Box<RawValue>>,
+    /// None in records written before skima recorded it: unknown.
+    #[serde(default)]
+    pub billing: Option<Billing>,
 }
 
 impl JudgeRecord {
@@ -801,6 +903,7 @@ impl JudgeRecord {
             agent: judge.agent,
             model: judge.model.clone(),
             cost_usd: cost.map(|c| RawValue::from_string(exact(c)).expect("a decimal is JSON")),
+            billing: Some(judge.billing),
         }
     }
 }
@@ -827,10 +930,21 @@ pub struct Audit<'a> {
     pub budget: Option<u64>,
     /// The user's Codex `auth.json`, which the Codex judge's home links to.
     pub codex_auth: &'a Path,
+    /// The user's Pi `settings.json`, which names the Pi judge's default model.
+    pub pi_settings: &'a Path,
     /// The skill's grades and retros, for stage 2.
     pub evals: &'a Evals,
     /// The card's usage section, for stage 2.
     pub usage: &'a Value,
+}
+
+impl Audit<'_> {
+    /// A dollar figure; under `subscription` it is Claude's client-side
+    /// estimate, not a charge, and says so.
+    fn usd(&self, micros: u64) -> String {
+        let label = if self.judge.billing == Billing::Subscription { " API-equivalent" } else { "" };
+        format!("${}{label}", cents(micros))
+    }
 }
 
 /// What a run did: stage 1's counts and spend, the sessions the budget or a
@@ -894,7 +1008,7 @@ fn judge<T>(
             return Ok(Ruling::Unfunded(why));
         }
         if std::io::stderr().is_terminal() {
-            let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
+            let cap = cap.map(|cap| format!(" (cap {})", a.usd(cap))).unwrap_or_default();
             eprintln!("{progress}{cap}");
         }
         let reply = call(a, stage, cap, &retry(input, rejected.as_deref()))?;
@@ -908,6 +1022,12 @@ fn judge<T>(
         }
     }
     Ok(Ruling::Dropped(why.unwrap_or_default()))
+}
+
+/// Whether [`run`] would start a judge call: a candidate to judge, or
+/// `resynth` with a session record to report on.
+pub fn calls(a: &Audit, candidates: &[Candidate], resynth: bool) -> Result<bool> {
+    Ok(!candidates.is_empty() || resynth && !session_records(a)?.is_empty())
 }
 
 /// Runs stage 1 on `candidates`, then stage 2 when stage 1 wrote a session
@@ -970,6 +1090,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
             }
             Ruling::Stopped(why) => {
                 eprintln!("ERROR: {}: {why}", c.event.session);
+                hint(a);
                 run.left = &candidates[i..];
                 run.stopped = true;
                 break;
@@ -977,6 +1098,13 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
         }
     }
     Ok(run)
+}
+
+/// Under `subscription`, names `billing = "api"` after a judge failure.
+fn hint(a: &Audit) {
+    if a.judge.billing == Billing::Subscription {
+        eprintln!("hint: to judge with an API key instead, set billing = \"api\" under [judge]");
+    }
 }
 
 impl Run<'_> {
@@ -995,8 +1123,7 @@ impl Run<'_> {
         let mut out = if self.candidates == 0 {
             format!("{skill}: no session to judge\n")
         } else {
-            let spend =
-                a.budget.map(|b| format!(", ${} spent of ${}", cents(self.spent), cents(b))).unwrap_or_default();
+            let spend = a.budget.map(|b| format!(", {} spent of {}", a.usd(self.spent), a.usd(b))).unwrap_or_default();
             format!("{skill}: {} judged, {} dropped{spend}\n", self.judged, self.dropped)
         };
         if !self.left.is_empty() {
@@ -1020,8 +1147,8 @@ impl Run<'_> {
                 out.push_str(&format!("{skill}: skill report stopped: {why}\n"));
             }
             Synthesis::Skipped => out.push_str(&format!(
-                "{skill}: skill report skipped: ${} of the budget is left, under $0.01; run `skima audit {skill} --resynth`\n",
-                cents(a.budget.unwrap_or_default().saturating_sub(self.spent))
+                "{skill}: skill report skipped: {} of the budget is left, under $0.01; run `skima audit {skill} --resynth`\n",
+                a.usd(a.budget.unwrap_or_default().saturating_sub(self.spent))
             )),
         }
         out
@@ -1299,14 +1426,18 @@ fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
     .join("\n"))
 }
 
+/// Every session record of the skill.
+fn session_records(a: &Audit) -> Result<Vec<Judged>> {
+    Ok(parsed::<Judged>(a.data)?.into_iter().filter(|j| j.kind == "session" && j.skill == a.skill).collect())
+}
+
 /// Stage 2: one call over every session record of the skill; with
 /// a budget, capped at it minus what is spent, and skipped when that is under
 /// a cent. A valid answer is appended as the skill record with the rates skima
 /// computes; an invalid one is retried once, then dropped. A judge that
 /// failed without an answer stops the run.
 fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
-    let judged: Vec<Judged> =
-        parsed::<Judged>(a.data)?.into_iter().filter(|j| j.kind == "session" && j.skill == a.skill).collect();
+    let judged = session_records(a)?;
     if judged.is_empty() {
         return Ok(Synthesis::NotDue);
     }
@@ -1332,6 +1463,7 @@ fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
         Ruling::Unfunded(None) => Synthesis::Skipped,
         Ruling::Stopped(why) => {
             eprintln!("ERROR: skill report: {why}");
+            hint(a);
             Synthesis::Stopped(why)
         }
     })
@@ -1360,9 +1492,24 @@ fn estimate_cost(data: &Path, chars: usize) -> Result<Option<(u64, usize)>> {
     Ok(Some(((cost * chars as u128 / seen) as u64, n)))
 }
 
+/// The model the Pi judge uses: `[judge] model`, else the default provider
+/// and model of the user's Pi `settings.json`.
+fn pi_model(a: &Audit) -> String {
+    if let Some(m) = &a.judge.model {
+        return m.clone();
+    }
+    let settings: Value =
+        fs::read(a.pi_settings).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    match (settings["defaultProvider"].as_str(), settings["defaultModel"].as_str()) {
+        (Some(provider), Some(model)) => format!("{provider}/{model}"),
+        _ => format!("unknown; {} names no defaultProvider and defaultModel", a.pi_settings.display()),
+    }
+}
+
 /// `skima audit --dry-run`: each session the audit would judge with its agent,
-/// project and condensed size, the judge command, the token estimate and,
-/// once session records exist, the dollar estimate.
+/// project and condensed size, the judge command, the billing (and the model
+/// for Pi), the token estimate and, once session records exist, the dollar
+/// estimate.
 pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String> {
     let skill = a.skill;
     if candidates.is_empty() {
@@ -1403,17 +1550,22 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
     };
     let total: usize = candidates.iter().map(chars).sum();
     let n = candidates.len();
+    let model = match a.judge.agent {
+        Agent::Pi => format!("model: {}\n", pi_model(a)),
+        _ => String::new(),
+    };
     let mut out = format!(
-        "{skill}: {n} session{} to judge with the {} judge\n\n{}\njudge: {judge}\ninput: {total} condensed characters, about {} tokens\n",
+        "{skill}: {n} session{} to judge with the {} judge\n\n{}\njudge: {judge}\nbilling: {}\n{model}input: {total} condensed characters, about {} tokens\n",
         if n == 1 { "" } else { "s" },
         name(a.judge.agent),
         render::table(&header, &rows, tty),
+        a.judge.billing.name(),
         estimate_tokens(total),
     );
     if let (Some(_), Some((cost, records))) = (a.budget, estimate_cost(a.data, total)?) {
         out.push_str(&format!(
-            "cost: about ${}, at the rate of {records} earlier session record{}\n",
-            cents(cost),
+            "cost: about {}, at the rate of {records} earlier session record{}\n",
+            a.usd(cost),
             if records == 1 { "" } else { "s" }
         ));
     }
@@ -1432,6 +1584,30 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
+    }
+
+    /// `claude_login` on a stub whose `auth status` runs `script`.
+    fn login_with(script: &str, limit: Duration) -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = dir.path().join("claude");
+        fs::write(&stub, format!("#!/bin/sh\n{script}")).unwrap();
+        Command::new("chmod").arg("+x").arg(&stub).status().unwrap();
+        claude_login(stub.as_os_str(), dir.path(), limit)
+    }
+
+    #[test]
+    fn a_claude_login_that_cannot_be_read_fails_the_check() {
+        let limit = Duration::from_secs(30);
+        assert_eq!(login_with("echo '{\"authMethod\":\"claude.ai\"}'\n", limit), Ok(()));
+        let started = Instant::now();
+        let err = login_with("sleep 10\n", Duration::from_millis(100)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5), "the check waited out its stub");
+        assert!(err.starts_with("claude auth status gave no answer within 0 seconds; check it with"), "{err}");
+        for script in ["echo 'Not logged in'\nexit 1\n", "echo '{\"authMethod\":\"claude.ai\"}'\nexit 1\n", ""] {
+            let err = login_with(script, limit).unwrap_err();
+            assert!(err.starts_with("could not read the Claude judge's login from claude auth status ("), "{err}");
+            assert!(err.ends_with("check it with claude auth status, or set billing = \"api\" under [judge]"), "{err}");
+        }
     }
 
     #[test]

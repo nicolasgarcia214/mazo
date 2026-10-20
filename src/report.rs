@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::audit::SkillRecord;
-use crate::config::Config;
+use crate::config::{Billing, Config};
 use crate::evals::{self, Eval, Evals, Grade};
 use crate::examples::{self, Examples};
 use crate::history::Commit;
@@ -809,7 +809,12 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         None => out.push_str("audit: none\n"),
         Some(a) => {
             let date = a.audited_at.parse::<Timestamp>().map_or(a.audited_at.clone(), |t| view.date(t).to_string());
-            out.push_str(&format!("audit: {date}, {} sessions: {}\n", a.sessions.len(), a.result.verdict));
+            let billing = a.judge.billing.map_or("unknown", Billing::name);
+            out.push_str(&format!(
+                "audit: {date}, {} sessions, {billing} billing: {}\n",
+                a.sessions.len(),
+                a.result.verdict
+            ));
             let rates: Vec<String> = a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect();
             out.push_str(&format!("  {}\n", rates.join(", ")));
             for (i, imp) in a.result.improvements.iter().take(AUDIT_IMPROVEMENTS).enumerate() {
