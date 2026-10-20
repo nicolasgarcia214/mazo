@@ -1267,11 +1267,7 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
     let rows: Vec<Vec<String>> = candidates
         .iter()
         .map(|c| {
-            let ts = c
-                .event
-                .ts
-                .parse::<Timestamp>()
-                .map_or(c.event.ts.clone(), |t| t.to_zoned(tz.clone()).strftime("%Y-%m-%d %H:%M").to_string());
+            let ts = render::local(&c.event.ts, &tz, render::MINUTE);
             let cwd = c.event.cwd.clone().unwrap_or_else(|| "-".into());
             vec![ts, name(c.event.agent), cwd, chars(c).to_string(), c.event.session.clone()]
         })

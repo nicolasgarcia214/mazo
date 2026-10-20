@@ -683,9 +683,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         .events
         .iter()
         .map(|e| {
-            let ts =
-                e.ts.parse::<Timestamp>()
-                    .map_or(e.ts.to_string(), |t| t.to_zoned(view.tz.clone()).strftime("%Y-%m-%d %H:%M").to_string());
+            let ts = render::local(e.ts, &view.tz, render::MINUTE);
             let src = if e.expired { format!("{} expired", locator(e)) } else { locator(e) };
             vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })

@@ -7,10 +7,10 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 
-use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::Value;
 
+use crate::render::{self, DAY, MINUTE};
 use crate::report::{AUDIT_IMPROVEMENTS, tilde};
 
 const CSS: &str = "
@@ -76,16 +76,8 @@ fn num(v: &Value) -> u64 {
 
 /// A timestamp in the report's zone, as `show` prints it; `-` for none.
 fn local(v: &Value, tz: &TimeZone, format: &str) -> String {
-    match v.as_str() {
-        None => "-".into(),
-        Some(t) => {
-            esc(&t.parse::<Timestamp>().map_or(t.to_string(), |t| t.to_zoned(tz.clone()).strftime(format).to_string()))
-        }
-    }
+    v.as_str().map_or("-".into(), |t| esc(&render::local(t, tz, format)))
 }
-
-const DAY: &str = "%Y-%m-%d";
-const MINUTE: &str = "%Y-%m-%d %H:%M";
 
 fn anchor(skill: &str) -> String {
     format!("skill-{}", esc(skill))
