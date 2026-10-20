@@ -1,4 +1,8 @@
-//! Text rendering helpers shared by reports: aligned tables and sparklines.
+//! Text rendering helpers shared by reports: aligned tables, sparklines and
+//! local timestamps.
+
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 
 /// Column alignment.
 #[derive(Clone, Copy)]
@@ -38,6 +42,15 @@ pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> Strin
     out
 }
 
+pub const DAY: &str = "%Y-%m-%d";
+pub const MINUTE: &str = "%Y-%m-%d %H:%M";
+
+/// The timestamp `ts` in `tz`, formatted with `format`; `ts` unchanged when it
+/// does not parse.
+pub fn local(ts: &str, tz: &TimeZone, format: &str) -> String {
+    ts.parse::<Timestamp>().map_or(ts.to_string(), |t| t.to_zoned(tz.clone()).strftime(format).to_string())
+}
+
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 /// One cell per count: `·` for zero, and `▁`…`█` for a non-zero count scaled
@@ -56,6 +69,14 @@ mod tests {
         assert_eq!(sparkline(&[0, 1, 7, 50, 100]), "·▁▁▄█");
         assert_eq!(sparkline(&[0, 0]), "··");
         assert_eq!(sparkline(&[3]), "█");
+    }
+
+    #[test]
+    fn local_formats_in_the_zone_and_keeps_an_unparsed_timestamp() {
+        let tz = TimeZone::get("America/Bogota").unwrap();
+        assert_eq!(local("2026-03-01T04:30:00Z", &tz, MINUTE), "2026-02-28 23:30");
+        assert_eq!(local("2026-03-01T04:30:00Z", &tz, DAY), "2026-02-28");
+        assert_eq!(local("yesterday", &tz, MINUTE), "yesterday");
     }
 
     #[test]

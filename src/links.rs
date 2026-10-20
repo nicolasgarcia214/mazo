@@ -129,18 +129,10 @@ fn targets(
 
 /// Classifies every entry of the selected homes and plans the writes that
 /// `sync` would make. Never touches the filesystem except to read it.
-pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Plan {
-    plan_with(cfg, inv, homes, None)
-}
-
-/// The plan `sync` would make if `gone` did not exist (for `retire`): links
-/// into it plan as dangling and a `links` entry under it is missing. `inv` must
-/// already leave out the skill at `gone`.
-pub fn plan_without(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: &Path) -> Plan {
-    plan_with(cfg, inv, homes, Some(gone))
-}
-
-fn plan_with(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>) -> Plan {
+/// With `gone` (for `retire`), the plan is the one `sync` would make if `gone`
+/// did not exist: links into it plan as dangling and a `links` entry under it
+/// is missing. `inv` must already leave out the skill at `gone`.
+pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>) -> Plan {
     let present = |p: &Path| gone.is_none_or(|g| !p.starts_with(g)) && p.exists();
     let mut plan = Plan::default();
     let targets = targets(cfg, inv, homes, &present, &mut plan.conflicts);

@@ -7,10 +7,12 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 
-use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use serde::Deserialize;
 use serde_json::Value;
 
+use crate::audit::Rates;
+use crate::render::{self, DAY, MINUTE};
 use crate::report::{AUDIT_IMPROVEMENTS, tilde};
 
 const CSS: &str = "
@@ -76,16 +78,8 @@ fn num(v: &Value) -> u64 {
 
 /// A timestamp in the report's zone, as `show` prints it; `-` for none.
 fn local(v: &Value, tz: &TimeZone, format: &str) -> String {
-    match v.as_str() {
-        None => "-".into(),
-        Some(t) => {
-            esc(&t.parse::<Timestamp>().map_or(t.to_string(), |t| t.to_zoned(tz.clone()).strftime(format).to_string()))
-        }
-    }
+    v.as_str().map_or("-".into(), |t| esc(&render::local(t, tz, format)))
 }
-
-const DAY: &str = "%Y-%m-%d";
-const MINUTE: &str = "%Y-%m-%d %H:%M";
 
 fn anchor(skill: &str) -> String {
     format!("skill-{}", esc(skill))
@@ -295,14 +289,10 @@ fn audit(a: &Value, tz: &TimeZone) -> String {
     if a.is_null() {
         return "<dt>audit</dt><dd>none</dd>".into();
     }
-    let rates: Vec<String> =
-        [("followed", "followed"), ("achieved", "achieved"), ("abandoned_or_redone", "abandoned or redone")]
-            .iter()
-            .map(|(key, label)| {
-                let r = &a["rates"][key];
-                format!("{label} {} of {}", num(&r["n"]), num(&r["of"]))
-            })
-            .collect();
+    // The model is serialized from a `SkillRecord`, so its rates read back.
+    let rates: Vec<String> = Rates::deserialize(&a["rates"])
+        .map(|r| r.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect())
+        .unwrap_or_default();
     let improvements: String = list(&a["result"]["improvements"])
         .iter()
         .take(AUDIT_IMPROVEMENTS)

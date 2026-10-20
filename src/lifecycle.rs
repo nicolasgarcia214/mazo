@@ -238,7 +238,7 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
     let mut rest = inv.clone();
     rest.skills.remove(name);
     let homes: Vec<&Home> = cfg.homes.iter().collect();
-    let plan = links::plan_without(cfg, &rest, &homes, &from);
+    let plan = links::plan(cfg, &rest, &homes, Some(&from));
     let errors = links::sync_errors(cfg, &rest, &homes, &plan);
     if !errors.is_empty() {
         for e in &errors {

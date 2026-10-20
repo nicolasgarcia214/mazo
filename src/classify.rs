@@ -73,7 +73,11 @@ impl Roots {
                     let h = crate::tail::first_line(&file)
                         .ok()
                         .flatten()
-                        .and_then(|l| crate::adapters::pi::header_id_parent(&l));
+                        .and_then(|l| crate::adapters::pi::session_of_header(&l))
+                        .map(|s| match s.parent {
+                            Some(Parent::Pi(p)) => (s.id, Some(p)),
+                            _ => (s.id, None),
+                        });
                     self.pi_header.insert(file.clone(), h.clone());
                     h
                 }

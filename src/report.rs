@@ -522,7 +522,8 @@ pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
     if inv.known.contains(skill) { Ok(()) } else { Err(format!("unknown skill: {skill}")) }
 }
 
-fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> Card<'a> {
+/// `skill`'s card; `graph` is the inventory's citation graph.
+fn card<'a>(view: &'a View<'a>, graph: &inventory::Graph, skill: &'a str, since: Since, limit: usize) -> Card<'a> {
     let inv = view.input.inv;
     let f = Filter::default();
     let start = view.start(since);
@@ -576,11 +577,10 @@ fn card<'a>(view: &'a View<'a>, skill: &'a str, since: Since, limit: usize) -> C
 
     // A skill is held when a skill citing it was used in the window.
     let used = view.used(start);
-    let graph = inventory::fan_in(&inv.source, &inv.skills);
     let link =
-        |b: &str| Link { skill: b.to_string(), held: citers(&graph, b).iter().any(|a| used.contains(a.as_str())) };
+        |b: &str| Link { skill: b.to_string(), held: citers(graph, b).iter().any(|a| used.contains(a.as_str())) };
     let cites = graph.get(skill).into_iter().flatten().map(|b| link(b)).collect();
-    let cited_by = citers(&graph, skill).iter().map(|a| link(a)).collect();
+    let cited_by = citers(graph, skill).iter().map(|a| link(a)).collect();
 
     let mut ledger: Vec<_> = view.select(&f, Some(skill), None).collect();
     ledger.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
@@ -659,7 +659,8 @@ fn locator(e: &ShownEvent) -> String {
 pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
     check_skill(input.inv, skill)?;
     let view = View::new(input);
-    let card = card(&view, skill, since, limit);
+    let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
+    let card = card(&view, &graph, skill, since, limit);
     if json {
         return Ok(format!("{}\n", serde_json::to_value(&card).map_err(|e| e.to_string())?));
     }
@@ -683,9 +684,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         .events
         .iter()
         .map(|e| {
-            let ts =
-                e.ts.parse::<Timestamp>()
-                    .map_or(e.ts.to_string(), |t| t.to_zoned(view.tz.clone()).strftime("%Y-%m-%d %H:%M").to_string());
+            let ts = render::local(e.ts, &view.tz, render::MINUTE);
             let src = if e.expired { format!("{} expired", locator(e)) } else { locator(e) };
             vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })
@@ -825,7 +824,8 @@ pub fn report(input: &Input, since: Since) -> crate::Result<serde_json::Value> {
             Some(json!({"skill": r.skill, "state": state, "command": format!("/grade {}", r.skill)}))
         })
         .collect();
-    let cards: Vec<Card> = input.inv.skills.iter().map(|s| card(&view, s, since, REPORT_EVENTS)).collect();
+    let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
+    let cards: Vec<Card> = input.inv.skills.iter().map(|s| card(&view, &graph, s, since, REPORT_EVENTS)).collect();
     let coverage: BTreeMap<String, String> = view.coverage(None).into_iter().collect();
     Ok(json!({
         "generated": input.now.to_string(),

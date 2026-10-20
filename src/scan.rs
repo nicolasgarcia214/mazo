@@ -6,15 +6,17 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 use crate::Result;
-use crate::adapters::{self, Adapter, SkillRoots};
+use crate::adapters::{self, Adapter, Raw, SkillRoots};
 use crate::classify::{Classifier, Roots};
 use crate::config::Config;
 use crate::inventory::Inventory;
 use crate::ledger::{self, Agent, Channel, Event, Ledger};
 use crate::tail::{self, Cursors, Prefilter};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct HomeReport {
     /// Ledger lines this scan appended (or, on reparse, re-derived).
     pub new_events: Vec<Event>,
@@ -76,9 +78,9 @@ pub fn scan_with<'a>(
 
     let mut progress = Progress { tty: std::io::stderr().is_terminal(), start: Instant::now(), shown: false };
     let mut report = ScanReport::default();
-    let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut lines: Vec<Event> = Vec::new();
     let files: Vec<Vec<PathBuf>> = cfg.homes.iter().map(|h| adapter_for(h.agent).files(h)).collect();
+    let listed: HashSet<String> = files.iter().flatten().map(|p| p.to_string_lossy().into_owned()).collect();
     // Agents record their resolved cwd, so compare against the resolved data dir.
     let audit_runs = std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf()).join("audit-runs");
 
@@ -87,7 +89,6 @@ pub fn scan_with<'a>(
     // it under the append rule, as a fresh scan would.
     let mut fresh = Ledger::empty_like(&ledger);
     if reparse {
-        let listed: HashSet<String> = files.iter().flatten().map(|p| p.to_string_lossy().into_owned()).collect();
         for e in ledger.events().iter().filter(|e| e.channel == Channel::Typed || !listed.contains(e.src_file())) {
             fresh.admit(e.clone());
         }
@@ -106,7 +107,6 @@ pub fn scan_with<'a>(
         for (i, path) in files.into_iter().enumerate() {
             progress.update(&home.name, i + 1, total);
             let key = path.to_string_lossy().into_owned();
-            listed.insert(key.clone());
             let chunk = match tail::read(&path, cursors.get(&key), &filter) {
                 Ok(c) => c,
                 Err(e) => {
@@ -142,27 +142,15 @@ pub fn scan_with<'a>(
             if parsed.raws.is_empty() && !parsed.skipped && has_canary(&chunk) {
                 hr.canary.push(key.clone());
             }
-            for raw in parsed.raws {
-                let Some(event) = classifier.event(&mut roots_cache, raw, &path) else { continue };
-                let target = if reparse { &mut fresh } else { &mut ledger };
-                if let Some(line) = target.admit(event) {
-                    hr.new_events.push(line.clone());
-                    lines.push(line);
-                }
-            }
+            let target = if reparse { &mut fresh } else { &mut ledger };
+            admit(&classifier, &mut roots_cache, parsed.raws, &path, target, &mut hr, &mut lines);
             cursors.insert(key, chunk.cursor);
         }
 
         if home.agent == Agent::Claude && first_scan {
-            for raw in adapters::claude::backfill(home, &inv.known) {
-                let history = home.path.join("history.jsonl");
-                let Some(event) = classifier.event(&mut roots_cache, raw, &history) else { continue };
-                let target = if reparse { &mut fresh } else { &mut ledger };
-                if let Some(line) = target.admit(event) {
-                    hr.new_events.push(line.clone());
-                    lines.push(line);
-                }
-            }
+            let raws = adapters::claude::backfill(home, &inv.known);
+            let target = if reparse { &mut fresh } else { &mut ledger };
+            admit(&classifier, &mut roots_cache, raws, &home.path.join("history.jsonl"), target, &mut hr, &mut lines);
         }
 
         let entry = coverage.entry(home.name.clone()).or_default();
@@ -185,6 +173,26 @@ pub fn scan_with<'a>(
     ledger::write_json(&data.join("cursors.json"), &cursors)?;
     ledger::save_coverage(data, &coverage)?;
     Ok(report)
+}
+
+/// Classifies the raw events read from `path` and admits each to `target`
+/// under the append rule, recording every line it admits in `hr` and `lines`.
+fn admit(
+    classifier: &Classifier,
+    cache: &mut Roots,
+    raws: Vec<Raw>,
+    path: &Path,
+    target: &mut Ledger,
+    hr: &mut HomeReport,
+    lines: &mut Vec<Event>,
+) {
+    for raw in raws {
+        let Some(event) = classifier.event(cache, raw, path) else { continue };
+        if let Some(line) = target.admit(event) {
+            hr.new_events.push(line.clone());
+            lines.push(line);
+        }
+    }
 }
 
 /// Whether a scan shows the progress line.

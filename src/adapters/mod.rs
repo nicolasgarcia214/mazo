@@ -145,6 +145,47 @@ impl SkillRoots {
     }
 }
 
+/// How one agent's transcripts spell a tool call that reads a file or runs a
+/// shell command.
+pub(crate) struct ToolNames {
+    /// The `type` of a tool-call block.
+    pub block: &'static str,
+    /// The field holding the call's arguments.
+    pub input: &'static str,
+    pub read: &'static str,
+    /// The read tool's path argument.
+    pub path: &'static str,
+    pub shell: &'static str,
+}
+
+/// The skill files the read and shell tool calls in `content` load, one
+/// `(call index, file index, skill file)` each; the file index counts the
+/// files the call reads.
+pub(crate) fn tool_reads(
+    roots: &SkillRoots,
+    names: &ToolNames,
+    content: &Value,
+    cwd: Option<&str>,
+    unparsed: &mut Vec<String>,
+) -> Vec<(usize, usize, SkillFile)> {
+    let mut out = Vec::new();
+    for (ci, b) in content.as_array().into_iter().flatten().enumerate() {
+        if b["type"] != names.block {
+            continue;
+        }
+        let input = &b[names.input];
+        let found = match (b["name"].as_str(), input[names.path].as_str(), input["command"].as_str()) {
+            (Some(n), Some(file), _) if n == names.read => {
+                roots.classify(file, cwd).map(|sf| (0, sf)).into_iter().collect()
+            }
+            (Some(n), _, Some(cmd)) if n == names.shell => roots.shell_reads(cmd, cwd, unparsed),
+            _ => continue,
+        };
+        out.extend(found.into_iter().map(|(fi, sf)| (ci, fi, sf)));
+    }
+    out
+}
+
 /// The result of parsing one chunk of one file.
 #[derive(Debug, Default)]
 pub struct Parsed {

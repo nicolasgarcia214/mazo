@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Session, SkillRoots};
+use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Session, SkillRoots, ToolNames};
 use crate::ledger::Channel;
 use crate::tail::Chunk;
 
@@ -16,6 +16,8 @@ pub struct Pi;
 /// The `/skill:name` expansion Pi injects as a user message.
 static SKILL_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^<skill name="([^"]+)" location="([^"]+)">"#).expect("valid regex"));
+
+const TOOLS: ToolNames = ToolNames { block: "toolCall", input: "arguments", read: "read", path: "path", shell: "bash" };
 
 impl Adapter for Pi {
     fn parse(&self, roots: &SkillRoots, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
@@ -139,51 +141,26 @@ impl Entry<'_> {
     /// `read` and `bash` tool calls on skill files, one event per skill file
     /// keyed by its index among the files read.
     fn tool_calls(&self, content: &Value, out: &mut Parsed) {
-        let Some(items) = content.as_array() else {
-            return;
-        };
-        let roots = self.roots;
         let cwd = self.session.cwd.as_deref();
-        for (ci, item) in items.iter().enumerate() {
-            if item["type"] != "toolCall" {
-                continue;
-            }
-            let args = &item["arguments"];
-            let found = match (item["name"].as_str(), args["path"].as_str(), args["command"].as_str()) {
-                (Some("read"), Some(path), _) => roots.classify(path, cwd).map(|sf| (0, sf)).into_iter().collect(),
-                (Some("bash"), _, Some(cmd)) => roots.shell_reads(cmd, cwd, &mut out.unparsed),
-                _ => continue,
-            };
-            for (fi, sf) in found {
-                let key = format!("pi:{}@{}:{ci}:{fi}", self.id, self.ts);
-                out.raws.push(self.raw(key, sf.skill, sf.channel, sf.path));
-            }
+        for (ci, fi, sf) in super::tool_reads(self.roots, &TOOLS, content, cwd, &mut out.unparsed) {
+            let key = format!("pi:{}@{}:{ci}:{fi}", self.id, self.ts);
+            out.raws.push(self.raw(key, sf.skill, sf.channel, sf.path));
         }
     }
 }
 
-fn session_of_header(line: &[u8]) -> Option<Session> {
+/// The session a Pi session header line describes; `None` for any other line.
+pub fn session_of_header(line: &[u8]) -> Option<Session> {
     let v: Value = serde_json::from_slice(line).ok()?;
-    let (id, parent) = id_parent(&v)?;
+    if v["type"] != "session" {
+        return None;
+    }
+    let parent = v["parentSession"].as_str().filter(|p| !p.is_empty()).map(PathBuf::from);
     Some(Session {
-        id,
+        id: v["id"].as_str()?.to_string(),
         actor: ActorInputs { subagent: parent.is_some(), ..ActorInputs::default() },
         parent: parent.map(Parent::Pi),
         cwd: v["cwd"].as_str().map(str::to_string),
         version: None,
     })
-}
-
-fn id_parent(v: &Value) -> Option<(String, Option<PathBuf>)> {
-    if v["type"] != "session" {
-        return None;
-    }
-    let id = v["id"].as_str()?.to_string();
-    let parent = v["parentSession"].as_str().filter(|p| !p.is_empty()).map(PathBuf::from);
-    Some((id, parent))
-}
-
-/// `(id, parentSession)` from a Pi session header line.
-pub fn header_id_parent(line: &[u8]) -> Option<(String, Option<PathBuf>)> {
-    id_parent(&serde_json::from_slice(line).ok()?)
 }

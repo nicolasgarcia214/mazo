@@ -197,24 +197,34 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
     }
 }
 
-/// Usage reports scan first, then render, then print freshness warnings.
-fn with_scanned(
+/// Scans, then runs `f` on the data directory and the report input loaded from it.
+fn scanned<T>(
     cfg: &Config,
     inv: &Inventory,
-    render: impl FnOnce(&report::Input) -> skima::Result<String>,
-) -> skima::Result<ExitCode> {
+    f: impl FnOnce(&std::path::Path, &report::Input) -> skima::Result<T>,
+) -> skima::Result<T> {
     let data = ledger::data_dir()?;
     scan::scan(cfg, inv, &data, false)?.warn_io_errors();
     let ledger = Ledger::load(&data)?;
     let coverage = ledger::load_coverage(&data)?;
     let audits = audit::latest(&data)?;
     let now = jiff::Timestamp::now();
-    let input = report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &audits, now };
-    print!("{}", render(&input)?);
-    for w in policy::freshness(cfg, &coverage, now) {
-        eprintln!("{w}");
-    }
-    Ok(ExitCode::SUCCESS)
+    f(&data, &report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &audits, now })
+}
+
+/// Usage reports scan first, then render, then print freshness warnings.
+fn with_scanned(
+    cfg: &Config,
+    inv: &Inventory,
+    render: impl FnOnce(&report::Input) -> skima::Result<String>,
+) -> skima::Result<ExitCode> {
+    scanned(cfg, inv, |_, input| {
+        print!("{}", render(input)?);
+        for w in policy::freshness(cfg, input.coverage, input.now) {
+            eprintln!("{w}");
+        }
+        Ok(ExitCode::SUCCESS)
+    })
 }
 
 /// `skima audit`: usage errors exit 2 before the scan.
@@ -242,31 +252,27 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
         return usage("--max-budget-usd must be at least 0.04".into());
     }
     let codex_auth = audit::codex_auth(&cfg.homes)?;
-    let data = ledger::data_dir()?;
-    scan::scan(cfg, inv, &data, false)?.warn_io_errors();
-    let ledger = Ledger::load(&data)?;
-    let limit = (!args.all).then_some(args.limit);
-    let candidates = audit::select(ledger.events(), skill, &audit::audited(&data, skill)?, limit);
-    let coverage = ledger::load_coverage(&data)?;
-    let now = jiff::Timestamp::now();
-    let input = report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &BTreeMap::new(), now };
-    let a = audit::Audit {
-        skill,
-        source: &cfg.source,
-        data: &data,
-        judge: &cfg.judge,
-        budget,
-        codex_auth: &codex_auth,
-        evals: &skima::evals::load(inv, skill),
-        usage: &report::usage_section(&input, skill),
-    };
-    if args.dry_run {
-        print!("{}", audit::dry_run(&a, &candidates, tty)?);
-        return Ok(ExitCode::SUCCESS);
-    }
-    let run = audit::run(&a, &candidates, args.resynth)?;
-    print!("{}", if args.json { run.json(&a) } else { run.text(&a) });
-    Ok(if run.ok() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    scanned(cfg, inv, |data, input| {
+        let limit = (!args.all).then_some(args.limit);
+        let candidates = audit::select(input.events, skill, &audit::audited(data, skill)?, limit);
+        let a = audit::Audit {
+            skill,
+            source: &cfg.source,
+            data,
+            judge: &cfg.judge,
+            budget,
+            codex_auth: &codex_auth,
+            evals: &skima::evals::load(inv, skill),
+            usage: &report::usage_section(input, skill),
+        };
+        if args.dry_run {
+            print!("{}", audit::dry_run(&a, &candidates, tty)?);
+            return Ok(ExitCode::SUCCESS);
+        }
+        let run = audit::run(&a, &candidates, args.resynth)?;
+        print!("{}", if args.json { run.json(&a) } else { run.text(&a) });
+        Ok(if run.ok() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    })
 }
 
 /// The report goes under the data directory, outside any git
@@ -302,24 +308,8 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     let was = if reparse { Some(home_counts(&Ledger::load(&data)?)) } else { None };
     let r = scan::scan(cfg, inv, &data, reparse)?;
     if json {
-        let homes: serde_json::Map<String, serde_json::Value> = r
-            .homes
-            .iter()
-            .map(|(name, h)| {
-                (
-                    name.clone(),
-                    serde_json::json!({
-                        "new_events": h.new_events,
-                        "files": h.files,
-                        "io_errors": h.io_errors,
-                        "unparsed": h.unparsed,
-                        "unparsed_samples": h.unparsed_samples,
-                        "canary": h.canary,
-                    }),
-                )
-            })
-            .collect();
-        println!("{}", serde_json::Value::Object(homes));
+        // Through a `Value`, so the keys print sorted.
+        println!("{}", serde_json::to_value(&r.homes).map_err(|e| e.to_string())?);
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(was) = was {
@@ -374,7 +364,7 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
 fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let skill_errors = policy::per_skill(cfg, inv);
-    let plan = links::plan(cfg, inv, &homes);
+    let plan = links::plan(cfg, inv, &homes, None);
     let policy_errors = policy::home_errors(cfg, inv, &homes);
     let home_errors = || policy_errors.iter().chain(&plan.conflicts);
     let data = ledger::data_dir()?;
@@ -414,7 +404,7 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool) -
 
 fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> skima::Result<ExitCode> {
     let homes = selected(cfg, agent);
-    let plan = links::plan(cfg, inv, &homes);
+    let plan = links::plan(cfg, inv, &homes, None);
     let errors = links::sync_errors(cfg, inv, &homes, &plan);
     if !errors.is_empty() {
         for e in &errors {
