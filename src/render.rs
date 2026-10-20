@@ -19,19 +19,36 @@ pub fn colour(tty: bool, no_color: Option<&OsStr>) -> bool {
     tty && no_color.is_none_or(OsStr::is_empty)
 }
 
-/// `token` in its status colour when `on`: red for `unused` and `ERROR:`,
-/// yellow for `held`, `new`, `warning:`, a `named by` note and a stale
-/// grade's `+N` or `+wip`. Any other token comes back unchanged.
+/// A status token's colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Colour {
+    Red,
+    Yellow,
+}
+
+/// The colour of a status token: red for `unused` and `ERROR:`, yellow for
+/// `held`, `new`, `warning:`, a `named by` note and a stale grade's `+N` or
+/// `+wip`; `None` for any other token.
+pub fn status_colour(token: &str) -> Option<Colour> {
+    match token {
+        "unused" | "ERROR:" => Some(Colour::Red),
+        "held" | "new" | "warning:" | "+wip" => Some(Colour::Yellow),
+        t if t.starts_with("named by ") => Some(Colour::Yellow),
+        t if t.strip_prefix('+').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) => {
+            Some(Colour::Yellow)
+        }
+        _ => None,
+    }
+}
+
+/// `token` in its [`status_colour`] when `on`; unchanged otherwise.
 pub fn paint(token: &str, on: bool) -> String {
-    let code = match token {
-        "unused" | "ERROR:" => "31",
-        "held" | "new" | "warning:" => "33",
-        "+wip" => "33",
-        t if t.starts_with("named by ") => "33",
-        t if t.strip_prefix('+').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) => "33",
+    let code = match status_colour(token) {
+        Some(Colour::Red) if on => "31",
+        Some(Colour::Yellow) if on => "33",
         _ => return token.to_string(),
     };
-    if on { format!("\x1b[{code}m{token}\x1b[0m") } else { token.to_string() }
+    format!("\x1b[{code}m{token}\x1b[0m")
 }
 
 /// `line` with a leading `ERROR:` or `warning:` painted.
@@ -149,6 +166,9 @@ mod tests {
         assert_eq!(paint("+12", true), "\x1b[33m+12\x1b[0m");
         assert_eq!(paint("+x", true), "+x");
         assert_eq!(paint("+", true), "+");
+        assert_eq!(status_colour("ERROR:"), Some(Colour::Red));
+        assert_eq!(status_colour("named by a"), Some(Colour::Yellow));
+        assert_eq!(status_colour("+x"), None);
         assert_eq!(paint("cluster: a", true), "cluster: a");
         assert_eq!(paint("unused", false), "unused");
         assert_eq!(paint_prefix("ERROR: x: y", true), "\x1b[31mERROR:\x1b[0m x: y");

@@ -133,7 +133,8 @@ Every event has a channel, the way the agent loaded the skill:
   may be authoring rather than following it.
 - **Actor**: who ran the session: `main` (you), `subagent`, `headless` (Claude
   `sdk-cli` or `codex exec`) or `probe` (any other Claude entrypoint). `usage`
-  leaves out `probe` unless `--all`; the other reports always do.
+  leaves out `probe` unless `--all`, and `report`'s usage table always
+  includes it; `unused`, `show` and the report's cards always leave it out.
 
 `unused` gives each skill without a strong load in the window one status:
 
@@ -149,7 +150,8 @@ and these notes:
   so they may go together.
 - **`weak-only`**: it has weak loads in the window and no strong one.
 - **`named by`**: a skill used in the window names it in prose without citing
-  it. It never makes the skill held, but `retire` refuses it without `--force`.
+  it. It never makes the skill held, but `retire` refuses it without `--force`
+  when the namer was used in the last 30 days.
 
 A grade cell in `usage` is the score as written, then:
 
