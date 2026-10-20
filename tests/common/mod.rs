@@ -123,6 +123,27 @@ pub fn report_world(source: &Path) -> World {
     w
 }
 
+/// A skill record of `unslop` with `verdict`, written at `at`, with four
+/// ranked improvements and a hostile curated example.
+pub fn skill_record(verdict: &str, at: &str) -> String {
+    let session = |s: &str| serde_json::json!([s]);
+    let improvement = |i: usize| serde_json::json!({"change": format!("Change {i}."), "reason": format!("Reason {i}."), "sessions": session("s1")});
+    let rate = |n: usize| serde_json::json!({"n": n, "of": 4, "sessions": &["s1", "s2", "s3", "s4"][..n]});
+    let record = serde_json::json!({
+        "v": 1, "kind": "skill", "skill": "unslop", "audited_at": at, "sessions": ["s1", "s2", "s3", "s4"],
+        "judge": {"agent": "claude", "model": null, "cost_usd": 0.12},
+        "prompt": "skill-v1",
+        "rates": {"followed": rate(3), "achieved": rate(2), "abandoned_or_redone": rate(1)},
+        "result": {
+            "verdict": verdict, "patterns": [], "works": [], "failures": [],
+            "improvements": (1..=4).map(improvement).collect::<Vec<_>>(),
+            "versus_grades": "",
+            "examples": [{"situation": "<b>note</b>", "asked": "Tidy.", "happened": "Done.", "tip": "Say the tone.", "session": "s1"}],
+        },
+    });
+    format!("{record}\n")
+}
+
 /// The `skima` binary run in `cwd` with a private `HOME`, `SKIMA_CONFIG` and
 /// `XDG_DATA_HOME`, and `<cwd>/bin` ahead of `PATH` for the stub agents, git
 /// and openers a test writes there. `env` maps each variable to its value;

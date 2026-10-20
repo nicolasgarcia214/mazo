@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{NOW, Skima, World, ago, copy_tree, event, git, stderr, stdout, write};
+use common::{NOW, Skima, World, ago, copy_tree, event, git, skill_record, stderr, stdout, write};
 use jiff::tz::TimeZone;
 use regex::Regex;
 use serde_json::Value;
@@ -295,27 +295,6 @@ fn times_are_local_under_a_fixed_zone() {
     assert!(page.contains("times and days in JST"), "the zone is named");
     let generated = Regex::new(r"generated \d{4}-\d\d-\d\d \d\d:\d\d ·").unwrap();
     assert!(generated.is_match(&page), "generated to the minute");
-}
-
-/// A skill record of `unslop` with `verdict`, written at `at`, with four
-/// ranked improvements and a hostile curated example.
-fn skill_record(verdict: &str, at: &str) -> String {
-    let session = |s: &str| serde_json::json!([s]);
-    let improvement = |i: usize| serde_json::json!({"change": format!("Change {i}."), "reason": format!("Reason {i}."), "sessions": session("s1")});
-    let rate = |n: usize| serde_json::json!({"n": n, "of": 4, "sessions": &["s1", "s2", "s3", "s4"][..n]});
-    let record = serde_json::json!({
-        "v": 1, "kind": "skill", "skill": "unslop", "audited_at": at, "sessions": ["s1", "s2", "s3", "s4"],
-        "judge": {"agent": "claude", "model": null, "cost_usd": 0.12},
-        "prompt": "skill-v1",
-        "rates": {"followed": rate(3), "achieved": rate(2), "abandoned_or_redone": rate(1)},
-        "result": {
-            "verdict": verdict, "patterns": [], "works": [], "failures": [],
-            "improvements": (1..=4).map(improvement).collect::<Vec<_>>(),
-            "versus_grades": "",
-            "examples": [{"situation": "<b>note</b>", "asked": "Tidy.", "happened": "Done.", "tip": "Say the tone.", "session": "s1"}],
-        },
-    });
-    format!("{record}\n")
 }
 
 /// The usage table carries each skill's latest audit verdict
