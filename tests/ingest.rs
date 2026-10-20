@@ -710,3 +710,38 @@ fn show_writes_no_example_text() {
     }
     assert!(xdg.join("skima/events.jsonl").is_file() && files > 3);
 }
+
+/// The session of every event read from a chain's child transcript.
+fn child_sessions(chain: &common::Chain, events: &[Event]) -> Vec<String> {
+    chain.child(events).into_iter().map(|(_, session)| session).collect()
+}
+
+#[test]
+fn a_walk_ending_at_a_missing_parent_roots_there_and_stores_nothing() {
+    for agent in [Agent::Pi, Agent::Codex] {
+        let chain = common::Chain::new(agent, [true, false, true]);
+        assert_eq!(child_sessions(&chain, &chain.scan(false)), [chain.ids[1].clone()], "{agent:?}");
+        assert!(chain.roots_json().exists(), "{agent:?}");
+        assert_eq!(chain.roots(), BTreeMap::new(), "{agent:?}");
+    }
+}
+
+#[test]
+fn a_deleted_roots_json_is_rebuilt_and_a_stored_root_is_never_rewritten() {
+    for agent in [Agent::Codex, Agent::Pi] {
+        let chain = common::Chain::new(agent, [true; 3]);
+        chain.scan(false);
+        let [grandparent, parent, child] = chain.ids.clone();
+        let roots = BTreeMap::from([(parent.clone(), grandparent.clone()), (child.clone(), grandparent)]);
+        assert_eq!(chain.roots(), roots, "{agent:?}");
+        fs::remove_file(chain.roots_json()).unwrap();
+        chain.scan(false);
+        assert_eq!(chain.roots(), roots, "{agent:?}: rebuilt from the sessions on disk");
+
+        let mut edited = roots;
+        edited.insert(child, "elsewhere".into());
+        common::write(&chain.roots_json(), &serde_json::to_string(&edited).unwrap());
+        assert_eq!(child_sessions(&chain, &chain.scan(true)), ["elsewhere"], "{agent:?}");
+        assert_eq!(chain.roots(), edited, "{agent:?}");
+    }
+}

@@ -84,6 +84,11 @@ pub fn scan_with<'a>(
     // Agents record their resolved cwd, so compare against the resolved data dir.
     let audit_runs = std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf()).join("audit-runs");
 
+    // A missing roots.json is rebuilt from every session on disk before parsing.
+    let stored = Roots::load(data)?;
+    let rebuild = stored.is_none();
+    let mut roots_cache = stored.unwrap_or_default();
+
     // Reparse builds a new ledger that starts with every typed event and every
     // event whose transcript this run does not parse, then appends the parse to
     // it under the append rule, as a fresh scan would.
@@ -97,12 +102,16 @@ pub fn scan_with<'a>(
     for (home, files) in cfg.homes.iter().zip(files) {
         let adapter = adapter_for(home.agent);
         let classifier = Classifier { inv, home, homes: &cfg.homes, audit_runs: &audit_runs };
-        let mut roots_cache = Roots::default();
         let mut hr = HomeReport::default();
         let first_scan = !coverage.contains_key(&home.name);
         let need_first = coverage.get(&home.name).is_none_or(|c| c.first.is_none());
         let mut earliest: Option<String> = None;
         let total = files.len();
+        if rebuild {
+            for path in &files {
+                roots_cache.visit(home, path);
+            }
+        }
 
         for (i, path) in files.into_iter().enumerate() {
             progress.update(&home.name, i + 1, total);
@@ -168,6 +177,7 @@ pub fn scan_with<'a>(
     } else {
         ledger.append(&lines)?;
     }
+    roots_cache.save(data)?;
     // Transcripts Claude cleaned up keep no cursor.
     cursors.retain(|k, _| listed.contains(k));
     ledger::write_json(&data.join("cursors.json"), &cursors)?;
