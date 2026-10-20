@@ -217,7 +217,7 @@ fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
 /// and `usage` only a stale grade's mark; `NO_COLOR=1` turns all of it off.
 #[test]
 fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
-    let repo = fixture_repo();
+    let repo = report_repo();
     write(
         &repo.path().join("router/SKILL.md"),
         "---\nname: router\ndescription: Routes.\n---\n\n| Need | Skill |\n|---|---|\n| Pi helpers | wfa-helper |\n",
@@ -227,7 +227,7 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     git(repo.path(), &["commit", "-q", "-m", "router"], "2026-01-01T00:00:00Z");
     let skill_md = repo.path().join("unslop/SKILL.md");
     write(&skill_md, &(std::fs::read_to_string(&skill_md).unwrap() + "\nEdited.\n"));
-    let w = world(repo.path());
+    let w = report_world(repo.path());
     let events =
         vec![event("r1", "router", Channel::Slash, "s1", &ago(5)), event("u1", "unslop", Channel::Tool, "s2", &ago(5))];
     let input = w.input(&events);

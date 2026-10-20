@@ -38,7 +38,7 @@ examples:
   2026-10-06 /notes: Tighten the release notes.
 curated:
   <b>note</b> Asked: Tidy. Happened: Done. Tip: Say the tone. (s1)
-audit: 2026-10-12, 4 sessions: Good on <short> texts
+audit: 2026-10-12, 4 sessions, unknown billing: Good on <short> texts
   followed 3 of 4, achieved 2 of 4, abandoned or redone 1 of 4
   1. Change 1. (Reason 1.)
   2. Change 2. (Reason 2.)

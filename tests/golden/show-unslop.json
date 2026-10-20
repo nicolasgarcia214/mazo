@@ -3,6 +3,7 @@
     "audited_at": "2026-10-12T10:00:00Z",
     "judge": {
       "agent": "claude",
+      "billing": null,
       "cost_usd": 0.12,
       "model": null
     },
