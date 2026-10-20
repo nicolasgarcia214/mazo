@@ -197,6 +197,20 @@ fn a_retargeted_link_is_refused_and_named() {
 }
 
 #[test]
+fn a_link_matching_a_committed_regular_file_is_refused() {
+    let fx = Fixture::new(true);
+    let dir = fx.skill(".archive/typed");
+    common::write(&dir.join("references/up"), "../SKILL.md");
+    fx.commit();
+    fs::remove_file(dir.join("references/up")).unwrap();
+    std::os::unix::fs::symlink("../SKILL.md", dir.join("references/up")).unwrap();
+    let out = fx.prune(&["typed", "--yes"]);
+    assert_code(&out, 1);
+    assert!(stderr(&out).contains(".archive/typed/references/up"), "{}", stderr(&out));
+    assert_eq!(archived(&fx), ["typed"]);
+}
+
+#[test]
 fn an_archived_skill_in_a_repository_without_commits_is_refused() {
     let fx = Fixture::new(true);
     fx.skill(".archive/a");

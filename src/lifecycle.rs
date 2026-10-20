@@ -211,6 +211,7 @@ fn link_blob(source: &Path, rel: &str) -> Result<String> {
         .args(["hash-object", "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(fail)?;
     child.stdin.take().ok_or("git hash-object: no stdin")?.write_all(target.as_os_str().as_bytes()).map_err(fail)?;
