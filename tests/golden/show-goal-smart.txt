@@ -1,0 +1,22 @@
+goal-smart: since 2026-09-13
+
+day        strong weak
+2026-10-01      1    0 ████████████████████████████████████████
+
+last 1 of 1 events:
+ts               agent  channel actor cwd   src
+2026-10-01 12:00 claude tool    main  /work claude:gs.jsonl:1 expired
+
+description: Shared goal contract. Not for prose review (that is the unslop skill).
+path: <skills>/goal-smart
+history: first 2026-01-01 skills, last 2026-01-01 skills
+grades: none
+retros: none
+cites: goal-execute (held), goal-plan (held)
+cited by: goal-execute (held), goal-plan (held)
+strong: claude tool 1
+last use: 2026-10-01 (12d ago)
+projects: /work 1
+invoke: claude /goal-smart, codex $goal-smart
+examples: none
+audit: none

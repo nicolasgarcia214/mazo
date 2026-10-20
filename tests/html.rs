@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{NOW, Skima, World, ago, copy_tree, event, git, local_date, stderr, stdout, write};
+use common::{NOW, Skima, World, ago, copy_tree, event, git, stderr, stdout, write};
 use jiff::tz::TimeZone;
 use regex::Regex;
 use serde_json::Value;
@@ -56,7 +56,7 @@ fn world(source: &Path) -> World {
 }
 
 fn page(w: &World, events: &[Event]) -> String {
-    html::render(&report::report(&w.input(events), Since::Days(30)).unwrap(), &TimeZone::system())
+    html::render(&w.input(events), Since::Days(30)).unwrap()
 }
 
 /// The text of the element with `id`, up to the end of its section.
@@ -342,7 +342,7 @@ fn the_latest_audit_is_in_the_usage_table_and_the_card() {
     assert!(!page.contains("OLD VERDICT"), "only the latest record is shown");
 
     let card = section(&page, "skill-unslop");
-    assert!(card.contains("<dt>audit</dt>") && card.contains(&format!("{}, 4 sessions", local_date(latest))), "{card}");
+    assert!(card.contains("<dt>audit</dt>") && card.contains(&format!("{}, 4 sessions", &latest[..10])), "{card}");
     assert!(card.contains(verdict));
     assert!(card.contains("followed 3 of 4, achieved 2 of 4, abandoned or redone 1 of 4"), "{card}");
     assert!(card.contains("Change 3.") && !card.contains("Change 4."), "the top three improvements");

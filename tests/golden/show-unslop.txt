@@ -1,0 +1,27 @@
+unslop: since 2026-09-13
+
+day        strong weak
+2026-10-11      1    0 ████████████████████
+2026-10-12      2    2 ████████████████████████████████████████
+
+last 5 of 5 events:
+ts               agent  channel actor    cwd   src
+2026-10-12 12:00 claude tool    main     /work claude:t1.jsonl:1 expired
+2026-10-12 12:00 claude slash   main     /work claude:s1.jsonl:1 expired
+2026-10-12 12:00 claude read    main     /work claude:r1.jsonl:1 expired
+2026-10-12 12:00 claude ref     main     /work claude:f1.jsonl:1 expired
+2026-10-11 12:00 claude tool    subagent /work claude:sub.jsonl:1 expired
+
+description: Removes slop from prose.
+path: <skills>/unslop
+history: first 2026-01-01 skills, last 2026-01-01 skills
+grades: none
+retros: none
+cites: fresh (held), writing-for-agents (held)
+cited by: none
+strong: claude slash 1, claude tool 2
+last use: 2026-10-12 (1d ago)
+projects: /work 2
+invoke: claude /unslop, codex $unslop
+examples: none
+audit: none

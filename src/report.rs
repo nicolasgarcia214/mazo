@@ -40,7 +40,8 @@ impl std::str::FromStr for Since {
     }
 }
 
-/// Everything a report reads. `now` is injected so tests are deterministic.
+/// Everything a report reads. `now` and `tz` are injected so tests are
+/// deterministic.
 pub struct Input<'a> {
     pub cfg: &'a Config,
     pub inv: &'a Inventory,
@@ -49,6 +50,8 @@ pub struct Input<'a> {
     /// The latest skill record of each skill ([`crate::audit::latest`]).
     pub audits: &'a BTreeMap<String, SkillRecord>,
     pub now: jiff::Timestamp,
+    /// The zone that days are bucketed in and times shown in.
+    pub tz: TimeZone,
 }
 
 pub struct UsageArgs {
@@ -78,7 +81,6 @@ type Key<'e> = (Agent, &'e str, Channel);
 /// report-time authoring sessions.
 struct View<'a> {
     input: &'a Input<'a>,
-    tz: TimeZone,
     today: Date,
     events: Vec<(&'a Event, Timestamp)>,
     authoring_sessions: HashSet<(Agent, &'a str)>,
@@ -96,8 +98,7 @@ struct Filter {
 
 impl<'a> View<'a> {
     fn new(input: &'a Input<'a>) -> View<'a> {
-        let tz = TimeZone::system();
-        let today = input.now.to_zoned(tz.clone()).date();
+        let today = input.now.to_zoned(input.tz.clone()).date();
         let events: Vec<(&Event, Timestamp)> =
             input.events.iter().filter_map(|e| Some((e, e.ts.parse::<Timestamp>().ok()?))).collect();
         // `policy.authoring_skills` matched on the name after the last `:`, so a
@@ -109,11 +110,11 @@ impl<'a> View<'a> {
             .filter(|e| e.channel.strong() && authoring.iter().any(|s| e.skill.rsplit(':').next() == Some(s.as_str())))
             .map(|e| (e.agent, e.session.as_str()))
             .collect();
-        View { input, tz, today, events, authoring_sessions }
+        View { input, today, events, authoring_sessions }
     }
 
     fn date(&self, t: Timestamp) -> Date {
-        t.to_zoned(self.tz.clone()).date()
+        t.to_zoned(self.input.tz.clone()).date()
     }
 
     fn start(&self, since: Since) -> Option<Timestamp> {
@@ -705,7 +706,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         .events
         .iter()
         .map(|e| {
-            let ts = render::local(e.ts, &view.tz, render::MINUTE);
+            let ts = render::local(e.ts, &input.tz, render::MINUTE);
             let src = if e.expired { format!("{} expired", locator(e)) } else { locator(e) };
             vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })
