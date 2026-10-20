@@ -8,7 +8,7 @@ use skima::config::{self, Config, Home};
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Ledger};
 use skima::report::{self, Since, UsageArgs};
-use skima::{audit, html, links, policy, render, scan};
+use skima::{audit, html, links, policy, render, scan, tui};
 
 #[derive(Parser)]
 #[command(name = "skima", version, about = "Skill usage from agent transcripts, and sync of skill links")]
@@ -69,7 +69,7 @@ enum Cmd {
         #[arg(long, default_value = "30d")]
         since: Since,
         /// The most recent events to list.
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = report::SHOW_LIMIT)]
         limit: usize,
         /// Print the whole card as JSON.
         #[arg(long)]
@@ -167,8 +167,10 @@ struct AuditArgs {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match run(cli.cmd) {
+    // Bare `skima` on a terminal opens the TUI; off one, clap prints the help and exits 2.
+    let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let cmd = if std::env::args_os().len() == 1 && tty { None } else { Some(Cli::parse().cmd) };
+    match run(cmd) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("ERROR: {e}");
@@ -177,9 +179,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cmd: Cmd) -> skima::Result<ExitCode> {
+/// `None` is bare `skima` on a terminal: the TUI.
+fn run(cmd: Option<Cmd>) -> skima::Result<ExitCode> {
     let path = config::path()?;
-    if let Cmd::Init { source } = &cmd {
+    if let Some(Cmd::Init { source }) = &cmd {
         config::init(&path, source)?;
         println!("wrote {}", path.display());
         return Ok(ExitCode::SUCCESS);
@@ -189,6 +192,12 @@ fn run(cmd: Cmd) -> skima::Result<ExitCode> {
         return Ok(ExitCode::from(2));
     };
     let inv = Inventory::load(&cfg.source)?;
+    let Some(cmd) = cmd else {
+        return scanned(&cfg, &inv, |_, input| {
+            tui::run(input).map_err(|e| e.to_string())?;
+            Ok(ExitCode::SUCCESS)
+        });
+    };
     let no_color = std::env::var_os("NO_COLOR");
     let tty = render::colour(std::io::stdout().is_terminal(), no_color.as_deref());
     match cmd {

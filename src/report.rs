@@ -61,11 +61,21 @@ pub struct UsageArgs {
     pub authoring: bool,
 }
 
+impl UsageArgs {
+    /// The default filter over `since`: what `show` and the report's cards count.
+    pub fn new(since: Since) -> UsageArgs {
+        UsageArgs { since, agent: None, channel: None, all: false, authoring: false }
+    }
+}
+
 /// The card shows the audit's top improvements, this many.
 pub const AUDIT_IMPROVEMENTS: usize = 3;
 
 /// `show`'s default window.
 pub const SHOW_SINCE: Since = Since::Days(30);
+
+/// `show`'s default `--limit`, which the report's and the TUI's cards list too.
+pub const SHOW_LIMIT: usize = 20;
 
 /// The last line of `usage` and `unused`.
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade\n";
@@ -95,9 +105,28 @@ struct Filter {
     channel: Option<Channel>,
 }
 
+impl From<&UsageArgs> for Filter {
+    fn from(args: &UsageArgs) -> Filter {
+        Filter { all: args.all, authoring: args.authoring, agent: args.agent, channel: args.channel }
+    }
+}
+
+/// `t`'s day in the report zone.
+fn day(input: &Input, t: Timestamp) -> Date {
+    t.to_zoned(input.tz.clone()).date()
+}
+
+/// `today`, `2d ago`.
+fn relative(input: &Input, t: Timestamp) -> String {
+    match (day(input, input.now) - day(input, t)).get_days() {
+        ..=0 => "today".into(),
+        n => format!("{n}d ago"),
+    }
+}
+
 impl<'a> View<'a> {
     fn new(input: &'a Input<'a>) -> View<'a> {
-        let today = input.now.to_zoned(input.tz.clone()).date();
+        let today = day(input, input.now);
         let events: Vec<(&Event, Timestamp)> =
             input.events.iter().filter_map(|e| Some((e, e.ts.parse::<Timestamp>().ok()?))).collect();
         // `policy.authoring_skills` matched on the name after the last `:`, so a
@@ -113,7 +142,7 @@ impl<'a> View<'a> {
     }
 
     fn date(&self, t: Timestamp) -> Date {
-        t.to_zoned(self.input.tz.clone()).date()
+        day(self.input, t)
     }
 
     fn start(&self, since: Since) -> Option<Timestamp> {
@@ -152,14 +181,6 @@ impl<'a> View<'a> {
     fn used(&self, start: Option<Timestamp>) -> BTreeSet<&'a str> {
         let f = Filter::default();
         self.select(&f, None, start).filter(|(e, _)| e.channel.strong()).map(|(e, _)| e.skill.as_str()).collect()
-    }
-
-    /// `today`, `2d ago`.
-    fn relative(&self, t: Timestamp) -> String {
-        match (self.today - self.date(t)).get_days() {
-            ..=0 => "today".into(),
-            n => format!("{n}d ago"),
-        }
     }
 
     /// Distinct collapse keys of strong events per local day, for the last `days` days.
@@ -274,7 +295,7 @@ fn json_line<T: Serialize>(value: &T) -> String {
 /// The `usage` rows, most used first.
 fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
     let input = view.input;
-    let f = Filter { all: args.all, authoring: args.authoring, agent: args.agent, channel: args.channel };
+    let f = Filter::from(args);
     let start = view.start(args.since);
     let mut skills: BTreeSet<&str> = input.inv.skills.iter().map(String::as_str).collect();
     if args.all {
@@ -312,45 +333,56 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
     rows
 }
 
+fn usage_of(view: &View, args: &UsageArgs) -> Usage {
+    Usage { rows: usage_rows(view, args), coverage: view.coverage(None).into_iter().collect() }
+}
+
+/// The usage table over `input`.
+pub fn usage_table(input: &Input, args: &UsageArgs) -> Usage {
+    usage_of(&View::new(input), args)
+}
+
+/// The usage table's columns.
+pub const USAGE_HEADER: [(&str, Align); 11] = [
+    ("skill", Align::Left),
+    ("sess", Align::Right),
+    ("slash", Align::Right),
+    ("tool", Align::Right),
+    ("typed", Align::Right),
+    ("read", Align::Right),
+    ("ref", Align::Right),
+    ("agents", Align::Left),
+    ("last", Align::Left),
+    ("30d", Align::Left),
+    ("grade", Align::Right),
+];
+
+/// `r`'s cells under [`USAGE_HEADER`], the grade mark painted when `tty`.
+pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
+    vec![
+        r.skill.clone(),
+        r.sess.to_string(),
+        r.slash.to_string(),
+        r.tool.to_string(),
+        r.typed.to_string(),
+        r.read.to_string(),
+        r.ref_.to_string(),
+        r.agents.clone(),
+        r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)),
+        render::sparkline(&r.last_30d),
+        grade_cell(&r.grade, tty),
+    ]
+}
+
 /// Rendered `skima usage` output (text, or JSON when `json`).
 pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
     let view = View::new(input);
-    let rows = usage_rows(&view, args);
+    let usage = usage_of(&view, args);
     if json {
-        return json_line(&Usage { rows, coverage: view.coverage(None).into_iter().collect() });
+        return json_line(&usage);
     }
-    let header = [
-        ("skill", Align::Left),
-        ("sess", Align::Right),
-        ("slash", Align::Right),
-        ("tool", Align::Right),
-        ("typed", Align::Right),
-        ("read", Align::Right),
-        ("ref", Align::Right),
-        ("agents", Align::Left),
-        ("last", Align::Left),
-        ("30d", Align::Left),
-        ("grade", Align::Right),
-    ];
-    let cells: Vec<Vec<String>> = rows
-        .iter()
-        .map(|r| {
-            vec![
-                r.skill.clone(),
-                r.sess.to_string(),
-                r.slash.to_string(),
-                r.tool.to_string(),
-                r.typed.to_string(),
-                r.read.to_string(),
-                r.ref_.to_string(),
-                r.agents.clone(),
-                r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| view.relative(t)),
-                render::sparkline(&r.last_30d),
-                grade_cell(&r.grade, tty),
-            ]
-        })
-        .collect();
-    render::table(&header, &cells, tty) + &view.coverage_line("coverage", None) + LEGEND
+    let cells: Vec<Vec<String>> = usage.rows.iter().map(|r| usage_cells(input, r, tty)).collect();
+    render::table(&USAGE_HEADER, &cells, tty) + &view.coverage_line("coverage", None) + LEGEND
 }
 
 /// Skills that cite `skill`.
@@ -404,9 +436,8 @@ pub struct Unused {
     pub skills: Vec<UnusedRow>,
 }
 
-/// Rendered `skima unused` output.
-pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
-    let view = View::new(input);
+fn unused_of(view: &View, since: Since) -> Unused {
+    let input = view.input;
     let f = Filter::default();
     let start = view.start(since);
     let used = view.used(start);
@@ -447,31 +478,46 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
         .collect();
     let rank = |s: &str| ["unused", "held", "new"].iter().position(|x| *x == s);
     rows.sort_by(|a, b| (rank(a.status), &a.skill).cmp(&(rank(b.status), &b.skill)));
-    if json {
-        let since = start.map(|s| view.date(s).to_string());
-        return json_line(&Unused { since, window: view.coverage(start).into_iter().collect(), skills: rows });
+    let since = start.map(|s| view.date(s).to_string());
+    Unused { since, window: view.coverage(start).into_iter().collect(), skills: rows }
+}
+
+/// The unused list over `input` and `since`.
+pub fn unused_list(input: &Input, since: Since) -> Unused {
+    unused_of(&View::new(input), since)
+}
+
+/// The unused list's columns.
+pub const UNUSED_HEADER: [(&str, Align); 3] = [("skill", Align::Left), ("status", Align::Left), ("notes", Align::Left)];
+
+/// `r`'s cells under [`UNUSED_HEADER`], the notes joined with `; `, the
+/// status and the `named by` note painted when `tty`.
+pub fn unused_cells(r: &UnusedRow, tty: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if !r.holders.is_empty() {
+        notes.push(format!("held by {}", r.holders.join(", ")));
     }
-    let header = [("skill", Align::Left), ("status", Align::Left), ("notes", Align::Left)];
-    let cells: Vec<Vec<String>> = rows
-        .iter()
-        .map(|r| {
-            let mut notes = Vec::new();
-            if !r.holders.is_empty() {
-                notes.push(format!("held by {}", r.holders.join(", ")));
-            }
-            if !r.cluster.is_empty() {
-                notes.push(format!("cluster: {}", r.cluster.join(", ")));
-            }
-            if !r.named_by.is_empty() {
-                notes.push(render::paint(&format!("named by {}", r.named_by.join(", ")), tty));
-            }
-            if r.weak_only {
-                notes.push("weak-only".into());
-            }
-            vec![r.skill.clone(), render::paint(r.status, tty), notes.join("; ")]
-        })
-        .collect();
-    render::table(&header, &cells, tty) + &view.coverage_line("window", start) + LEGEND
+    if !r.cluster.is_empty() {
+        notes.push(format!("cluster: {}", r.cluster.join(", ")));
+    }
+    if !r.named_by.is_empty() {
+        notes.push(render::paint(&format!("named by {}", r.named_by.join(", ")), tty));
+    }
+    if r.weak_only {
+        notes.push("weak-only".into());
+    }
+    vec![r.skill.clone(), render::paint(r.status, tty), notes.join("; ")]
+}
+
+/// Rendered `skima unused` output.
+pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
+    let view = View::new(input);
+    let unused = unused_of(&view, since);
+    if json {
+        return json_line(&unused);
+    }
+    let cells: Vec<Vec<String>> = unused.skills.iter().map(|r| unused_cells(r, tty)).collect();
+    render::table(&UNUSED_HEADER, &cells, tty) + &view.coverage_line("window", view.start(since)) + LEGEND
 }
 
 #[derive(Serialize)]
@@ -608,11 +654,12 @@ pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
     if inv.known.contains(skill) { Ok(()) } else { Err(format!("unknown skill: {skill}")) }
 }
 
-/// `skill`'s card; `graph` is the inventory's citation graph.
-fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, since: Since, limit: usize) -> Card<'a> {
+/// `skill`'s card over the events `args` keeps; `graph` is the inventory's
+/// citation graph.
+fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &UsageArgs, limit: usize) -> Card<'a> {
     let inv = view.input.inv;
-    let f = Filter::default();
-    let start = view.start(since);
+    let f = Filter::from(args);
+    let start = view.start(args.since);
     let mut window: Vec<_> = view.select(&f, Some(skill), start).collect();
     window.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
 
@@ -689,18 +736,17 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, since: Si
         strong_since_retro,
         cites,
         cited_by,
-        usage: card_usage(view, skill, start),
+        usage: card_usage(view, &f, skill, start),
         examples,
         audit,
     }
 }
 
-/// The card's usage section for the events of `skill` at or after `start`.
-fn card_usage(view: &View, skill: &str, start: Option<Timestamp>) -> CardUsage {
-    let f = Filter::default();
+/// The card's usage section for the events of `skill` that `f` keeps at or after `start`.
+fn card_usage(view: &View, f: &Filter, skill: &str, start: Option<Timestamp>) -> CardUsage {
     let mut by: BTreeMap<(Agent, Channel), HashSet<&str>> = BTreeMap::new();
     let mut projects: BTreeMap<&str, HashSet<(Agent, &str)>> = BTreeMap::new();
-    for (e, _) in view.select(&f, Some(skill), start).filter(|(e, _)| e.channel.strong()) {
+    for (e, _) in view.select(f, Some(skill), start).filter(|(e, _)| e.channel.strong()) {
         by.entry((e.agent, e.channel)).or_default().insert(&e.session);
         if let Some(cwd) = &e.cwd {
             projects.entry(cwd).or_default().insert((e.agent, &e.session));
@@ -710,7 +756,7 @@ fn card_usage(view: &View, skill: &str, start: Option<Timestamp>) -> CardUsage {
         projects.into_iter().map(|(cwd, s)| Project { cwd: cwd.to_string(), sessions: s.len() }).collect();
     projects.sort_by_key(|p| std::cmp::Reverse(p.sessions));
     projects.truncate(3);
-    let last_use = view.select(&f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
+    let last_use = view.select(f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
     CardUsage {
         strong: by.into_iter().map(|((agent, channel), s)| ByChannel { agent, channel, events: s.len() }).collect(),
         last_use: last_use.map(|t| t.to_string()),
@@ -722,7 +768,8 @@ fn card_usage(view: &View, skill: &str, start: Option<Timestamp>) -> CardUsage {
 /// the audit's stage 2 reads.
 pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
     let view = View::new(input);
-    serde_json::to_value(card_usage(&view, skill, view.start(SHOW_SINCE))).expect("usage serialises")
+    serde_json::to_value(card_usage(&view, &Filter::default(), skill, view.start(SHOW_SINCE)))
+        .expect("usage serialises")
 }
 
 /// `$HOME` as `~`.
@@ -744,14 +791,18 @@ fn locator(e: &ShownEvent) -> String {
 /// Rendered `skima show <skill>` output; Err for an unknown skill.
 pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
     check_skill(input.inv, skill)?;
-    let view = View::new(input);
+    let card = skill_card(input, skill, &UsageArgs::new(since), limit);
+    Ok(if json { json_line(&card) } else { card_text(input, &card, tty) })
+}
+
+/// `skill`'s card over the events `args` keeps, listing the newest `limit`.
+pub fn skill_card<'a>(input: &'a Input<'a>, skill: &'a str, args: &UsageArgs, limit: usize) -> Card<'a> {
     let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
-    let card = card(&view, &graph, skill, since, limit);
-    Ok(if json { json_line(&card) } else { card_text(&view, &card, tty) })
+    card(&View::new(input), &graph, skill, args, limit)
 }
 
 /// `show`'s text for `card`.
-fn card_text(view: &View, card: &Card, tty: bool) -> String {
+pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
     let mut out = String::new();
     let from = card.since.as_ref().map_or("all time".to_string(), |d| format!("since {d}"));
     out.push_str(&format!("{}: {from}\n\n", card.skill));
@@ -771,7 +822,7 @@ fn card_text(view: &View, card: &Card, tty: bool) -> String {
         .events
         .iter()
         .map(|e| {
-            let ts = render::local(e.ts, &view.input.tz, render::MINUTE);
+            let ts = render::local(e.ts, &input.tz, render::MINUTE);
             let src = if e.expired { format!("{} expired", locator(e)) } else { locator(e) };
             vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })
@@ -821,7 +872,7 @@ fn card_text(view: &View, card: &Card, tty: bool) -> String {
     let last_use = card.usage.last_use.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
     out.push_str(&format!(
         "last use: {}\n",
-        last_use.map_or("never".into(), |t| format!("{} ({})", view.date(t), view.relative(t)))
+        last_use.map_or("never".into(), |t| format!("{} ({})", day(input, t), relative(input, t)))
     ));
     out.push_str(&format!("projects: {}\n", card.projects_line()));
 
@@ -836,7 +887,7 @@ fn card_text(view: &View, card: &Card, tty: bool) -> String {
     } else {
         out.push_str("examples:\n");
         for r in &ex.real {
-            let date = r.ts.parse::<Timestamp>().map_or(r.ts.clone(), |t| view.date(t).to_string());
+            let date = r.ts.parse::<Timestamp>().map_or(r.ts.clone(), |t| day(input, t).to_string());
             let text = r.text.split_whitespace().collect::<Vec<_>>().join(" ");
             out.push_str(&format!("  {date} {}: {text}\n", r.cwd.as_deref().map_or("-".into(), tilde)));
         }
@@ -853,7 +904,7 @@ fn card_text(view: &View, card: &Card, tty: bool) -> String {
     match card.audit {
         None => out.push_str("audit: none\n"),
         Some(a) => {
-            let date = a.audited_at.parse::<Timestamp>().map_or(a.audited_at.clone(), |t| view.date(t).to_string());
+            let date = a.audited_at.parse::<Timestamp>().map_or(a.audited_at.clone(), |t| day(input, t).to_string());
             let billing = a.judge.billing.map_or("unknown", Billing::name);
             out.push_str(&format!(
                 "audit: {date}, {} sessions, {billing} billing: {}\n",
@@ -869,9 +920,6 @@ fn card_text(view: &View, card: &Card, tty: bool) -> String {
     }
     out
 }
-
-/// Events listed on each card of the HTML report: `show`'s default `--limit`.
-const REPORT_EVENTS: usize = 20;
 
 /// A skill whose grade is missing or stale, with the command that grades it.
 #[derive(Serialize)]
@@ -900,10 +948,10 @@ pub struct Report<'a> {
 /// The report model over `input` and `since`.
 pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
     let view = View::new(input);
-    let args = UsageArgs { since, agent: None, channel: None, all: true, authoring: false };
-    let rows = usage_rows(&view, &args);
+    let usage = usage_of(&view, &UsageArgs { all: true, ..UsageArgs::new(since) });
     // Rows outside the inventory have no grade and nothing to grade.
-    let grades_due = rows
+    let grades_due = usage
+        .rows
         .iter()
         .filter(|r| input.inv.skills.contains(&r.skill))
         .filter_map(|r| {
@@ -916,11 +964,12 @@ pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
         })
         .collect();
     let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
-    let cards = input.inv.skills.iter().map(|s| card(&view, &graph, s, since, REPORT_EVENTS)).collect();
+    let args = UsageArgs::new(since);
+    let cards = input.inv.skills.iter().map(|s| card(&view, &graph, s, &args, SHOW_LIMIT)).collect();
     Report {
         generated: input.now.to_string(),
         since: view.start(since).map(|s| view.date(s).to_string()),
-        usage: Usage { rows, coverage: view.coverage(None).into_iter().collect() },
+        usage,
         grades_due,
         cards,
         tz: input.tz.clone(),
