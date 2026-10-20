@@ -1,5 +1,5 @@
-//! The canonical skill set, known names from git history and
-//! the fan-in citation graph.
+//! The canonical skill set, known names from git history,
+//! the fan-in citation graph and the mentions beside it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -60,18 +60,46 @@ pub type Graph = BTreeMap<String, BTreeSet<String>>;
 /// collapsed, contains `the B skill`, `owned by B`, or `B/` as a path
 /// component. Self-edges are dropped. Every skill in `skills` gets a key.
 pub fn fan_in(source: &Path, skills: &BTreeSet<String>) -> Graph {
-    let name = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     let mut graph = Graph::new();
     for a in skills {
         let text = citing_text(&source.join(a));
         let cited = skills.iter().filter(|b| *b != a).filter(|b| {
             text.contains(&format!("the {b} skill"))
-                || text.match_indices(&format!("owned by {b}")).any(|(i, m)| !text[i + m.len()..].starts_with(name))
-                || text.match_indices(&format!("{b}/")).any(|(i, _)| !text[..i].ends_with(name))
+                || text.match_indices(&format!("owned by {b}")).any(|(i, m)| !text[i + m.len()..].starts_with(word))
+                || text.match_indices(&format!("{b}/")).any(|(i, _)| !text[..i].ends_with(word))
         });
         graph.insert(a.clone(), cited.cloned().collect());
     }
     graph
+}
+
+/// A → B when A's citing text names B as a whole word (case-sensitive) and
+/// A → B is not in `edges`. Mentions mark boundaries between siblings, so they
+/// never hold a skill. Self-mentions are dropped. Every skill in `skills` gets a key.
+pub fn mentions(source: &Path, skills: &BTreeSet<String>, edges: &Graph) -> Graph {
+    let mut graph = Graph::new();
+    for a in skills {
+        let text = citing_text(&source.join(a));
+        let named = skills
+            .iter()
+            .filter(|b| *b != a && !edges.get(a).is_some_and(|e| e.contains(*b)))
+            .filter(|b| names(&text, b));
+        graph.insert(a.clone(), named.cloned().collect());
+    }
+    graph
+}
+
+/// A character of a skill name.
+fn word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// `b` occurs in `text` after the start or a non-name character, and before
+/// the end or a character that is neither a name character nor `/`: `/b` is a
+/// name, `b/` is a path.
+fn names(text: &str, b: &str) -> bool {
+    text.match_indices(b)
+        .any(|(i, m)| !text[..i].ends_with(word) && !text[i + m.len()..].starts_with(|c| word(c) || c == '/'))
 }
 
 /// A skill's citing text: the `SKILL.md` body and every `references/**/*.md`,
@@ -94,4 +122,34 @@ fn citing_text(dir: &Path) -> String {
     refs.sort();
     parts.extend(refs.iter().filter_map(|p| std::fs::read_to_string(p).ok()));
     parts.join(" ").replace('`', "").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fan_in, mentions, names};
+
+    #[test]
+    fn a_name_is_a_whole_word_that_is_not_a_path() {
+        assert!(names("run /goal-plan next", "goal-plan"));
+        assert!(names("goal-plan", "goal-plan"));
+        assert!(names("| Plan | goal-plan |", "goal-plan"));
+        assert!(names("see goal-plan.", "goal-plan"));
+        for text in ["goal-plan/SKILL.md", "xgoal-plan", "goal-planx", "x-goal-plan", "goal-plan_v2", "Goal-Plan"] {
+            assert!(!names(text, "goal-plan"), "{text}");
+        }
+    }
+
+    #[test]
+    fn mentions_drop_self_mentions_and_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [("goal-plan", "goal-plan, then goal-smart."), ("goal-smart", "Read goal-plan/SKILL.md.")] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join("SKILL.md"), format!("---\nname: {name}\n---\n{body}\n"))
+                .unwrap();
+        }
+        let skills = ["goal-plan", "goal-smart"].map(String::from).into();
+        let m = mentions(dir.path(), &skills, &fan_in(dir.path(), &skills));
+        assert_eq!(m["goal-plan"], ["goal-smart".to_string()].into());
+        assert!(m["goal-smart"].is_empty(), "goal-plan/ is an edge, not a mention");
+    }
 }

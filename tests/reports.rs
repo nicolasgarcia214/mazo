@@ -183,6 +183,56 @@ fn a_skill_first_committed_inside_the_window_is_new() {
     assert_eq!(new.len(), 7, "the 2026-01-01 commit is inside a 400-day window: {new:?}");
 }
 
+// ---------------------------------------------------------------- named by
+
+/// unslop names goal-plan in prose (`x-goal-plan/` is not a word); every
+/// other whole-word name in the tree is already an edge, so none repeats.
+#[test]
+fn mentions_on_fixtures_are_whole_words_that_are_not_edges() {
+    let repo = fixture_repo();
+    let skills = inventory::canonical_skills(repo.path()).unwrap();
+    let edges = inventory::fan_in(repo.path(), &skills);
+    let m = inventory::mentions(repo.path(), &skills, &edges);
+    let pairs: Vec<String> = m.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
+    assert_eq!(pairs, ["unslop->goal-plan"]);
+    assert_eq!(m.keys().cloned().collect::<BTreeSet<_>>(), skills);
+}
+
+/// `router` names wfa-helper in a routing table and is used; wfa-helper
+/// stays unused, with the namer noted, and is never held by it.
+#[test]
+fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
+    let repo = fixture_repo();
+    write(
+        &repo.path().join("router/SKILL.md"),
+        "---\nname: router\ndescription: Routes.\n---\n\n| Need | Skill |\n|---|---|\n| Pi helpers | wfa-helper |\n",
+    );
+    git(repo.path(), &["add", "router"], NOW);
+    git(repo.path(), &["commit", "-q", "-m", "router"], "2026-01-01T00:00:00Z");
+    let w = world(repo.path());
+    let events = vec![event("r1", "router", Channel::Slash, "s1", &ago(5))];
+    let input = w.input(&events);
+
+    let v: Value = serde_json::from_str(&report::unused(&input, Since::Days(60), true, false)).unwrap();
+    let rows = v["skills"].as_array().unwrap();
+    let keys = ["cluster", "holders", "named_by", "skill", "status", "weak_only"];
+    for r in rows {
+        assert_eq!(r.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), keys, "{r}");
+        assert!(r["named_by"].is_array(), "{r}");
+    }
+    let wfa = rows.iter().find(|r| r["skill"] == "wfa-helper").unwrap();
+    assert_eq!(wfa["status"], "unused");
+    assert_eq!(wfa["named_by"], serde_json::json!(["router"]));
+    assert_eq!(wfa["holders"], serde_json::json!([]));
+    // unslop names goal-plan but is not used in the window.
+    let plan = rows.iter().find(|r| r["skill"] == "goal-plan").unwrap();
+    assert_eq!(plan["named_by"], serde_json::json!([]));
+
+    let text = report::unused(&input, Since::Days(60), false, false);
+    let line = text.lines().find(|l| l.starts_with("wfa-helper")).unwrap();
+    assert!(line.contains(" unused ") && line.contains("named by router"), "{text}");
+}
+
 // ---------------------------------------------------------------- usage
 
 #[test]

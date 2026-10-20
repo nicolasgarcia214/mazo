@@ -345,7 +345,7 @@ fn citers(graph: &inventory::Graph, skill: &str) -> Vec<String> {
 }
 
 /// Why `retire` refuses `skill`: a strong event in the last `days`
-/// days, or a citing skill with one, which makes it held. Empty when it may go.
+/// days, or a citing or naming skill with one. Empty when it may go.
 pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
     let view = View::new(input);
     let used = view.used(view.start(Since::Days(days)));
@@ -357,6 +357,11 @@ pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
     let holders: Vec<String> = citers(&graph, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
     if !holders.is_empty() {
         out.push(format!("{skill} is held by {}", holders.join(", ")));
+    }
+    let named = inventory::mentions(&input.inv.source, &input.inv.skills, &graph);
+    let namers: Vec<String> = citers(&named, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
+    if !namers.is_empty() {
+        out.push(format!("{skill} is named by {}", namers.join(", ")));
     }
     out
 }
@@ -371,6 +376,8 @@ struct UnusedRow {
     /// Citers of an unused skill, none of them used in the window.
     cluster: Vec<String>,
     weak_only: bool,
+    /// Skills used in the window that name this one; never makes it held.
+    named_by: Vec<String>,
 }
 
 /// Rendered `skima unused` output.
@@ -381,6 +388,7 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
     let used = view.used(start);
     let weak: BTreeSet<&str> = view.select(&f, None, start).map(|(e, _)| e.skill.as_str()).collect();
     let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
+    let named = inventory::mentions(&input.inv.source, &input.inv.skills, &graph);
     let mut rows: Vec<UnusedRow> = input
         .inv
         .skills
@@ -402,7 +410,15 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
             } else {
                 ("held", holders, Vec::new())
             };
-            UnusedRow { skill: skill.clone(), status, holders, cluster, weak_only: weak.contains(skill.as_str()) }
+            let named_by = citers(&named, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
+            UnusedRow {
+                skill: skill.clone(),
+                status,
+                holders,
+                cluster,
+                weak_only: weak.contains(skill.as_str()),
+                named_by,
+            }
         })
         .collect();
     let rank = |s: &str| ["unused", "held", "new"].iter().position(|x| *x == s);
@@ -424,6 +440,9 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
             }
             if !r.cluster.is_empty() {
                 notes.push(format!("cluster: {}", r.cluster.join(", ")));
+            }
+            if !r.named_by.is_empty() {
+                notes.push(format!("named by {}", r.named_by.join(", ")));
             }
             if r.weak_only {
                 notes.push("weak-only".into());

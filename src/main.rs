@@ -114,7 +114,7 @@ enum Cmd {
     /// Archive a dead skill under `.archive/` and prune its links. Never commits.
     Retire {
         name: String,
-        /// Retire a held skill or one used in the last 30 days.
+        /// Retire a held or named skill, or one used in the last 30 days.
         #[arg(long)]
         force: bool,
     },

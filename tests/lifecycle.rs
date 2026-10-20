@@ -425,6 +425,25 @@ fn a_holder_used_only_before_the_30_day_window_does_not_hold() {
 }
 
 #[test]
+fn retire_refuses_a_skill_named_by_a_used_skill_and_force_overrides_it() {
+    let fx = synced();
+    common::write(
+        &fx.source.join("triage-finding/SKILL.md"),
+        "---\nname: triage-finding\ndescription: Test skill.\n---\n\n| Step | Skill |\n|---|---|\n| Ask | /interrogate |\n",
+    );
+    ledger(&fx, &[("triage-finding", 3)]);
+    let before = homes_and_source(&fx);
+    let r = fx.skima(&["retire", "interrogate"]);
+    assert_eq!(r.code(), 1, "{}", r.stdout());
+    assert!(r.stderr().contains("interrogate is named by triage-finding"), "{}", r.stderr());
+    assert!(r.stderr().contains("ERROR: retire refused"), "{}", r.stderr());
+    assert_eq!(homes_and_source(&fx), before);
+
+    fx.skima(&["retire", "interrogate", "--force"]).assert_ok();
+    assert_retired(&fx, "interrogate");
+}
+
+#[test]
 fn a_conflict_or_policy_error_after_archiving_aborts_with_zero_writes() {
     let fx = synced();
     let obstructed = fx.target.join("grade");
