@@ -252,6 +252,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
         return usage("--max-budget-usd must be at least 0.04".into());
     }
     let codex_auth = audit::codex_auth(&cfg.homes)?;
+    let pi_settings = audit::pi_settings(&cfg.homes)?;
     scanned(cfg, inv, |data, input| {
         let limit = (!args.all).then_some(args.limit);
         let candidates = audit::select(input.events, skill, &audit::audited(data, skill)?, limit);
@@ -262,12 +263,19 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
             judge: &cfg.judge,
             budget,
             codex_auth: &codex_auth,
+            pi_settings: &pi_settings,
             evals: &skima::evals::load(inv, skill),
             usage: &report::usage_section(input, skill),
         };
         if args.dry_run {
             print!("{}", audit::dry_run(&a, &candidates, tty)?);
             return Ok(ExitCode::SUCCESS);
+        }
+        // A failed login check is a usage error: no judge was started.
+        if audit::calls(&a, &candidates, args.resynth)?
+            && let Err(e) = audit::login(&a)
+        {
+            return usage(e);
         }
         let run = audit::run(&a, &candidates, args.resynth)?;
         print!("{}", if args.json { run.json(&a) } else { run.text(&a) });

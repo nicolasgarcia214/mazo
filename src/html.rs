@@ -299,9 +299,10 @@ fn audit(a: &Value, tz: &TimeZone) -> String {
         .map(|i| format!("<li>{} <span class=\"muted\">{}</span></li>", text(&i["change"]), text(&i["reason"])))
         .collect();
     format!(
-        "<dt>audit</dt><dd><span class=\"muted\">{}, {} sessions</span> {}<br>{}<ol>{improvements}</ol></dd>",
+        "<dt>audit</dt><dd><span class=\"muted\">{}, {} sessions, {} billing</span> {}<br>{}<ol>{improvements}</ol></dd>",
         local(&a["audited_at"], tz, DAY),
         list(&a["sessions"]).len(),
+        esc(a["judge"]["billing"].as_str().unwrap_or("unknown")),
         text(&a["result"]["verdict"]),
         rates.join(", "),
     )

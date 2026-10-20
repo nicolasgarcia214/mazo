@@ -50,7 +50,40 @@ links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 [judge]                           # optional: the agent skima audit calls
 agent = "claude"                  # claude (default), codex or pi
 model = "sonnet"                  # optional; unset means the agent's own default
+billing = "subscription"          # subscription (default) or api
 ```
+
+### Who pays for `skima audit`
+
+`[judge] billing` decides who pays for the judge's calls. Any value other than
+`"subscription"` or `"api"` is a config error.
+
+With `"subscription"`, the default, an API key left in the shell cannot bill
+the run. Every judge call runs without `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
+`CLAUDE_CODE_USE_FOUNDRY`, `OPENAI_API_KEY` and `CODEX_API_KEY`, whatever the
+judge agent. Before its first judge call, a run checks the login once, with
+the same variables removed, and exits 2 when the check fails:
+
+- Claude: `claude auth status` must report a claude.ai login or an OAuth
+  token. Anything else fails, including `api_key_helper` from an
+  `apiKeyHelper` setting, which no environment change removes.
+- Codex: the configured Codex home's `auth.json` (else `~/.codex/auth.json`)
+  must hold a ChatGPT login (`auth_mode` `chatgpt`).
+- Pi: not checked. Pi picks its provider from its own settings, and a provider
+  that logs in, such as OpenRouter, can still bill per token. `--dry-run`
+  prints the provider and model Pi will use, so check them there.
+
+`--dry-run` and a run with nothing to judge start no call and check nothing.
+Under `"subscription"`, every dollar figure for a Claude judge is labelled
+`API-equivalent`: it is Claude's client-side estimate, not a charge, and
+`--max-budget-usd` still caps it. A run stopped by a judge failure names
+`billing = "api"` as the way to use an API key instead.
+
+With `"api"`, the judge's environment passes unchanged and nothing is checked.
+
+Records in `audits.jsonl` carry the billing under `judge`; records written
+before it was recorded show it as unknown.
 
 The ledger lives in `${XDG_DATA_HOME:-~/.local/share}/skima/`. Back it up: once
 Claude deletes a session log, the ledger holds the only record of its loads.
@@ -70,7 +103,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry. Does not sync. |
 | `skima retire <name>` | Moves a skill to `.archive/` (`git mv` when tracked) and prunes its links. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
-| `skima audit <skill>` | Judges how a skill performs in real sessions: each session not yet audited (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) goes to one call of the `[judge]` agent (Claude or Pi with tools off, Codex in a read-only sandbox with a scratch `CODEX_HOME`), run in an empty directory under the data directory, and each answer that cites real lines and quotes nothing is appended to `audits.jsonl`. With the Claude judge, calls share 75% of `--max-budget-usd` (default 1, at least 0.04) and none starts with less than a cent left; the output names sessions left for the next run. Codex and Pi report no cost, so `--limit` is their only cap and `--max-budget-usd` is a usage error. Never writes inside the source. `--dry-run` lists the sessions with their agent, project and condensed size, the judge command, an input-token estimate and, once records exist, a dollar estimate, and starts no judge. When any session record was written, or with `--resynth`, one more call writes the skill report over every session record of the skill: a verdict, patterns, ranked improvements and curated examples, with the rates `followed`, `achieved` and `abandoned or redone` computed by skima as `n of N`. With the Claude judge it gets the rest of the budget, and under a cent left skips it and exits 1. A run that drops every session it judged, or drops the skill report, also exits 1. A judge that fails without an answer (a login, key or network failure, or a signal skima did not send) stops the run at once with exit 1, keeps the records already written, and names the sessions not judged as left for the next run. `--json` prints the new skill record, the session records written and dropped, the spend (null for Codex and Pi) and the sessions left. |
+| `skima audit <skill>` | Judges how a skill performs in real sessions: each session not yet audited (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) goes to one call of the `[judge]` agent (Claude or Pi with tools off, Codex in a read-only sandbox with a scratch `CODEX_HOME`), run in an empty directory under the data directory, and each answer that cites real lines and quotes nothing is appended to `audits.jsonl`. With the Claude judge, calls share 75% of `--max-budget-usd` (default 1, at least 0.04) and none starts with less than a cent left; the output names sessions left for the next run. Codex and Pi report no cost, so `--limit` is their only cap and `--max-budget-usd` is a usage error. Never writes inside the source. `--dry-run` lists the sessions with their agent, project and condensed size, the judge command, the billing and, for Pi, the model, an input-token estimate and, once records exist, a dollar estimate, and starts no judge. When any session record was written, or with `--resynth`, one more call writes the skill report over every session record of the skill: a verdict, patterns, ranked improvements and curated examples, with the rates `followed`, `achieved` and `abandoned or redone` computed by skima as `n of N`. With the Claude judge it gets the rest of the budget, and under a cent left skips it and exits 1. A run that drops every session it judged, or drops the skill report, also exits 1. A judge that fails without an answer (a login, key or network failure, or a signal skima did not send) stops the run at once with exit 1, keeps the records already written, and names the sessions not judged as left for the next run. `--json` prints the new skill record, the session records written and dropped, the spend (null for Codex and Pi) and the sessions left. |
 
 `usage`, `unused`, `show`, `report` and `audit` scan first, so their numbers are current. Every
 report prints how far back each home's logs go: "unused since 2026-09-10" is not
