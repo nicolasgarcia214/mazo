@@ -1285,7 +1285,7 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
     let show = fx.skima(&["show", "unslop"]);
     assert_eq!(show.status.code(), Some(0), "{}", stderr(&show));
     let text = stdout(&show);
-    let date = &r["audited_at"].as_str().unwrap()[..10];
+    let date = common::local_date(r["audited_at"].as_str().unwrap());
     let verdict = skill_answer("s00")["verdict"].as_str().unwrap().to_string();
     assert!(text.contains(&format!("audit: {date}, 2 sessions: {verdict}\n")), "{text}");
     assert!(!text.contains("OLD VERDICT"), "{text}");
