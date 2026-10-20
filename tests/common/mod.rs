@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+pub mod probe;
 pub mod sync;
 
 use std::collections::BTreeMap;
