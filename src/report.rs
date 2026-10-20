@@ -8,7 +8,6 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
-use serde_json::json;
 
 use crate::audit::SkillRecord;
 use crate::config::{Billing, Config};
@@ -217,12 +216,12 @@ impl<'a> View<'a> {
 
 /// A grade as reports emit it, with its staleness.
 #[derive(Serialize)]
-struct GradeOut {
+pub struct GradeOut {
     #[serde(flatten)]
-    grade: Grade,
-    stale: bool,
+    pub grade: Grade,
+    pub stale: bool,
     /// `+N`, `+wip` or empty.
-    mark: String,
+    pub mark: String,
 }
 
 impl From<Grade> for GradeOut {
@@ -243,20 +242,33 @@ fn grade_cell(g: &Option<GradeOut>, colour: bool) -> String {
 }
 
 #[derive(Serialize)]
-struct UsageRow {
-    skill: String,
-    sess: usize,
-    slash: usize,
-    tool: usize,
-    typed: usize,
-    read: usize,
+pub struct UsageRow {
+    pub skill: String,
+    pub sess: usize,
+    pub slash: usize,
+    pub tool: usize,
+    pub typed: usize,
+    pub read: usize,
     #[serde(rename = "ref")]
-    ref_: usize,
-    agents: String,
-    last: Option<String>,
+    pub ref_: usize,
+    pub agents: String,
+    pub last: Option<String>,
     #[serde(rename = "30d")]
-    last_30d: Vec<usize>,
-    grade: Option<GradeOut>,
+    pub last_30d: Vec<usize>,
+    pub grade: Option<GradeOut>,
+}
+
+/// The usage table: what `usage --json` emits.
+#[derive(Serialize)]
+pub struct Usage {
+    pub rows: Vec<UsageRow>,
+    /// Per home, the window its transcripts cover.
+    pub coverage: BTreeMap<String, String>,
+}
+
+/// `value` as one line of `--json`. The `Value` in between sorts the keys.
+fn json_line<T: Serialize>(value: &T) -> String {
+    format!("{}\n", serde_json::to_value(value).expect("report serialises"))
 }
 
 /// The `usage` rows, most used first.
@@ -305,8 +317,7 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
     let view = View::new(input);
     let rows = usage_rows(&view, args);
     if json {
-        let coverage: BTreeMap<String, String> = view.coverage(None).into_iter().collect();
-        return format!("{}\n", json!({"rows": rows, "coverage": coverage}));
+        return json_line(&Usage { rows, coverage: view.coverage(None).into_iter().collect() });
     }
     let header = [
         ("skill", Align::Left),
@@ -370,17 +381,27 @@ pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
 }
 
 #[derive(Serialize)]
-struct UnusedRow {
-    skill: String,
+pub struct UnusedRow {
+    pub skill: String,
     /// `unused`, `held` or `new`.
-    status: &'static str,
+    pub status: &'static str,
     /// Live citers of a held skill.
-    holders: Vec<String>,
+    pub holders: Vec<String>,
     /// Citers of an unused skill, none of them used in the window.
-    cluster: Vec<String>,
-    weak_only: bool,
+    pub cluster: Vec<String>,
+    pub weak_only: bool,
     /// Skills used in the window that name this one; never makes it held.
-    named_by: Vec<String>,
+    pub named_by: Vec<String>,
+}
+
+/// The unused list: what `unused --json` emits.
+#[derive(Serialize)]
+pub struct Unused {
+    /// The window's first day; None for all time.
+    pub since: Option<String>,
+    /// Per home, the window its transcripts cover.
+    pub window: BTreeMap<String, String>,
+    pub skills: Vec<UnusedRow>,
 }
 
 /// Rendered `skima unused` output.
@@ -427,11 +448,8 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
     let rank = |s: &str| ["unused", "held", "new"].iter().position(|x| *x == s);
     rows.sort_by(|a, b| (rank(a.status), &a.skill).cmp(&(rank(b.status), &b.skill)));
     if json {
-        let window: BTreeMap<String, String> = view.coverage(start).into_iter().collect();
-        return format!(
-            "{}\n",
-            json!({"since": start.map(|s| view.date(s).to_string()), "window": window, "skills": rows})
-        );
+        let since = start.map(|s| view.date(s).to_string());
+        return json_line(&Unused { since, window: view.coverage(start).into_iter().collect(), skills: rows });
     }
     let header = [("skill", Align::Left), ("status", Align::Left), ("notes", Align::Left)];
     let cells: Vec<Vec<String>> = rows
@@ -457,86 +475,132 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
 }
 
 #[derive(Serialize)]
-struct ShownEvent<'e> {
-    ts: &'e str,
-    agent: Agent,
-    channel: Channel,
-    actor: Actor,
-    cwd: Option<&'e str>,
-    src: &'e str,
-    expired: bool,
+pub struct ShownEvent<'e> {
+    pub ts: &'e str,
+    pub agent: Agent,
+    pub channel: Channel,
+    pub actor: Actor,
+    pub cwd: Option<&'e str>,
+    pub src: &'e str,
+    pub expired: bool,
 }
 
 #[derive(Serialize)]
-struct Day {
-    date: String,
-    strong: usize,
-    weak: usize,
+pub struct Day {
+    pub date: String,
+    pub strong: usize,
+    pub weak: usize,
 }
 
 #[derive(Serialize)]
-struct CardHistory<'a> {
-    first: Option<&'a Commit>,
-    last: Option<&'a Commit>,
-    uncommitted: bool,
+pub struct CardHistory<'a> {
+    pub first: Option<&'a Commit>,
+    pub last: Option<&'a Commit>,
+    pub uncommitted: bool,
 }
 
 /// A skill the card's skill cites, or one citing it, and whether it is held
 /// in the window.
 #[derive(Serialize)]
-struct Link {
-    skill: String,
-    held: bool,
+pub struct Link {
+    pub skill: String,
+    pub held: bool,
 }
 
 #[derive(Serialize)]
-struct ByChannel {
-    agent: Agent,
-    channel: Channel,
-    events: usize,
+pub struct ByChannel {
+    pub agent: Agent,
+    pub channel: Channel,
+    pub events: usize,
 }
 
 #[derive(Serialize)]
-struct Project {
-    cwd: String,
-    sessions: usize,
+pub struct Project {
+    pub cwd: String,
+    pub sessions: usize,
 }
 
 #[derive(Serialize)]
-struct CardUsage {
+pub struct CardUsage {
     /// Collapsed strong events in the window per agent and channel.
-    strong: Vec<ByChannel>,
+    pub strong: Vec<ByChannel>,
     /// The latest strong event in the whole ledger.
-    last_use: Option<String>,
+    pub last_use: Option<String>,
     /// The top three cwds in the window by distinct root sessions with a strong event.
-    projects: Vec<Project>,
+    pub projects: Vec<Project>,
 }
 
 /// The skill card: what `show` prints and `show --json` emits.
 #[derive(Serialize)]
-struct Card<'a> {
-    skill: &'a str,
-    since: Option<String>,
-    histogram: Vec<Day>,
+pub struct Card<'a> {
+    pub skill: &'a str,
+    pub since: Option<String>,
+    pub histogram: Vec<Day>,
     /// The newest `limit` events in the window.
-    events: Vec<ShownEvent<'a>>,
-    total_events: usize,
-    description: Option<String>,
-    path: PathBuf,
+    pub events: Vec<ShownEvent<'a>>,
+    pub total_events: usize,
+    pub description: Option<String>,
+    pub path: PathBuf,
     /// None outside a git worktree.
-    history: Option<CardHistory<'a>>,
+    pub history: Option<CardHistory<'a>>,
     /// Newest first.
-    grades: Vec<GradeOut>,
+    pub grades: Vec<GradeOut>,
     /// Newest first.
-    retros: Vec<Eval>,
+    pub retros: Vec<Eval>,
     /// Strong events on days after the latest retro, over the whole ledger.
-    strong_since_retro: Option<usize>,
-    cites: Vec<Link>,
-    cited_by: Vec<Link>,
-    usage: CardUsage,
-    examples: Examples,
+    pub strong_since_retro: Option<usize>,
+    pub cites: Vec<Link>,
+    pub cited_by: Vec<Link>,
+    pub usage: CardUsage,
+    pub examples: Examples,
     /// The latest skill record.
-    audit: Option<&'a SkillRecord>,
+    pub audit: Option<&'a SkillRecord>,
+}
+
+/// `xs` joined with `, `, or `none`.
+fn or_none(xs: Vec<String>) -> String {
+    if xs.is_empty() { "none".into() } else { xs.join(", ") }
+}
+
+/// The card lines `show` prints and the HTML report escapes, so the two
+/// read the same fields.
+impl Card<'_> {
+    /// `first <day> <subject>, last …`; None outside a git worktree.
+    pub fn history_line(&self) -> Option<String> {
+        let h = self.history.as_ref()?;
+        // The committer's own date.
+        let commit = |c: &Commit| format!("{} {}", c.date.get(..10).unwrap_or(&c.date), c.subject);
+        let mut line = match (h.first, h.last) {
+            (Some(first), Some(last)) => format!("first {}, last {}", commit(first), commit(last)),
+            _ => "never committed".into(),
+        };
+        if h.uncommitted {
+            line.push_str(", uncommitted changes");
+        }
+        Some(line)
+    }
+
+    /// `claude slash 3, …`: collapsed strong events per agent and channel.
+    pub fn strong_line(&self) -> String {
+        or_none(
+            self.usage.strong.iter().map(|b| format!("{} {} {}", name(b.agent), name(b.channel), b.events)).collect(),
+        )
+    }
+
+    /// `~/p 2, …`: the top cwds and their sessions.
+    pub fn projects_line(&self) -> String {
+        or_none(self.usage.projects.iter().map(|p| format!("{} {}", tilde(&p.cwd), p.sessions)).collect())
+    }
+
+    /// `none`, or the strong events since the latest retro.
+    pub fn retro_note(&self) -> String {
+        self.strong_since_retro.map_or("none".into(), |n| format!("{n} strong since the latest"))
+    }
+}
+
+/// `cites` or `cited by`: each skill as `skill` writes it, `(held)` after a held one.
+pub fn links(ls: &[Link], skill: impl Fn(&str) -> String) -> String {
+    or_none(ls.iter().map(|l| if l.held { format!("{} (held)", skill(&l.skill)) } else { skill(&l.skill) }).collect())
 }
 
 /// A name `show` accepts: any known name (canonical names are known).
@@ -545,7 +609,7 @@ pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
 }
 
 /// `skill`'s card; `graph` is the inventory's citation graph.
-fn card<'a>(view: &'a View<'a>, graph: &inventory::Graph, skill: &'a str, since: Since, limit: usize) -> Card<'a> {
+fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, since: Since, limit: usize) -> Card<'a> {
     let inv = view.input.inv;
     let f = Filter::default();
     let start = view.start(since);
@@ -658,7 +722,7 @@ fn card_usage(view: &View, skill: &str, start: Option<Timestamp>) -> CardUsage {
 /// the audit's stage 2 reads.
 pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
     let view = View::new(input);
-    json!(card_usage(&view, skill, view.start(SHOW_SINCE)))
+    serde_json::to_value(card_usage(&view, skill, view.start(SHOW_SINCE))).expect("usage serialises")
 }
 
 /// `$HOME` as `~`.
@@ -683,13 +747,14 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
     let view = View::new(input);
     let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
     let card = card(&view, &graph, skill, since, limit);
-    if json {
-        return Ok(format!("{}\n", serde_json::to_value(&card).map_err(|e| e.to_string())?));
-    }
+    Ok(if json { json_line(&card) } else { card_text(&view, &card, tty) })
+}
 
+/// `show`'s text for `card`.
+fn card_text(view: &View, card: &Card, tty: bool) -> String {
     let mut out = String::new();
     let from = card.since.as_ref().map_or("all time".to_string(), |d| format!("since {d}"));
-    out.push_str(&format!("{skill}: {from}\n\n"));
+    out.push_str(&format!("{}: {from}\n\n", card.skill));
     let max = card.histogram.iter().map(|h| h.strong).max().unwrap_or(0).max(1);
     let hist_rows: Vec<Vec<String>> = card
         .histogram
@@ -706,7 +771,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         .events
         .iter()
         .map(|e| {
-            let ts = render::local(e.ts, &input.tz, render::MINUTE);
+            let ts = render::local(e.ts, &view.input.tz, render::MINUTE);
             let src = if e.expired { format!("{} expired", locator(e)) } else { locator(e) };
             vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })
@@ -724,15 +789,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
     out.push('\n');
     out.push_str(&format!("description: {}\n", card.description.as_deref().unwrap_or("-")));
     out.push_str(&format!("path: {}\n", tilde(&card.path.to_string_lossy())));
-    if let Some(h) = &card.history {
-        let commit = |c: &Commit| format!("{} {}", c.date.get(..10).unwrap_or(&c.date), c.subject);
-        let mut line = match (h.first, h.last) {
-            (Some(first), Some(last)) => format!("first {}, last {}", commit(first), commit(last)),
-            _ => "never committed".into(),
-        };
-        if h.uncommitted {
-            line.push_str(", uncommitted changes");
-        }
+    if let Some(line) = card.history_line() {
         out.push_str(&format!("history: {line}\n"));
     }
 
@@ -746,42 +803,27 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
         let header = [("date", Align::Left), ("score", Align::Right), ("since", Align::Left)];
         out.push_str(&render::table(&header, &rows, tty));
     }
-    match card.strong_since_retro {
-        None => out.push_str("retros: none\n"),
-        Some(n) => {
-            out.push_str(&format!("retros: {n} strong since the latest\n"));
-            let rows: Vec<Vec<String>> = card
-                .retros
-                .iter()
-                .map(|r| vec![r.date.clone(), score(r), r.verdict.clone().unwrap_or_else(|| "-".into())])
-                .collect();
-            let header = [("date", Align::Left), ("score", Align::Right), ("verdict", Align::Left)];
-            out.push_str(&render::table(&header, &rows, tty));
-        }
+    out.push_str(&format!("retros: {}\n", card.retro_note()));
+    if card.strong_since_retro.is_some() {
+        let rows: Vec<Vec<String>> = card
+            .retros
+            .iter()
+            .map(|r| vec![r.date.clone(), score(r), r.verdict.clone().unwrap_or_else(|| "-".into())])
+            .collect();
+        let header = [("date", Align::Left), ("score", Align::Right), ("verdict", Align::Left)];
+        out.push_str(&render::table(&header, &rows, tty));
     }
 
-    let links = |ls: &[Link]| match ls {
-        [] => "none".to_string(),
-        _ => ls
-            .iter()
-            .map(|l| if l.held { format!("{} (held)", l.skill) } else { l.skill.clone() })
-            .collect::<Vec<_>>()
-            .join(", "),
-    };
-    out.push_str(&format!("cites: {}\n", links(&card.cites)));
-    out.push_str(&format!("cited by: {}\n", links(&card.cited_by)));
+    out.push_str(&format!("cites: {}\n", links(&card.cites, str::to_string)));
+    out.push_str(&format!("cited by: {}\n", links(&card.cited_by, str::to_string)));
 
-    let strong: Vec<String> =
-        card.usage.strong.iter().map(|b| format!("{} {} {}", name(b.agent), name(b.channel), b.events)).collect();
-    out.push_str(&format!("strong: {}\n", if strong.is_empty() { "none".into() } else { strong.join(", ") }));
+    out.push_str(&format!("strong: {}\n", card.strong_line()));
     let last_use = card.usage.last_use.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
     out.push_str(&format!(
         "last use: {}\n",
         last_use.map_or("never".into(), |t| format!("{} ({})", view.date(t), view.relative(t)))
     ));
-    let projects: Vec<String> =
-        card.usage.projects.iter().map(|p| format!("{} {}", tilde(&p.cwd), p.sessions)).collect();
-    out.push_str(&format!("projects: {}\n", if projects.is_empty() { "none".into() } else { projects.join(", ") }));
+    out.push_str(&format!("projects: {}\n", card.projects_line()));
 
     let ex = &card.examples;
     let invoke: Vec<String> = ex.written.iter().map(|i| format!("{} {}", name(i.agent), i.text)).collect();
@@ -825,21 +867,43 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
             }
         }
     }
-    Ok(out)
+    out
 }
 
 /// Events listed on each card of the HTML report: `show`'s default `--limit`.
 const REPORT_EVENTS: usize = 20;
 
-/// The model of `skima report`: the `usage --all` rows and
-/// coverage, the grades to run, and every inventory skill's card. The page
-/// renders this value, so it shows nothing the JSON lacks.
-pub fn report(input: &Input, since: Since) -> crate::Result<serde_json::Value> {
+/// A skill whose grade is missing or stale, with the command that grades it.
+#[derive(Serialize)]
+pub struct GradeDue {
+    pub skill: String,
+    /// `missing` or `stale`.
+    pub state: &'static str,
+    pub command: String,
+}
+
+/// The model of `skima report`: the `usage --all` rows and coverage, the
+/// grades to run, and every inventory skill's card. The page renders this
+/// struct, so it shows nothing the JSON lacks.
+#[derive(Serialize)]
+pub struct Report<'a> {
+    pub generated: String,
+    pub since: Option<String>,
+    pub usage: Usage,
+    pub grades_due: Vec<GradeDue>,
+    pub cards: Vec<Card<'a>>,
+    /// The zone the days were bucketed in, which the page shows times in.
+    #[serde(skip)]
+    pub tz: TimeZone,
+}
+
+/// The report model over `input` and `since`.
+pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
     let view = View::new(input);
     let args = UsageArgs { since, agent: None, channel: None, all: true, authoring: false };
     let rows = usage_rows(&view, &args);
     // Rows outside the inventory have no grade and nothing to grade.
-    let grades_due: Vec<serde_json::Value> = rows
+    let grades_due = rows
         .iter()
         .filter(|r| input.inv.skills.contains(&r.skill))
         .filter_map(|r| {
@@ -848,17 +912,17 @@ pub fn report(input: &Input, since: Since) -> crate::Result<serde_json::Value> {
                 Some(g) if g.stale => "stale",
                 Some(_) => return None,
             };
-            Some(json!({"skill": r.skill, "state": state, "command": format!("/grade {}", r.skill)}))
+            Some(GradeDue { skill: r.skill.clone(), state, command: format!("/grade {}", r.skill) })
         })
         .collect();
     let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
-    let cards: Vec<Card> = input.inv.skills.iter().map(|s| card(&view, &graph, s, since, REPORT_EVENTS)).collect();
-    let coverage: BTreeMap<String, String> = view.coverage(None).into_iter().collect();
-    Ok(json!({
-        "generated": input.now.to_string(),
-        "since": view.start(since).map(|s| view.date(s).to_string()),
-        "usage": {"rows": rows, "coverage": coverage},
-        "grades_due": grades_due,
-        "cards": serde_json::to_value(&cards).map_err(|e| e.to_string())?,
-    }))
+    let cards = input.inv.skills.iter().map(|s| card(&view, &graph, s, since, REPORT_EVENTS)).collect();
+    Report {
+        generated: input.now.to_string(),
+        since: view.start(since).map(|s| view.date(s).to_string()),
+        usage: Usage { rows, coverage: view.coverage(None).into_iter().collect() },
+        grades_due,
+        cards,
+        tz: input.tz.clone(),
+    }
 }

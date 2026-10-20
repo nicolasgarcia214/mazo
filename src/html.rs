@@ -1,5 +1,5 @@
 //! The self-contained HTML report: one file with inline CSS and
-//! inline SVG, rendered from the JSON model of `report::report`.
+//! inline SVG, rendered from the typed model of `report::report`.
 
 use std::fs::{self, OpenOptions, Permissions};
 use std::io::Write;
@@ -8,12 +8,13 @@ use std::path::Path;
 use std::process::Command;
 
 use jiff::tz::TimeZone;
-use serde::Deserialize;
-use serde_json::Value;
 
-use crate::audit::Rates;
+use crate::audit::SkillRecord;
+use crate::config::Billing;
+use crate::examples::Examples;
+use crate::ledger::name;
 use crate::render::{self, DAY, MINUTE};
-use crate::report::{self, AUDIT_IMPROVEMENTS, Input, Since, tilde};
+use crate::report::{self, AUDIT_IMPROVEMENTS, Card, Day, GradeOut, Link, Report, tilde};
 
 const CSS: &str = "
 :root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
@@ -63,22 +64,14 @@ fn esc(s: &str) -> String {
     out
 }
 
-/// A scalar as escaped text, `-` for null or absent.
-fn text(v: &Value) -> String {
-    match v {
-        Value::Null => "-".into(),
-        Value::String(s) => esc(s),
-        v => esc(&v.to_string()),
-    }
-}
-
-fn num(v: &Value) -> u64 {
-    v.as_u64().unwrap_or(0)
-}
-
 /// A timestamp in the report's zone, as `show` prints it; `-` for none.
-fn local(v: &Value, tz: &TimeZone, format: &str) -> String {
-    v.as_str().map_or("-".into(), |t| esc(&render::local(t, tz, format)))
+fn local(t: Option<&str>, tz: &TimeZone, format: &str) -> String {
+    t.map_or("-".into(), |t| esc(&render::local(t, tz, format)))
+}
+
+/// Escaped text, `-` for none.
+fn or_dash(s: Option<&str>) -> String {
+    s.map_or("-".into(), esc)
 }
 
 fn anchor(skill: &str) -> String {
@@ -86,21 +79,19 @@ fn anchor(skill: &str) -> String {
 }
 
 /// The score as written, then `+N` or `+wip`.
-fn grade(g: &Value) -> String {
-    if g.is_null() {
-        return "-".into();
-    }
-    let score = format!("{}{}", g["score"].as_str().map_or("?".into(), esc), text(&g["mark"]));
-    if g["stale"].as_bool() == Some(true) { format!("<span class=\"stale\">{score}</span>") } else { score }
+fn grade(g: Option<&GradeOut>) -> String {
+    let Some(g) = g else { return "-".into() };
+    let score = format!("{}{}", esc(g.grade.eval.score.as_deref().unwrap_or("?")), esc(&g.mark));
+    if g.stale { format!("<span class=\"stale\">{score}</span>") } else { score }
 }
 
 /// The 30-day sparkline: one bar per day, a tick for a day with no event.
-fn sparkline(counts: &[Value]) -> String {
-    let max = counts.iter().map(num).max().unwrap_or(0).max(1);
+fn sparkline(counts: &[usize]) -> String {
+    let max = counts.iter().copied().max().unwrap_or(0).max(1);
     let bars: String = counts
         .iter()
         .enumerate()
-        .map(|(i, c)| match num(c) {
+        .map(|(i, &c)| match c {
             0 => format!("<rect class=\"z\" x=\"{}\" y=\"15\" width=\"2\" height=\"1\"/>", i * 3),
             c => {
                 let h = (c * 16).div_ceil(max);
@@ -112,40 +103,36 @@ fn sparkline(counts: &[Value]) -> String {
 }
 
 /// The card histogram: one column per day with events, strong below weak.
-fn histogram(days: &[Value]) -> String {
-    if days.is_empty() {
+fn histogram(days: &[Day]) -> String {
+    let (Some(first), Some(last)) = (days.first(), days.last()) else {
         return "<p class=\"muted\">no events in the window</p>".into();
-    }
-    const H: u64 = 60;
-    let max = days.iter().map(|d| num(&d["strong"]) + num(&d["weak"])).max().unwrap_or(0).max(1);
+    };
+    const H: usize = 60;
+    let max = days.iter().map(|d| d.strong + d.weak).max().unwrap_or(0).max(1);
     let cols: String = days
         .iter()
         .enumerate()
         .map(|(i, d)| {
-            let (s, w) = (num(&d["strong"]), num(&d["weak"]));
+            let (s, w) = (d.strong, d.weak);
             let (sh, wh) = (s * H / max, w * H / max);
             let x = i * 10;
             format!(
                 "<g><title>{} strong {s} weak {w}</title>\
                  <rect class=\"w\" x=\"{x}\" y=\"{}\" width=\"8\" height=\"{wh}\"/>\
                  <rect class=\"s\" x=\"{x}\" y=\"{}\" width=\"8\" height=\"{sh}\"/></g>",
-                text(&d["date"]),
+                esc(&d.date),
                 H - sh - wh,
                 H - sh,
             )
         })
         .collect();
-    let first = text(&days[0]["date"]);
-    let last = text(&days[days.len() - 1]["date"]);
     format!(
         "<div class=\"wrap\"><svg width=\"{}\" height=\"{H}\" role=\"img\">{cols}</svg></div>\
-         <p class=\"muted\">{first} to {last}; dark strong, light weak</p>",
+         <p class=\"muted\">{} to {}; dark strong, light weak</p>",
         days.len() * 10,
+        esc(&first.date),
+        esc(&last.date),
     )
-}
-
-fn list(xs: &Value) -> &[Value] {
-    xs.as_array().map_or(&[], Vec::as_slice)
 }
 
 fn table(header: &[&str], rows: &[Vec<String>]) -> String {
@@ -157,32 +144,33 @@ fn table(header: &[&str], rows: &[Vec<String>]) -> String {
     format!("<div class=\"wrap\"><table><tr>{head}</tr>{body}</table></div>")
 }
 
-fn usage(model: &Value, tz: &TimeZone) -> String {
-    let cards = list(&model["cards"]);
-    let card = |skill: &str| cards.iter().find(|c| c["skill"].as_str() == Some(skill));
-    let n = |v: &Value| format!("<td class=\"n\">{}</td>", text(v));
-    let rows: String = list(&model["usage"]["rows"])
+fn usage(model: &Report) -> String {
+    let card = |skill: &str| model.cards.iter().find(|c| c.skill == skill);
+    let n = |v: usize| format!("<td class=\"n\">{v}</td>");
+    let rows: String = model
+        .usage
+        .rows
         .iter()
         .map(|r| {
-            let skill = r["skill"].as_str().unwrap_or_default();
-            let name = if card(skill).is_some() {
-                format!("<a href=\"#{}\">{}</a>", anchor(skill), esc(skill))
+            let name = if card(&r.skill).is_some() {
+                format!("<a href=\"#{}\">{}</a>", anchor(&r.skill), esc(&r.skill))
             } else {
-                esc(skill)
+                esc(&r.skill)
             };
+            let verdict = card(&r.skill).and_then(|c| c.audit).map(|a| a.result.verdict.as_str());
             format!(
                 "<tr><td>{name}</td>{}{}{}{}{}{}<td class=\"mono\">{}</td><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
-                n(&r["sess"]),
-                n(&r["slash"]),
-                n(&r["tool"]),
-                n(&r["typed"]),
-                n(&r["read"]),
-                n(&r["ref"]),
-                text(&r["agents"]),
-                local(&r["last"], tz, DAY),
-                sparkline(list(&r["30d"])),
-                grade(&r["grade"]),
-                card(skill).map_or("-".into(), |c| text(&c["audit"]["result"]["verdict"])),
+                n(r.sess),
+                n(r.slash),
+                n(r.tool),
+                n(r.typed),
+                n(r.read),
+                n(r.ref_),
+                esc(&r.agents),
+                local(r.last.as_deref(), &model.tz, DAY),
+                sparkline(&r.last_30d),
+                grade(r.grade.as_ref()),
+                or_dash(verdict),
             )
         })
         .collect();
@@ -201,79 +189,65 @@ fn usage(model: &Value, tz: &TimeZone) -> String {
     format!("<h2>Usage</h2><div class=\"wrap\"><table><tr>{head}</tr>{rows}</table></div>")
 }
 
-fn coverage(model: &Value) -> String {
-    let parts: Vec<String> = model["usage"]["coverage"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .map(|(home, c)| format!("{} {}", esc(home), text(c)))
-        .collect();
+fn coverage(model: &Report) -> String {
+    let parts: Vec<String> = model.usage.coverage.iter().map(|(home, c)| format!("{} {}", esc(home), esc(c))).collect();
     format!("<p class=\"muted\">coverage: {}</p><p class=\"muted\">legend: {LEGEND}</p>", parts.join(" · "))
 }
 
-fn grades_due(model: &Value) -> String {
-    let due = list(&model["grades_due"]);
-    if due.is_empty() {
+fn grades_due(model: &Report) -> String {
+    if model.grades_due.is_empty() {
         return "<h2>Grades</h2><p>Every skill has a current grade.</p>".into();
     }
-    let items: String = due
+    let items: String = model
+        .grades_due
         .iter()
-        .map(|g| {
-            format!("<li><code>{}</code> <span class=\"muted\">{}</span></li>", text(&g["command"]), text(&g["state"]))
-        })
+        .map(|g| format!("<li><code>{}</code> <span class=\"muted\">{}</span></li>", esc(&g.command), esc(g.state)))
         .collect();
     format!("<h2>Grades to run</h2><ul>{items}</ul>")
 }
 
-fn links(ls: &Value) -> String {
-    let names: Vec<String> = list(ls)
-        .iter()
-        .map(|l| {
-            let skill = l["skill"].as_str().unwrap_or_default();
-            let held = if l["held"].as_bool() == Some(true) { " (held)" } else { "" };
-            format!("<a href=\"#{}\">{}</a>{held}", anchor(skill), esc(skill))
-        })
-        .collect();
-    if names.is_empty() { "none".into() } else { names.join(", ") }
+/// `cites` or `cited by`, each skill a link to its card.
+fn links(ls: &[Link]) -> String {
+    report::links(ls, |skill| format!("<a href=\"#{}\">{}</a>", anchor(skill), esc(skill)))
 }
 
 /// The card's examples: the invocation per agent, the manifest's
 /// default prompt, and real prompts read from transcripts.
-fn examples(ex: &Value, tz: &TimeZone) -> String {
-    let written: Vec<String> = list(&ex["written"])
-        .iter()
-        .map(|i| format!("{} <code>{}</code>", text(&i["agent"]), text(&i["text"])))
-        .collect();
+fn examples(ex: &Examples, tz: &TimeZone) -> String {
+    let written: Vec<String> =
+        ex.written.iter().map(|i| format!("{} <code>{}</code>", esc(&name(i.agent)), esc(&i.text))).collect();
     let mut out =
         format!("<dt>invoke</dt><dd>{}</dd>", if written.is_empty() { "-".into() } else { written.join(", ") });
-    if !ex["default_prompt"].is_null() {
-        out.push_str(&format!("<dt>default prompt</dt><dd>{}</dd>", text(&ex["default_prompt"])));
+    if let Some(p) = &ex.default_prompt {
+        out.push_str(&format!("<dt>default prompt</dt><dd>{}</dd>", esc(p)));
     }
-    let real: String = list(&ex["real"])
+    let real: String = ex
+        .real
         .iter()
         .map(|r| {
-            let cwd = r["cwd"].as_str().map_or("-".into(), |p| esc(&tilde(p)));
+            let cwd = r.cwd.as_deref().map_or("-".into(), |p| esc(&tilde(p)));
             format!(
                 "<li><span class=\"muted\">{} {} {cwd}</span><blockquote>{}</blockquote></li>",
-                local(&r["ts"], tz, DAY),
-                text(&r["agent"]),
-                text(&r["text"]),
+                local(Some(&r.ts), tz, DAY),
+                esc(&name(r.agent)),
+                esc(&r.text),
             )
         })
         .collect();
     let real = if real.is_empty() { "none".into() } else { format!("<ul>{real}</ul>") };
     out.push_str(&format!("<dt>examples</dt><dd>{real}</dd>"));
-    let curated: String = list(&ex["curated"])
+    let curated: String = ex
+        .curated
         .iter()
         .map(|c| {
             format!(
                 "<li>{} <span class=\"muted\">asked</span> {} <span class=\"muted\">happened</span> {} \
                  <span class=\"muted\">tip</span> {} <span class=\"muted mono\">{}</span></li>",
-                text(&c["situation"]),
-                text(&c["asked"]),
-                text(&c["happened"]),
-                text(&c["tip"]),
-                text(&c["session"]),
+                esc(&c.situation),
+                esc(&c.asked),
+                esc(&c.happened),
+                esc(&c.tip),
+                esc(&c.session),
             )
         })
         .collect();
@@ -285,86 +259,54 @@ fn examples(ex: &Value, tz: &TimeZone) -> String {
 
 /// The latest audit: its date and session count, verdict, the
 /// rates skima computed and the top three improvements.
-fn audit(a: &Value, tz: &TimeZone) -> String {
-    if a.is_null() {
-        return "<dt>audit</dt><dd>none</dd>".into();
-    }
-    // The model is serialized from a `SkillRecord`, so its rates read back.
-    let rates: Vec<String> = Rates::deserialize(&a["rates"])
-        .map(|r| r.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect())
-        .unwrap_or_default();
-    let improvements: String = list(&a["result"]["improvements"])
+fn audit(a: Option<&SkillRecord>, tz: &TimeZone) -> String {
+    let Some(a) = a else { return "<dt>audit</dt><dd>none</dd>".into() };
+    let rates: Vec<String> = a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect();
+    let improvements: String = a
+        .result
+        .improvements
         .iter()
         .take(AUDIT_IMPROVEMENTS)
-        .map(|i| format!("<li>{} <span class=\"muted\">{}</span></li>", text(&i["change"]), text(&i["reason"])))
+        .map(|i| format!("<li>{} <span class=\"muted\">{}</span></li>", esc(&i.change), esc(&i.reason)))
         .collect();
     format!(
         "<dt>audit</dt><dd><span class=\"muted\">{}, {} sessions, {} billing</span> {}<br>{}<ol>{improvements}</ol></dd>",
-        local(&a["audited_at"], tz, DAY),
-        list(&a["sessions"]).len(),
-        esc(a["judge"]["billing"].as_str().unwrap_or("unknown")),
-        text(&a["result"]["verdict"]),
+        local(Some(&a.audited_at), tz, DAY),
+        a.sessions.len(),
+        esc(a.judge.billing.map_or("unknown", Billing::name)),
+        esc(&a.result.verdict),
         rates.join(", "),
     )
 }
 
-fn card(c: &Value, tz: &TimeZone) -> String {
-    let skill = c["skill"].as_str().unwrap_or_default();
-    let from = c["since"].as_str().map_or("all time".into(), |d| format!("since {}", esc(d)));
-    let events: Vec<Vec<String>> = list(&c["events"])
+fn card(c: &Card, tz: &TimeZone) -> String {
+    let from = c.since.as_deref().map_or("all time".into(), |d| format!("since {}", esc(d)));
+    let events: Vec<Vec<String>> = c
+        .events
         .iter()
         .map(|e| {
-            let ts = local(&e["ts"], tz, MINUTE);
-            let cwd = e["cwd"].as_str().map_or("-".into(), |p| esc(&tilde(p)));
-            let mut src = esc(&tilde(e["src"].as_str().unwrap_or_default()));
-            if e["expired"].as_bool() == Some(true) {
+            let cwd = e.cwd.map_or("-".into(), |p| esc(&tilde(p)));
+            let mut src = esc(&tilde(e.src));
+            if e.expired {
                 src.push_str(" <span class=\"muted\">expired</span>");
             }
             vec![
-                ts,
-                text(&e["agent"]),
-                text(&e["channel"]),
-                text(&e["actor"]),
+                local(Some(e.ts), tz, MINUTE),
+                esc(&name(e.agent)),
+                esc(&name(e.channel)),
+                esc(&name(e.actor)),
                 cwd,
                 format!("<span class=\"mono\">{src}</span>"),
             ]
         })
         .collect();
-    // The committer's own date, as `show` prints it.
-    let commit = |v: &Value| {
-        let date = v["date"].as_str().unwrap_or_default();
-        format!("{} {}", esc(date.get(..10).unwrap_or(date)), text(&v["subject"]))
-    };
-    let history = match &c["history"] {
-        Value::Null => String::new(),
-        h => {
-            let mut line = if h["first"].is_null() {
-                "never committed".to_string()
-            } else {
-                format!("first {}, last {}", commit(&h["first"]), commit(&h["last"]))
-            };
-            if h["uncommitted"].as_bool() == Some(true) {
-                line.push_str(", uncommitted changes");
-            }
-            format!("<dt>history</dt><dd>{line}</dd>")
-        }
-    };
-    let grades: Vec<Vec<String>> = list(&c["grades"]).iter().map(|g| vec![text(&g["date"]), grade(g)]).collect();
-    let retros: Vec<Vec<String>> =
-        list(&c["retros"]).iter().map(|r| vec![text(&r["date"]), text(&r["score"]), text(&r["verdict"])]).collect();
-    let strong: Vec<String> = list(&c["usage"]["strong"])
+    let history = c.history_line().map_or(String::new(), |line| format!("<dt>history</dt><dd>{}</dd>", esc(&line)));
+    let grades: Vec<Vec<String>> = c.grades.iter().map(|g| vec![esc(&g.grade.eval.date), grade(Some(g))]).collect();
+    let retros: Vec<Vec<String>> = c
+        .retros
         .iter()
-        .map(|b| format!("{} {} {}", text(&b["agent"]), text(&b["channel"]), text(&b["events"])))
+        .map(|r| vec![esc(&r.date), or_dash(r.score.as_deref()), or_dash(r.verdict.as_deref())])
         .collect();
-    let projects: Vec<String> = list(&c["usage"]["projects"])
-        .iter()
-        .map(|p| format!("{} {}", esc(&tilde(p["cwd"].as_str().unwrap_or_default())), text(&p["sessions"])))
-        .collect();
-    let or_none = |xs: Vec<String>| if xs.is_empty() { "none".into() } else { xs.join(", ") };
-    let retro_note = match c["strong_since_retro"].as_u64() {
-        None => "none".into(),
-        Some(n) => format!("{n} strong since the latest"),
-    };
     format!(
         "<section id=\"{id}\"><h2>{name}</h2><p class=\"muted\">{from}</p>{hist}\
          <h3>Last {shown} of {total} events</h3>{events}\
@@ -372,45 +314,44 @@ fn card(c: &Value, tz: &TimeZone) -> String {
          <dt>cites</dt><dd>{cites}</dd><dt>cited by</dt><dd>{cited_by}</dd>\
          <dt>strong</dt><dd>{strong}</dd><dt>last use</dt><dd>{last_use}</dd><dt>projects</dt><dd>{projects}</dd>\
          <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{examples}{audit}</dl></section>",
-        id = anchor(skill),
-        name = esc(skill),
-        hist = histogram(list(&c["histogram"])),
-        shown = list(&c["events"]).len(),
-        total = text(&c["total_events"]),
+        id = anchor(c.skill),
+        name = esc(c.skill),
+        hist = histogram(&c.histogram),
+        shown = c.events.len(),
+        total = c.total_events,
         events = table(&["ts", "agent", "channel", "actor", "cwd", "src"], &events),
-        desc = text(&c["description"]),
-        path = esc(&tilde(c["path"].as_str().unwrap_or_default())),
-        cites = links(&c["cites"]),
-        cited_by = links(&c["cited_by"]),
-        strong = or_none(strong),
-        last_use = local(&c["usage"]["last_use"], tz, DAY),
-        projects = or_none(projects),
+        desc = or_dash(c.description.as_deref()),
+        path = esc(&tilde(&c.path.to_string_lossy())),
+        cites = links(&c.cites),
+        cited_by = links(&c.cited_by),
+        strong = esc(&c.strong_line()),
+        last_use = local(c.usage.last_use.as_deref(), tz, DAY),
+        projects = esc(&c.projects_line()),
         grades = if grades.is_empty() { "none".into() } else { table(&["date", "score"], &grades) },
+        retro_note = esc(&c.retro_note()),
         retros = if retros.is_empty() { String::new() } else { table(&["date", "score", "verdict"], &retros) },
-        examples = examples(&c["examples"], tz),
-        audit = audit(&c["audit"], tz),
+        examples = examples(&c.examples, tz),
+        audit = audit(c.audit, tz),
     )
 }
 
-/// The report page for the model of `report::report` over `input` and
-/// `since`. Times are shown in `input.tz`, the zone the model's days were
+/// The report page for `model`, its times shown in the zone its days were
 /// bucketed in.
-pub fn render(input: &Input, since: Since) -> crate::Result<String> {
-    let model = &report::report(input, since)?;
-    let tz = &input.tz;
-    let from = model["since"].as_str().map_or("all time".into(), |d| format!("since {}", esc(d)));
-    let cards: String = list(&model["cards"]).iter().map(|c| card(c, tz)).collect();
-    Ok(format!(
+pub fn render(model: &Report) -> String {
+    let tz = &model.tz;
+    let from = model.since.as_deref().map_or("all time".into(), |d| format!("since {}", esc(d)));
+    let cards: String = model.cards.iter().map(|c| card(c, tz)).collect();
+    format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <title>skima report</title><style>{CSS}</style></head>\n<body><h1>skima report</h1>\
          <p class=\"muted\">generated {} · usage {from} · times and days in {}</p>{}{}{}<h2>Skills</h2>{cards}</body></html>\n",
-        local(&model["generated"], tz, MINUTE),
-        local(&model["generated"], tz, "%Z"),
-        usage(model, tz),
+        local(Some(&model.generated), tz, MINUTE),
+        local(Some(&model.generated), tz, "%Z"),
+        usage(model),
         coverage(model),
         grades_due(model),
-    ))
+    )
 }
 
 /// Writes `html` to `path` with mode 0600, replacing any previous file:

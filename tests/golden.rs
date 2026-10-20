@@ -108,7 +108,7 @@ fn reports_match_their_golden_files() {
             outputs.push((format!("show-{skill}.{ext}"), card));
         }
     }
-    outputs.push(("report.html".into(), html::render(&input, Since::Days(30)).unwrap()));
+    outputs.push(("report.html".into(), html::render(&report::report(&input, Since::Days(30)))));
 
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let update = std::env::var_os("UPDATE_GOLDEN").is_some_and(|v| v == "1");
