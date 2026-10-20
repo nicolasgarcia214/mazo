@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
+use super::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots, ToolNames};
 use crate::config::Home;
 use crate::ledger::Channel;
 use crate::tail::Chunk;
@@ -19,6 +19,8 @@ use crate::tail::Chunk;
 pub struct Claude;
 
 const BASE_DIR: &str = "Base directory for this skill: ";
+const TOOLS: ToolNames =
+    ToolNames { block: "tool_use", input: "input", read: "Read", path: "file_path", shell: "Bash" };
 
 impl Adapter for Claude {
     fn parse(&self, roots: &SkillRoots, path: &Path, _header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
@@ -204,20 +206,8 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 /// file keyed by its index among the files read.
 fn assistant(roots: &SkillRoots, r: &Record, out: &mut Parsed) {
     let Some(uuid) = r.v["uuid"].as_str() else { return };
-    let cwd = r.session.cwd.as_deref();
-    for (ci, b) in blocks(r.content()).enumerate() {
-        if b["type"] != "tool_use" {
-            continue;
-        }
-        let input = &b["input"];
-        let found = match (b["name"].as_str(), input["file_path"].as_str(), input["command"].as_str()) {
-            (Some("Read"), Some(file), _) => roots.classify(file, cwd).map(|sf| (0, sf)).into_iter().collect(),
-            (Some("Bash"), _, Some(cmd)) => roots.shell_reads(cmd, cwd, &mut out.unparsed),
-            _ => continue,
-        };
-        for (fi, sf) in found {
-            out.raws.push(r.raw(format!("cc:{uuid}:{ci}:{fi}"), sf.skill, sf.channel, Some(sf.path), false));
-        }
+    for (ci, fi, sf) in super::tool_reads(roots, &TOOLS, r.content(), r.session.cwd.as_deref(), &mut out.unparsed) {
+        out.raws.push(r.raw(format!("cc:{uuid}:{ci}:{fi}"), sf.skill, sf.channel, Some(sf.path), false));
     }
 }
 
