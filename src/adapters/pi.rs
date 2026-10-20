@@ -149,28 +149,18 @@ impl Entry<'_> {
     }
 }
 
-fn session_of_header(line: &[u8]) -> Option<Session> {
+/// The session a Pi session header line describes; `None` for any other line.
+pub fn session_of_header(line: &[u8]) -> Option<Session> {
     let v: Value = serde_json::from_slice(line).ok()?;
-    let (id, parent) = id_parent(&v)?;
+    if v["type"] != "session" {
+        return None;
+    }
+    let parent = v["parentSession"].as_str().filter(|p| !p.is_empty()).map(PathBuf::from);
     Some(Session {
-        id,
+        id: v["id"].as_str()?.to_string(),
         actor: ActorInputs { subagent: parent.is_some(), ..ActorInputs::default() },
         parent: parent.map(Parent::Pi),
         cwd: v["cwd"].as_str().map(str::to_string),
         version: None,
     })
-}
-
-fn id_parent(v: &Value) -> Option<(String, Option<PathBuf>)> {
-    if v["type"] != "session" {
-        return None;
-    }
-    let id = v["id"].as_str()?.to_string();
-    let parent = v["parentSession"].as_str().filter(|p| !p.is_empty()).map(PathBuf::from);
-    Some((id, parent))
-}
-
-/// `(id, parentSession)` from a Pi session header line.
-pub fn header_id_parent(line: &[u8]) -> Option<(String, Option<PathBuf>)> {
-    id_parent(&serde_json::from_slice(line).ok()?)
 }

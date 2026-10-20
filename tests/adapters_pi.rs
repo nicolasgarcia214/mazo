@@ -206,11 +206,10 @@ fn fork_copies_share_keys_and_the_child_roots_to_the_parent() {
     assert_eq!(classify::actor(Agent::Pi, &parent.raws[0].session.actor), Actor::Main);
     let h = home(dir.path());
     assert_eq!(Roots::default().root(&h, &s.id, s.parent.as_ref()), parent_id);
-    assert_eq!(
-        pi::header_id_parent(&tail::first_line(&files[1]).unwrap().unwrap()),
-        Some((s.id.clone(), Some(files[0].clone())))
-    );
-    assert_eq!(pi::header_id_parent(&tail::first_line(&files[0]).unwrap().unwrap()), Some((parent_id.into(), None)));
+    let header =
+        |f: &std::path::Path| pi::session_of_header(&tail::first_line(f).unwrap().unwrap()).map(|h| (h.id, h.parent));
+    assert_eq!(header(&files[1]), Some((s.id.clone(), Some(Parent::Pi(files[0].clone())))));
+    assert_eq!(header(&files[0]), Some((parent_id.into(), None)));
 }
 
 #[test]
