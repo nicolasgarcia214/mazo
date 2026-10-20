@@ -235,7 +235,9 @@ fn an_expired_session_takes_no_turn_in_the_round_robin() {
 /// to stdout or the `-o` file. The Codex stub also leaves its `CODEX_HOME`, that
 /// home's listing and where its `auth.json` points, then writes a session and
 /// a log into that home, as Codex would. `claude auth status` is no call: it
-/// leaves its environment in `auth_status_env` and prints `auth_status`, else
+/// leaves its environment in `auth_status_env`, its working directory in
+/// `auth_status_pwd` and that directory's listing in `auth_status_ls`, and
+/// prints `auth_status`, else
 /// a claude.ai login.
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -298,6 +300,8 @@ impl Fixture {
             r#"#!/bin/sh
 if [ "$1 $2" = "auth status" ]; then
   env >> {r}/auth_status_env
+  pwd > {r}/auth_status_pwd
+  ls -A > {r}/auth_status_ls
   cat {r}/auth_status 2>/dev/null || echo '{{"loggedIn":true,"authMethod":"claude.ai"}}'
   exit
 fi
@@ -1456,7 +1460,11 @@ fn a_claude_login_that_would_bill_otherwise_exits_2_before_any_judge_call() {
     assert_eq!(stdout(&out), "");
     assert!(fx.auth_status_env().is_some());
     assert!(fx.calls().is_empty() && fx.lines().is_empty());
-    assert!(!fx.data().join("audit-runs").exists());
+    // The check runs where a judge call would, not in skima's working directory.
+    let pwd = fs::read_to_string(fx.root.join("auth_status_pwd")).unwrap();
+    assert!(Path::new(pwd.trim_end()).starts_with(fx.data().join("audit-runs")), "{pwd}");
+    assert_eq!(fs::read_to_string(fx.root.join("auth_status_ls")).unwrap(), "");
+    assert_eq!(fs::read_dir(fx.data().join("audit-runs")).unwrap().count(), 0, "the check's directory is left");
 
     // An OAuth token is a login; so is claude.ai, the stub's default.
     common::write(&fx.root.join("auth_status"), "{\"loggedIn\":true,\"authMethod\":\"oauth_token\"}\n");
@@ -1486,6 +1494,22 @@ fn a_codex_judge_without_a_chatgpt_login_in_the_configured_home_is_never_started
     assert_eq!(stderr(&out), want);
     assert!(fx.calls().is_empty());
     assert!(!fx.data().join("codex-judge-home").exists());
+
+    // An unreadable or malformed `auth.json` refuses too, and says why.
+    let needs = "; the Codex judge needs a ChatGPT login: run codex login, or set billing = \"api\" under [judge]\n";
+    common::write(&home.join("auth.json"), "{not json\n");
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.starts_with(&format!("ERROR: {}: not JSON: ", home.join("auth.json").display())), "{err}");
+    assert!(err.ends_with(needs), "{err}");
+    fs::remove_file(home.join("auth.json")).unwrap();
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.starts_with(&format!("ERROR: {}: No such file", home.join("auth.json").display())), "{err}");
+    assert!(err.ends_with(needs), "{err}");
+    assert!(fx.calls().is_empty());
 
     common::write(&home.join("auth.json"), "{\"auth_mode\":\"chatgpt\"}\n");
     let out = fx.skima(&["audit", "unslop"]);

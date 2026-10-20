@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirBuilder};
 use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::os::unix::fs::DirBuilderExt;
@@ -552,43 +552,75 @@ fn scrub(cmd: &mut Command, billing: Billing) {
     }
 }
 
+/// How long `claude auth status` may run before the login check fails.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Under `subscription`, the check a run makes once before its first judge
-/// call, in the environment the calls get: Claude's `auth status` must report
-/// a claude.ai or OAuth-token login, and the user's Codex `auth.json` a
-/// ChatGPT login. Pi picks its provider from its own settings, so it is not
-/// checked. The error says what would be billed.
+/// call, in the environment and the kind of fresh empty directory the calls
+/// get: Claude's `auth status` must report a claude.ai or OAuth-token login,
+/// and the user's Codex `auth.json` a ChatGPT login. Pi picks its provider
+/// from its own settings, so it is not checked. The error says what would be
+/// billed, or why the login could not be read.
 pub fn login(a: &Audit) -> Result<()> {
     if a.judge.billing == Billing::Api {
         return Ok(());
     }
     match a.judge.agent {
         Agent::Claude => {
-            let mut cmd = Command::new("claude");
-            cmd.args(["auth", "status"]).stdin(Stdio::null()).stderr(Stdio::null());
-            scrub(&mut cmd, a.judge.billing);
-            let out = cmd.output().map_err(|e| format!("claude: {e}"))?;
-            let status: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
-            match status["authMethod"].as_str() {
-                Some("claude.ai" | "oauth_token") => Ok(()),
-                method => Err(format!(
-                    "the Claude judge would bill {}; log in with claude /login, or set billing = \"api\" under [judge]",
-                    method.unwrap_or("no login")
-                )),
-            }
+            let (_, dir) = run_dir(a.data)?;
+            let checked = claude_login(OsStr::new("claude"), &dir, AUTH_TIMEOUT);
+            fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            checked
         }
         Agent::Codex => {
-            let auth: Value =
-                fs::read(a.codex_auth).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+            let path = a.codex_auth.display();
+            let unread = |why: String| {
+                format!(
+                    "{path}: {why}; the Codex judge needs a ChatGPT login: run codex login, or set billing = \"api\" under [judge]"
+                )
+            };
+            let bytes = fs::read(a.codex_auth).map_err(|e| unread(e.to_string()))?;
+            let auth: Value = serde_json::from_slice(&bytes).map_err(|e| unread(format!("not JSON: {e}")))?;
             if auth["auth_mode"] == "chatgpt" {
                 return Ok(());
             }
             Err(format!(
-                "{}: no ChatGPT login for the Codex judge; run codex login, or set billing = \"api\" under [judge]",
-                a.codex_auth.display()
+                "{path}: no ChatGPT login for the Codex judge; run codex login, or set billing = \"api\" under [judge]"
             ))
         }
         Agent::Pi => Ok(()),
     }
+}
+
+/// `program auth status` run in `dir` without [`BILLED`], killed after
+/// `limit`: Ok for a claude.ai or OAuth-token login.
+fn claude_login(program: &OsStr, dir: &Path, limit: Duration) -> Result<()> {
+    let mut cmd = Command::new(program);
+    cmd.args(["auth", "status"]).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    scrub(&mut cmd, Billing::Subscription);
+    let failed = |e: std::io::Error| format!("claude auth status: {e}");
+    let check = "check it with claude auth status, or set billing = \"api\" under [judge]";
+    let Some(out) = wait(cmd.spawn().map_err(failed)?, None, limit).map_err(failed)? else {
+        let secs = limit.as_secs();
+        return Err(format!("claude auth status gave no answer within {secs} seconds; {check}"));
+    };
+    let status: Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    match (out.status.success(), status["authMethod"].as_str()) {
+        (true, Some("claude.ai" | "oauth_token")) => Ok(()),
+        (_, Some(method)) if !matches!(method, "claude.ai" | "oauth_token") => Err(format!(
+            "the Claude judge would bill {method}; log in with claude /login, or set billing = \"api\" under [judge]"
+        )),
+        _ => Err(format!("could not read the Claude judge's login from claude auth status ({}); {check}", out.status)),
+    }
+}
+
+/// A fresh empty directory under `<data>/audit-runs/`, and its unique name.
+fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
+    let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
+    let runs = data.join("audit-runs");
+    let dir = runs.join(&unique);
+    fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    Ok((unique, dir))
 }
 
 /// One judge call: [`command`]'s argv run in a fresh empty directory
@@ -604,10 +636,7 @@ pub fn login(a: &Audit) -> Result<()> {
 /// Codex or Pi judge that exited nonzero with no answer.
 fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
     let argv = command(a.judge, stage);
-    let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
-    let runs = a.data.join("audit-runs");
-    let dir = runs.join(&unique);
-    fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let (unique, dir) = run_dir(a.data)?;
     let scratch = if a.judge.agent == Agent::Codex { Some(codex_home(a)?) } else { None };
     let files = std::env::temp_dir().join(format!("skima-judge-{unique}"));
     let result = files.join("result.json");
@@ -1555,6 +1584,30 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
+    }
+
+    /// `claude_login` on a stub whose `auth status` runs `script`.
+    fn login_with(script: &str, limit: Duration) -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = dir.path().join("claude");
+        fs::write(&stub, format!("#!/bin/sh\n{script}")).unwrap();
+        Command::new("chmod").arg("+x").arg(&stub).status().unwrap();
+        claude_login(stub.as_os_str(), dir.path(), limit)
+    }
+
+    #[test]
+    fn a_claude_login_that_cannot_be_read_fails_the_check() {
+        let limit = Duration::from_secs(30);
+        assert_eq!(login_with("echo '{\"authMethod\":\"claude.ai\"}'\n", limit), Ok(()));
+        let started = Instant::now();
+        let err = login_with("sleep 10\n", Duration::from_millis(100)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(5), "the check waited out its stub");
+        assert!(err.starts_with("claude auth status gave no answer within 0 seconds; check it with"), "{err}");
+        for script in ["echo 'Not logged in'\nexit 1\n", "echo '{\"authMethod\":\"claude.ai\"}'\nexit 1\n", ""] {
+            let err = login_with(script, limit).unwrap_err();
+            assert!(err.starts_with("could not read the Claude judge's login from claude auth status ("), "{err}");
+            assert!(err.ends_with("check it with claude auth status, or set billing = \"api\" under [judge]"), "{err}");
+        }
     }
 
     #[test]
