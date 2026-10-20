@@ -12,6 +12,7 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 use std::time::{Duration, Instant};
@@ -47,6 +48,8 @@ static LIVE: Mutex<()> = Mutex::new(());
 fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
     let _live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    // Its own process group, so a timeout kills every process it started.
+    cmd.process_group(0);
     let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => return Ran { ok: false, log: format!("{cmd:?}: {e}") },
@@ -97,7 +100,8 @@ fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
                 std::thread::sleep(Duration::from_millis(100))
             }
             _ => {
-                let _ = child.kill();
+                // SAFETY: `kill` takes no pointers; the negative pid names the child's group.
+                unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
                 let _ = child.wait();
                 break None;
             }
@@ -238,11 +242,17 @@ fn assert_recorded(home: &str, channel: &str, act: impl Fn(&Probe) -> Ran, acted
             eprintln!("attempt {attempt}: the model never acted\n{}", ran.log);
             continue;
         }
-        let events = probe.scan().remove(home).unwrap_or_default();
-        let hit = |e: &Value| e["skill"] == probe.skill.as_str() && e["channel"] == channel && e["actor"] == "headless";
+        let events: Vec<Value> = probe
+            .scan()
+            .remove(home)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| e["skill"] == probe.skill.as_str())
+            .collect();
+        let hit = |e: &Value| e["agent"] == home && e["channel"] == channel && e["actor"] == "headless";
         assert!(
-            events.iter().any(hit),
-            "the model acted but skima recorded no headless {channel} event: {}\n{}",
+            !events.is_empty() && events.iter().all(hit),
+            "the model acted, so every probe event must be a headless {home} {channel} event: {}\n{}",
             json!(events),
             ran.log
         );
