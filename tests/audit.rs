@@ -227,7 +227,8 @@ fn an_expired_session_takes_no_turn_in_the_round_robin() {
 /// with no transcripts, Codex and Pi logins, and stub `claude`, `codex` and
 /// `pi` on `PATH`. Every call of a stub leaves `calls/<n>/` with its argv,
 /// working directory, that directory's listing, stdin and the schema and
-/// input files its argv names, then writes `replies/<n>`; else, for a stage-2
+/// input files its argv names, then runs `scripts/<n>`, which may exit, in its
+/// shell; then writes `replies/<n>`; else, for a stage-2
 /// call, `replies/skill` with `SESSION` set to the first session record's id;
 /// else `replies/default` with `LINE` set to the first line its input cites;
 /// to stdout or the `-o` file. The Codex stub also leaves its `CODEX_HOME`, that
@@ -321,6 +322,7 @@ if [ -f {r}/transcript ]; then
   mkdir -p "$HOME/.claude/projects/run"
   sed "s|CWD|$PWD|g; s|SID|run-$n|g" {r}/transcript > "$HOME/.claude/projects/run/$n.jsonl"
 fi
+if [ -f {r}/scripts/$n ]; then . {r}/scripts/$n; fi
 if [ -f {r}/replies/$n ]; then cat {r}/replies/$n > "$out"; exit; fi
 if grep -q '^<session-records>$' "$in"; then
   sid=$(grep -o '"session":"[^"]*"' "$in" | head -n 1 | cut -d '"' -f 4)
@@ -351,6 +353,11 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
     /// Sets the stub's `n`-th (or `default`) output to `text`.
     fn raw_reply(&self, n: &str, text: &str) {
         common::write(&self.root.join("replies").join(n), text);
+    }
+
+    /// Runs `script` in the stub's shell on its `n`-th call, before its reply.
+    fn script(&self, n: &str, script: &str) {
+        common::write(&self.root.join("scripts").join(n), script);
     }
 
     /// File `f` that stub call `call` left.
@@ -925,22 +932,114 @@ fn validation_checks_schema_lines_and_quotes() {
     assert!(with("notes", "PLEASE tidy\n the   prose.".into()).is_err());
     assert!(with("notes", "Launching skill: unslop".into()).is_ok(), "a 23-character tool result is no user message");
     assert!(with("notes", "Now check the tone".into()).is_ok(), "part of a short user message");
-    let finding = serde_json::json!([{"line": 8, "text": format!("Got {r40}")}]);
-    assert!(with("strengths", finding).is_err(), "findings are checked too");
+    let finding = serde_json::json!([{"line": 3, "text": "Fine."}, {"line": 8, "text": format!("Got {r40}")}]);
+    let quoted = Err(format!("strengths[1] quotes the session: \"{r40}\""));
+    assert_eq!(with("strengths", finding), quoted, "findings are checked too");
+    let short = Err("asked quotes the session: \"please tidy the prose.\"".into());
+    assert_eq!(with("asked", "PLEASE tidy\n the   prose.".into()), short);
 }
 
 #[test]
-fn a_call_with_unreadable_output_counts_its_whole_cap() {
+fn a_call_whose_output_is_no_json_stops_the_run_at_no_cost() {
     let fx = Fixture::new("", three_agents);
-    common::write(&fx.root.join("replies/1"), "not json\n");
+    fx.raw_reply("1", "not json\n");
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
+    assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n");
+    assert!(stderr(&out).contains("the judge failed without an answer"), "{}", stderr(&out));
+    assert!(fx.records().is_empty());
+}
+
+/// Stderr lines `err1` to `err6`, then exit 1.
+const FAIL: &str = "for i in 1 2 3 4 5 6; do echo err$i >&2; done\nexit 1\n";
+
+#[test]
+fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
+    // An invalid key: `api_error` JSON on stdout, exit 1.
+    let fx = Fixture::new("", claude_sessions(2));
+    let invalid = r#"{"subtype":"success","is_error":true,"terminal_reason":"api_error","total_cost_usd":0,"result":"Invalid API key"}"#;
+    fx.script("1", &format!("echo '{invalid}'\n{FAIL}"));
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
+    assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped, $0.00 spent of $1.00\n");
+    let err = stderr(&out);
+    assert!(
+        err.contains("ERROR: s00: the judge failed without an answer (exit status: 1): Invalid API key\n"),
+        "{err}"
+    );
+    assert!((1..=5).all(|i| err.contains(&format!("  err{i}\n"))) && !err.contains("err6"), "{err}");
+
+    // Plain text on stdout, exit 1; the record written before stays and stage 2 never runs.
+    let fx = Fixture::new("", claude_sessions(3));
+    fx.script("2", &format!("echo 'Not logged in'\n{FAIL}"));
+    let out = fx.skima(&["audit", "unslop", "--json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 2);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v, serde_json::json!({"record": null, "written": 1, "dropped": 0, "spent_usd": 0.1, "left": []}));
+    assert!(stderr(&out).contains("ERROR: s01: the judge failed without an answer (exit status: 1)\n  err1\n"));
+    assert_eq!(fx.records().len(), 1);
+    assert!(fx.skill_records().is_empty());
+
+    // The stage-2 judge stops the run the same way.
+    let fx = Fixture::new("", claude_sessions(1));
+    fx.script("2", &format!("echo '{invalid}'\n{FAIL}"));
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 2);
+    assert_eq!(stdout(&out), "unslop: 1 judged, 0 dropped, $0.10 spent of $1.00\n");
+    assert!(stderr(&out).contains("ERROR: skill report: the judge failed without an answer"), "{}", stderr(&out));
+    assert_eq!(fx.records().len(), 1);
+    assert!(fx.skill_records().is_empty());
+}
+
+#[test]
+fn a_codex_or_pi_judge_that_exits_nonzero_without_its_result_stops_the_run() {
+    for agent in ["codex", "pi"] {
+        let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\n"), claude_sessions(2));
+        fx.script("1", FAIL);
+        let out = fx.skima(&["audit", "unslop"]);
+        assert_eq!(out.status.code(), Some(1), "{agent}: {}", stderr(&out));
+        assert_eq!(fx.calls().len(), 1, "{agent}");
+        assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped\n", "{agent}");
+        let err = stderr(&out);
+        assert!(err.contains("ERROR: s00: the judge failed without an answer (exit status: 1)\n  err1\n"), "{err}");
+    }
+}
+
+#[test]
+fn a_claude_judge_killed_by_a_signal_skima_did_not_send_stops_the_run_at_its_cap() {
+    let fx = Fixture::new("", claude_sessions(2));
+    fx.script("1", "echo dying >&2\nkill -9 $$\n");
+    let out = fx.skima(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(fx.calls().len(), 1);
+    assert_eq!(stdout(&out), "unslop: 0 judged, 0 dropped, $0.75 spent of $1.00\n");
+    let err = stderr(&out);
+    assert!(err.contains("ERROR: s00: the judge failed without an answer (signal: 9 (SIGKILL))\n  dying\n"), "{err}");
+}
+
+#[test]
+fn a_quote_rejection_names_the_field_and_the_shared_text() {
+    let fx = Fixture::new("", claude_sessions(1));
+    let mut quote = answer(3);
+    quote["notes"] = format!("Output was {}.", "R".repeat(80)).into();
+    fx.reply("1", "0.1", &quote);
+    fx.reply("2", "0.1", &answer(3));
     let out = fx.skima(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    // The first call's $0.75 cap is spent, so no retry or later call starts.
-    assert_eq!(fx.calls().len(), 1);
-    let text = stdout(&out);
-    assert!(text.starts_with("unslop: 0 judged, 0 dropped, $0.75 spent of $1.00\n"), "{text}");
-    assert!(text.contains("left for the next run: 3\n"), "{text}");
-    assert!(fx.records().is_empty());
+    let calls = fx.calls();
+    let rejected = calls[1].stdin.strip_prefix(&calls[0].stdin).unwrap();
+    let shared = "r".repeat(60);
+    assert_eq!(
+        rejected,
+        format!(
+            "\n<rejected-answer>\nYour previous answer was rejected: notes quotes the session: \"{shared}\". \
+             Answer again with that fixed.\n</rejected-answer>\n"
+        )
+    );
 }
 
 #[test]

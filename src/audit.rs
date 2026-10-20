@@ -11,6 +11,7 @@ use std::ffi::OsString;
 use std::fs::{self, DirBuilder};
 use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{LazyLock, mpsc};
@@ -53,6 +54,8 @@ const FINDINGS: usize = 5;
 const QUOTE_CHARS: usize = 40;
 /// A whole user message of this many characters is a quote.
 const SHORT_MESSAGE: std::ops::RangeInclusive<usize> = 12..=39;
+/// The most of a quote a rejection shows the judge.
+const SHARED_CHARS: usize = 60;
 
 /// The JSON schema of the judge's answer, passed as `--json-schema`.
 pub static SESSION_SCHEMA: LazyLock<String> = LazyLock::new(|| {
@@ -427,10 +430,11 @@ fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-/// The first of `texts` that quotes the session: it shares
-/// 40 consecutive characters with a user message, an assistant message or a
-/// tool result, or holds a whole user message of 12 to 39 characters.
-fn quoting<'a>(texts: impl Iterator<Item = &'a str>, records: &[(u64, String)]) -> Option<&'a str> {
+/// The field of the first of `texts` that quotes the session, and the text it
+/// shares: 40 consecutive characters shared with a user message, an assistant
+/// message or a tool result, run on to at most 60, or a whole user message of
+/// 12 to 39 characters.
+fn quoting<'a>(texts: impl Iterator<Item = (String, &'a str)>, records: &[(u64, String)]) -> Option<(String, String)> {
     let sources: Vec<(bool, String)> = records
         .iter()
         .filter_map(|(_, r)| {
@@ -453,9 +457,19 @@ fn quoting<'a>(texts: impl Iterator<Item = &'a str>, records: &[(u64, String)]) 
         .filter(|(user, s)| *user && SHORT_MESSAGE.contains(&s.chars().count()))
         .map(|(_, s)| s.as_str())
         .collect();
-    texts.into_iter().find(|t| {
+    texts.into_iter().find_map(|(field, t)| {
         let t = normalize(t);
-        windows(&t).into_iter().any(|(a, b)| shared.contains(&t[a..b])) || short.iter().any(|s| t.contains(s))
+        let at: Vec<usize> = t.char_indices().map(|(i, _)| i).chain([t.len()]).collect();
+        let quote = (0..at.len().saturating_sub(QUOTE_CHARS))
+            .find(|&i| shared.contains(&t[at[i]..at[i + QUOTE_CHARS]]))
+            .and_then(|i| {
+                (QUOTE_CHARS..=SHARED_CHARS)
+                    .rev()
+                    .filter_map(|n| Some(&t[at[i]..*at.get(i + n)?]))
+                    .find(|run| sources.iter().any(|(_, s)| s.contains(run)))
+            })
+            .or_else(|| short.iter().copied().find(|s| t.contains(s)));
+        Some((field, quote?.to_string()))
     })
 }
 
@@ -478,9 +492,12 @@ pub fn validate(answer: Value, condensed: &str) -> std::result::Result<Verdict, 
     if let Some(f) = findings().find(|f| !records.iter().any(|(n, _)| *n == f.line)) {
         return Err(format!("cites L{}, which is not in the session", f.line));
     }
-    let texts = [v.asked.as_str(), v.notes.as_str()].into_iter().chain(findings().map(|f| f.text.as_str()));
-    if quoting(texts, &records).is_some() {
-        return Err("quotes the session".into());
+    let mut texts = vec![("asked".to_string(), v.asked.as_str()), ("notes".to_string(), v.notes.as_str())];
+    for (kind, list) in [("strengths", &v.strengths), ("frictions", &v.frictions)] {
+        texts.extend(list.iter().enumerate().map(|(i, f)| (format!("{kind}[{i}]"), f.text.as_str())));
+    }
+    if let Some((field, text)) = quoting(texts.into_iter(), &records) {
+        return Err(format!("{field} quotes the session: \"{text}\""));
     }
     Ok(v)
 }
@@ -489,7 +506,16 @@ pub fn validate(answer: Value, condensed: &str) -> std::result::Result<Verdict, 
 /// reports none, and the answer or why there is none.
 struct Reply {
     cost: Option<u64>,
-    answer: std::result::Result<Value, String>,
+    answer: std::result::Result<Value, NoAnswer>,
+}
+
+/// Why a judge call gave no answer.
+enum NoAnswer {
+    /// Over its cap, past its time, or an answer that does not parse: retried as it was.
+    Retry(String),
+    /// A judge that failed without an answer: a login, key or network failure,
+    /// or a signal skima did not send. The run stops.
+    Stop(String),
 }
 
 /// Claude's `--output-format json` result; the cost stays decimal text.
@@ -500,6 +526,8 @@ struct ClaudeOutput<'a> {
     #[serde(default)]
     is_error: bool,
     subtype: Option<String>,
+    terminal_reason: Option<String>,
+    result: Option<String>,
     structured_output: Option<Value>,
 }
 
@@ -509,7 +537,11 @@ struct ClaudeOutput<'a> {
 /// input on stdin; Codex gets the prompt and the input on stdin and the scratch
 /// `CODEX_HOME`; Pi reads the input file. A Claude call that ran but reported
 /// no cost is counted at its cap, the most it could have spent short of one
-/// turn's overshoot, so the budget still binds.
+/// turn's overshoot, so the budget still binds. A judge that failed without an
+/// answer is a [`NoAnswer::Stop`] with the first five lines of its stderr:
+/// Claude's `api_error` or output that is no JSON, at the reported cost or $0,
+/// and a Claude judge killed by a signal skima did not send, at its cap; a
+/// Codex or Pi judge that exited nonzero with no answer.
 fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
     let argv = command(a.judge, stage);
     let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
@@ -569,33 +601,46 @@ fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply
         // A killed Claude judge is counted at its cap, as one reporting no cost.
         let cost = (a.judge.agent == Agent::Claude).then(|| cap.unwrap_or_default());
         let minutes = JUDGE_TIMEOUT.as_secs() / 60;
-        return Ok(Reply { cost, answer: Err(format!("no answer within {minutes} minutes; the judge was killed")) });
+        let answer = Err(NoAnswer::Retry(format!("no answer within {minutes} minutes; the judge was killed")));
+        return Ok(Reply { cost, answer });
     };
-    let failed = || {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        format!("({}): {}", output.status, stderr.lines().next().unwrap_or_default())
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let failed = || format!("({}): {}", output.status, stderr.lines().next().unwrap_or_default());
+    let stop = |result: Option<&str>| {
+        let result = result.map(|r| format!(": {r}")).unwrap_or_default();
+        let lines: String = stderr.lines().take(5).map(|l| format!("\n  {l}")).collect();
+        NoAnswer::Stop(format!("the judge failed without an answer ({}){result}{lines}", output.status))
+    };
+    // No answer stops the run after a nonzero exit and is retried after a zero one.
+    let exited = |answer: std::result::Result<Value, String>| {
+        answer.map_err(
+            |e| if output.status.success() { NoAnswer::Retry(format!("{e} {}", failed())) } else { stop(None) },
+        )
     };
     Ok(match a.judge.agent {
         Agent::Claude => {
             let cap = cap.unwrap_or_default();
+            if output.status.signal().is_some() {
+                return Ok(Reply { cost: Some(cap), answer: Err(stop(None)) });
+            }
             let Ok(out) = serde_json::from_slice::<ClaudeOutput>(&output.stdout) else {
-                return Ok(Reply { cost: Some(cap), answer: Err(format!("unreadable judge output {}", failed())) });
+                return Ok(Reply { cost: Some(0), answer: Err(stop(None)) });
             };
-            let cost = out.total_cost_usd.map(|c| parse_usd(c.get())).transpose()?.unwrap_or(cap);
+            let cost = out.total_cost_usd.map(|c| parse_usd(c.get())).transpose()?;
+            if out.is_error && out.terminal_reason.as_deref() == Some("api_error") {
+                return Ok(Reply { cost: Some(cost.unwrap_or(0)), answer: Err(stop(out.result.as_deref())) });
+            }
             let answer = match out.structured_output {
                 Some(v) if !out.is_error => Ok(v),
-                _ => Err(format!("no answer ({})", out.subtype.as_deref().unwrap_or("error"))),
+                _ => Err(NoAnswer::Retry(format!("no answer ({})", out.subtype.as_deref().unwrap_or("error")))),
             };
-            Reply { cost: Some(cost), answer }
+            Reply { cost: Some(cost.unwrap_or(cap)), answer }
         }
-        Agent::Codex => Reply {
-            cost: None,
-            answer: written
-                .ok()
-                .and_then(|b| serde_json::from_slice(&b).ok())
-                .ok_or_else(|| format!("no answer in the -o file {}", failed())),
-        },
-        Agent::Pi => Reply { cost: None, answer: pi_answer(&output.stdout).map_err(|e| format!("{e} {}", failed())) },
+        Agent::Codex => {
+            let written = written.ok().and_then(|b| serde_json::from_slice(&b).ok());
+            Reply { cost: None, answer: exited(written.ok_or_else(|| "no answer in the -o file".into())) }
+        }
+        Agent::Pi => Reply { cost: None, answer: exited(pi_answer(&output.stdout)) },
     })
 }
 
@@ -801,13 +846,65 @@ pub enum Synthesis {
     Dropped(String),
     /// Under a cent of the budget was left; never without a budget.
     Skipped,
+    /// A judge of either stage failed without an answer, and the run stopped.
+    Stopped,
+}
+
+/// How judging one session, or the skill, ended.
+enum Ruling<T> {
+    /// A valid answer, and the reported cost of its calls.
+    Valid(T, Option<u64>),
+    /// Invalid twice; why the last answer failed.
+    Dropped(String),
+    /// Under a cent of the cap left before a call; why an earlier answer failed.
+    Unfunded(Option<String>),
+    /// The judge failed without an answer; why.
+    Stopped(String),
+}
+
+/// The call-and-validate step both stages share: `stage`'s judge on `input`,
+/// its answer checked by `check`, an invalid one retried once with why it was
+/// rejected. Each call is capped at `limit` minus `spent`, adds its cost to
+/// `spent`, and starts only on a cap of a cent or more; `progress` names it
+/// while stderr is a terminal.
+fn judge<T>(
+    a: &Audit,
+    stage: &Stage,
+    limit: Option<u64>,
+    spent: &mut u64,
+    input: &str,
+    progress: &str,
+    check: impl Fn(Value) -> std::result::Result<T, String>,
+) -> Result<Ruling<T>> {
+    let mut cost = None;
+    let (mut why, mut rejected) = (None, None);
+    for _ in 0..2 {
+        let cap = limit.map(|l| l.saturating_sub(*spent));
+        if cap.is_some_and(|cap| cap < CENT) {
+            return Ok(Ruling::Unfunded(why));
+        }
+        if std::io::stderr().is_terminal() {
+            let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
+            eprintln!("{progress}{cap}");
+        }
+        let reply = call(a, stage, cap, &retry(input, rejected.as_deref()))?;
+        *spent += reply.cost.unwrap_or_default();
+        cost = reply.cost.map(|r| r + cost.unwrap_or_default());
+        match reply.answer.map(&check) {
+            Ok(Ok(answer)) => return Ok(Ruling::Valid(answer, cost)),
+            Ok(Err(e)) => (why, rejected) = (Some(e.clone()), Some(e)),
+            Err(NoAnswer::Retry(e)) => (why, rejected) = (Some(e), None),
+            Err(NoAnswer::Stop(e)) => return Ok(Ruling::Stopped(e)),
+        }
+    }
+    Ok(Ruling::Dropped(why.unwrap_or_default()))
 }
 
 /// Runs stage 1 on `candidates`, then stage 2 when stage 1 wrote a session
-/// record or `resynth` is set.
+/// record or `resynth` is set and no judge stopped the run.
 pub fn run<'c>(a: &Audit, candidates: &'c [Candidate], resynth: bool) -> Result<Run<'c>> {
     let mut run = judge_sessions(a, candidates)?;
-    if run.judged > 0 || resynth {
+    if !matches!(run.report, Synthesis::Stopped) && (run.judged > 0 || resynth) {
         run.report = synthesize(a, &mut run.spent)?;
     }
     Ok(run)
@@ -817,63 +914,57 @@ pub fn run<'c>(a: &Audit, candidates: &'c [Candidate], resynth: bool) -> Result<
 /// each call is capped at 75% of it minus what is spent, stopping once that is
 /// under a cent.
 /// Each valid answer is appended to `audits.jsonl` under `scan.lock` at once;
-/// an invalid one is retried once, then dropped.
+/// an invalid one is retried once, then dropped. A judge that failed without
+/// an answer stops the run.
 fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>> {
     let pool = a.budget.map(|b| b / 4 * 3);
-    let progress = std::io::stderr().is_terminal();
-    let (mut spent, mut judged, mut dropped) = (0u64, 0usize, 0usize);
-    let mut left: &[Candidate] = &[];
-    'sessions: for (i, c) in candidates.iter().enumerate() {
+    let mut run =
+        Run { candidates: candidates.len(), judged: 0, dropped: 0, spent: 0, left: &[], report: Synthesis::NotDue };
+    for (i, c) in candidates.iter().enumerate() {
         let (skill, input) = input(a.source, c)?;
-        let mut cost = None;
-        let (mut why, mut rejected) = (String::new(), None);
-        for _ in 0..2 {
-            let cap = pool.map(|p| p.saturating_sub(spent));
-            if cap.is_some_and(|cap| cap < CENT) {
-                left = &candidates[i..];
-                break 'sessions;
+        let progress = format!("judging {}/{} {}", i + 1, candidates.len(), c.event.session);
+        match judge(a, &SESSION, pool, &mut run.spent, &input, &progress, |v| validate(v, &c.condensed))? {
+            Ruling::Valid(verdict, cost) => {
+                let record = SessionRecord {
+                    v: 1,
+                    kind: "session",
+                    skill: a.skill,
+                    session: &c.event.session,
+                    agent: c.event.agent,
+                    src: &c.event.src,
+                    session_ts: c.started().map(|t| t.to_string()),
+                    audited_at: stamp(),
+                    skill_commit: skill.commit.as_deref(),
+                    condensed_chars: c.condensed.chars().count(),
+                    judge: JudgeRecord::new(a.judge, cost),
+                    prompt: SESSION_PROMPT_VERSION,
+                    result: &verdict,
+                };
+                append(a.data, &record)?;
+                run.judged += 1;
             }
-            if progress {
-                let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
-                eprintln!("judging {}/{} {}{cap}", i + 1, candidates.len(), c.event.session);
+            Ruling::Dropped(why) => {
+                eprintln!("warning: {}: judge answer dropped after one retry: {why}", c.event.session);
+                run.dropped += 1;
             }
-            let reply = call(a, &SESSION, cap, &retry(&input, rejected.as_deref()))?;
-            spent += reply.cost.unwrap_or_default();
-            cost = reply.cost.map(|r| r + cost.unwrap_or_default());
-            match reply.answer.map(|v| validate(v, &c.condensed)) {
-                Ok(Ok(verdict)) => {
-                    let record = SessionRecord {
-                        v: 1,
-                        kind: "session",
-                        skill: a.skill,
-                        session: &c.event.session,
-                        agent: c.event.agent,
-                        src: &c.event.src,
-                        session_ts: c.started().map(|t| t.to_string()),
-                        audited_at: stamp(),
-                        skill_commit: skill.commit.as_deref(),
-                        condensed_chars: c.condensed.chars().count(),
-                        judge: JudgeRecord::new(a.judge, cost),
-                        prompt: SESSION_PROMPT_VERSION,
-                        result: &verdict,
-                    };
-                    append(a.data, &record)?;
-                    judged += 1;
-                    continue 'sessions;
-                }
-                Ok(Err(e)) => (why, rejected) = (e.clone(), Some(e)),
-                Err(e) => (why, rejected) = (e, None),
+            Ruling::Unfunded(_) => {
+                run.left = &candidates[i..];
+                break;
+            }
+            Ruling::Stopped(why) => {
+                eprintln!("ERROR: {}: {why}", c.event.session);
+                run.report = Synthesis::Stopped;
+                break;
             }
         }
-        eprintln!("warning: {}: judge answer dropped after one retry: {why}", c.event.session);
-        dropped += 1;
     }
-    Ok(Run { candidates: candidates.len(), judged, dropped, spent, left, report: Synthesis::NotDue })
+    Ok(run)
 }
 
 impl Run<'_> {
     /// False, and the run exits 1, when stage 1 dropped every
-    /// session it judged, or stage 2 was due and wrote no record.
+    /// session it judged, a judge stopped the run, or stage 2 was due and
+    /// wrote no record.
     pub fn ok(&self) -> bool {
         (self.judged > 0 || self.dropped == 0) && matches!(self.report, Synthesis::NotDue | Synthesis::Written(_))
     }
@@ -895,7 +986,7 @@ impl Run<'_> {
             }
         }
         match &self.report {
-            Synthesis::NotDue => {}
+            Synthesis::NotDue | Synthesis::Stopped => {}
             Synthesis::Written(r) => {
                 out.push_str(&format!("{skill}: skill report over {} sessions: {}\n", r.sessions.len(), r.result.verdict));
                 for (label, rate) in r.rates.labeled() {
@@ -1186,7 +1277,8 @@ fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
 /// Stage 2: one call over every session record of the skill; with
 /// a budget, capped at it minus what is spent, and skipped when that is under
 /// a cent. A valid answer is appended as the skill record with the rates skima
-/// computes; an invalid one is retried once, then dropped.
+/// computes; an invalid one is retried once, then dropped. A judge that
+/// failed without an answer stops the run.
 fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
     let judged: Vec<Judged> =
         parsed::<Judged>(a.data)?.into_iter().filter(|j| j.kind == "session" && j.skill == a.skill).collect();
@@ -1194,41 +1286,30 @@ fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
         return Ok(Synthesis::NotDue);
     }
     let input = synthesis_input(a, &judged)?;
-    let mut cost = None;
-    let (mut why, mut rejected) = (None, None);
-    for _ in 0..2 {
-        let cap = a.budget.map(|b| b.saturating_sub(*spent));
-        if cap.is_some_and(|cap| cap < CENT) {
-            break;
+    let progress = format!("reporting on {} sessions", judged.len());
+    Ok(match judge(a, &SKILL, a.budget, spent, &input, &progress, |v| validate_report(v, &judged))? {
+        Ruling::Valid(result, cost) => {
+            let record = SkillRecord {
+                v: 1,
+                kind: "skill".into(),
+                skill: a.skill.into(),
+                audited_at: stamp(),
+                sessions: judged.iter().map(|j| j.session.clone()).collect(),
+                judge: JudgeRecord::new(a.judge, cost),
+                prompt: SKILL_PROMPT_VERSION.into(),
+                rates: Rates::new(&judged),
+                result,
+            };
+            append(a.data, &record)?;
+            Synthesis::Written(Box::new(record))
         }
-        if std::io::stderr().is_terminal() {
-            let cap = cap.map(|cap| format!(" (cap ${})", cents(cap))).unwrap_or_default();
-            eprintln!("reporting on {} sessions{cap}", judged.len());
+        Ruling::Dropped(why) | Ruling::Unfunded(Some(why)) => Synthesis::Dropped(why),
+        Ruling::Unfunded(None) => Synthesis::Skipped,
+        Ruling::Stopped(why) => {
+            eprintln!("ERROR: skill report: {why}");
+            Synthesis::Stopped
         }
-        let reply = call(a, &SKILL, cap, &retry(&input, rejected.as_deref()))?;
-        *spent += reply.cost.unwrap_or_default();
-        cost = reply.cost.map(|r| r + cost.unwrap_or_default());
-        match reply.answer.map(|v| validate_report(v, &judged)) {
-            Ok(Ok(result)) => {
-                let record = SkillRecord {
-                    v: 1,
-                    kind: "skill".into(),
-                    skill: a.skill.into(),
-                    audited_at: stamp(),
-                    sessions: judged.iter().map(|j| j.session.clone()).collect(),
-                    judge: JudgeRecord::new(a.judge, cost),
-                    prompt: SKILL_PROMPT_VERSION.into(),
-                    rates: Rates::new(&judged),
-                    result,
-                };
-                append(a.data, &record)?;
-                return Ok(Synthesis::Written(Box::new(record)));
-            }
-            Ok(Err(e)) => (why, rejected) = (Some(e.clone()), Some(e)),
-            Err(e) => (why, rejected) = (Some(e), None),
-        }
-    }
-    Ok(why.map_or(Synthesis::Skipped, Synthesis::Dropped))
+    })
 }
 
 /// Input tokens estimated from condensed characters.
