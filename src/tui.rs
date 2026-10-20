@@ -67,7 +67,7 @@ pub struct App<'a> {
     /// Whether `/` is still taking the filter.
     typing: bool,
     selected: usize,
-    /// List rows a page move skips: the rows the last draw showed.
+    /// Rows a page move skips: the list rows or card lines the last draw showed.
     page: usize,
     usage: Usage,
     unused: Unused,
@@ -164,12 +164,6 @@ fn table(header: &[(&str, Align)], rows: &[Vec<String>], width: usize) -> Vec<Li
     out
 }
 
-/// `label: home window · …`.
-fn coverage(label: &str, homes: &std::collections::BTreeMap<String, String>) -> String {
-    let parts: Vec<String> = homes.iter().map(|(h, t)| format!("{h} {t}")).collect();
-    format!("{label}: {}", parts.join(" · "))
-}
-
 impl<'a> App<'a> {
     /// The usage view, over each command's default window and filter.
     pub fn new(input: &'a Input<'a>) -> App<'a> {
@@ -243,7 +237,7 @@ impl<'a> App<'a> {
         }
         if self.typing {
             match key.code {
-                KeyCode::Char(c) => self.filter.push(c),
+                KeyCode::Char(c) if (key.modifiers - KeyModifiers::SHIFT).is_empty() => self.filter.push(c),
                 KeyCode::Backspace => _ = self.filter.pop(),
                 KeyCode::Enter => self.typing = false,
                 KeyCode::Esc => (self.typing, self.filter) = (false, String::new()),
@@ -341,8 +335,10 @@ impl<'a> App<'a> {
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1), height]).areas(frame.area());
         frame.render_widget(Paragraph::new(footer_lines), footer);
         if let (Screen::Card, Some((_, lines))) = (self.screen, &self.card) {
+            let area = body.union(info);
             let text: Vec<Line> = lines.iter().skip(self.scroll).map(|l| Line::raw(l.as_str())).collect();
-            frame.render_widget(Paragraph::new(text), body.union(info));
+            frame.render_widget(Paragraph::new(text), area);
+            self.page = usize::from(area.height).max(1);
             return;
         }
         let (mut lines, note) = match self.screen {
@@ -354,7 +350,10 @@ impl<'a> App<'a> {
                     .filter(|r| self.matches(&r.skill))
                     .map(|r| report::unused_cells(r, false))
                     .collect();
-                (table(&report::UNUSED_HEADER, &rows, body.width.into()), coverage("window", &self.unused.window))
+                (
+                    table(&report::UNUSED_HEADER, &rows, body.width.into()),
+                    report::coverage_note("window", &self.unused.window),
+                )
             }
             _ => {
                 let rows: Vec<Vec<String>> = self
@@ -364,7 +363,10 @@ impl<'a> App<'a> {
                     .filter(|r| self.matches(&r.skill))
                     .map(|r| report::usage_cells(self.input, r, false))
                     .collect();
-                (table(&report::USAGE_HEADER, &rows, body.width.into()), coverage("coverage", &self.usage.coverage))
+                (
+                    table(&report::USAGE_HEADER, &rows, body.width.into()),
+                    report::coverage_note("coverage", &self.usage.coverage),
+                )
             }
         };
         frame.render_widget(Paragraph::new(note), info);

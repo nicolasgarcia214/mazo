@@ -230,9 +230,14 @@ impl<'a> View<'a> {
     }
 
     fn coverage_line(&self, label: &str, start: Option<Timestamp>) -> String {
-        let parts: Vec<String> = self.coverage(start).into_iter().map(|(h, t)| format!("{h} {t}")).collect();
-        format!("{label}: {}\n", parts.join(" · "))
+        coverage_note(label, self.coverage(start).iter().map(|(h, t)| (h, t))) + "\n"
     }
+}
+
+/// `label: home window · …`: the coverage note under `usage` and `unused`.
+pub fn coverage_note<'s>(label: &str, homes: impl IntoIterator<Item = (&'s String, &'s String)>) -> String {
+    let parts: Vec<String> = homes.into_iter().map(|(h, t)| format!("{h} {t}")).collect();
+    format!("{label}: {}", parts.join(" · "))
 }
 
 /// A grade as reports emit it, with its staleness.

@@ -125,6 +125,13 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     );
     assert!(screen.contains(&line), "{line:?} not in {screen:#?}");
 
+    // A page is the card's visible height, not the list's.
+    let card = report::skill_card(&input, "unslop", &UsageArgs::new(report::SHOW_SINCE), report::SHOW_LIMIT);
+    let card = report::card_text(&input, &card, false);
+    let height = text(&mut app, 200, 30).iter().position(|l| l.starts_with("card unslop · ")).unwrap();
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(text(&mut app, 200, 30)[0], card.lines().nth(height).unwrap());
+
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen(), Screen::Usage);
 }
@@ -154,6 +161,7 @@ fn slash_leaves_only_the_rows_whose_name_matches() {
     let mut app = App::new(&input);
     let all = rows(&text(&mut app, 200, 40)).len();
     typed(&mut app, "/goal");
+    app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
     let screen = text(&mut app, 200, 40);
     let shown = rows(&screen);
     assert!(!shown.is_empty() && shown.len() < all, "{screen:#?}");
