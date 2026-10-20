@@ -489,6 +489,20 @@ fn scan_json_keeps_every_home_field() {
     assert!(!homes["claude"]["new_events"].as_array().unwrap().is_empty());
 }
 
+/// The live fixture without a model call: its homes pass every policy rule
+/// with no drift, and their empty transcript directories scan to no events.
+#[test]
+fn live_probe_fixture_passes_policy_and_scans_empty() {
+    let probe = common::probe::Probe::new();
+    let status = probe.json(&["status"]);
+    assert_eq!(status["policy"], serde_json::json!([]), "{status}");
+    assert_eq!(status["drift"], serde_json::json!([]), "{status}");
+    assert_eq!(status["conflicts"], serde_json::json!([]), "{status}");
+    let homes = probe.scan();
+    assert_eq!(homes.keys().collect::<Vec<_>>(), ["claude", "codex", "pi"]);
+    assert!(homes.values().all(Vec::is_empty), "{homes:?}");
+}
+
 /// Every event but `typed`, sorted by id.
 fn comparable(data: &Path) -> Vec<Event> {
     events(data).into_iter().filter(|e| e.channel != Channel::Typed).collect()
