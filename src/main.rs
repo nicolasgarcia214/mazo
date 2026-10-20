@@ -323,7 +323,7 @@ fn cmd_report(
         None => ledger::data_dir()?.join("report.html"),
     };
     let code = with_scanned(cfg, inv, |input| {
-        let page = html::render(input, since)?;
+        let page = html::render(&report::report(input, since));
         html::write(&path, &page)?;
         Ok(format!("wrote {}\n", path.display()))
     })?;

@@ -56,7 +56,7 @@ fn world(source: &Path) -> World {
 }
 
 fn page(w: &World, events: &[Event]) -> String {
-    html::render(&w.input(events), Since::Days(30)).unwrap()
+    html::render(&report::report(&w.input(events), Since::Days(30)))
 }
 
 /// The text of the element with `id`, up to the end of its section.
@@ -110,6 +110,27 @@ fn every_usage_all_skill_appears() {
         assert!(page.contains(&format!(">{escaped}<")), "{s} missing from the page");
     }
     assert!(!page.contains("x\"<retired>"), "names are escaped");
+}
+
+/// The page's model is the `--json` model: its usage is `usage --all --json`
+/// and each card is `show --json`, so the page cannot drift from either.
+#[test]
+fn the_report_model_serializes_to_the_json_outputs() {
+    let repo = repo();
+    let (w, events) = (world(repo.path()), events());
+    let input = w.input(&events);
+    let model = serde_json::to_value(report::report(&input, Since::Days(30))).unwrap();
+    let args = UsageArgs { since: Since::Days(30), agent: None, channel: None, all: true, authoring: false };
+    let usage: Value = serde_json::from_str(&report::usage(&input, &args, true, false)).unwrap();
+    assert_eq!(model["usage"], usage);
+    let cards = model["cards"].as_array().unwrap();
+    assert_eq!(cards.len(), w.inv.skills.len(), "one card per inventory skill");
+    for card in cards {
+        let skill = card["skill"].as_str().unwrap();
+        let show: Value =
+            serde_json::from_str(&report::show(&input, skill, Since::Days(30), 20, true, false).unwrap()).unwrap();
+        assert_eq!(*card, show, "{skill}'s card");
+    }
 }
 
 /// A hostile description, default prompt, real prompt, cwd and src path come
