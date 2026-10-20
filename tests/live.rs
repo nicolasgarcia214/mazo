@@ -13,7 +13,7 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
-use std::sync::{OnceLock, mpsc};
+use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use common::probe::Probe;
@@ -36,10 +36,16 @@ struct Ran {
     log: String,
 }
 
+/// Held for every agent run: the probes link the real credentials, and two
+/// agents of one kind refreshing the same token at once could corrupt it.
+static LIVE: Mutex<()> = Mutex::new(());
+
 /// Runs `cmd` until it exits successfully or, given `(input, until)`, writes
 /// `input` to its stdin and runs it until a stdout line is a JSON event of
-/// type `until`. Killed after [`TIMEOUT`].
+/// type `until`; a failed `response` line ends the run at once. Killed after
+/// [`TIMEOUT`].
 fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
+    let _live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
     let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
@@ -50,28 +56,34 @@ fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
         // A write error shows up as a missing event below.
         let _ = writeln!(pipe, "{text}");
     }
-    let mut err = child.stderr.take().unwrap();
-    let err = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = err.read_to_string(&mut s);
-        s
-    });
+    // Both streams feed one channel, so every wait on them is bounded.
     let (tx, rx) = mpsc::channel();
-    let out = child.stdout.take().unwrap();
-    std::thread::spawn(move || {
-        for line in BufReader::new(out).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                break;
+    let readers: [(bool, Box<dyn Read + Send>); 2] =
+        [(true, Box::new(child.stdout.take().unwrap())), (false, Box::new(child.stderr.take().unwrap()))];
+    for (is_stdout, stream) in readers {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                if tx.send((is_stdout, line)).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
+    drop(tx);
     let deadline = Instant::now() + TIMEOUT;
     let (mut log, mut reached) = (String::new(), false);
-    while let Ok(line) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+    while let Ok((is_stdout, line)) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         log.push_str(&line);
         log.push('\n');
-        if stdin.is_some_and(|(_, until)| serde_json::from_str::<Value>(&line).is_ok_and(|v| v["type"] == until)) {
+        let Some((_, until)) = stdin.filter(|_| is_stdout) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        if v["type"] == until {
             reached = true;
+            break;
+        }
+        if v["type"] == "response" && v["success"] == false {
+            log.push_str("failed response; not waiting for the turn\n");
             break;
         }
     }
@@ -91,7 +103,12 @@ fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
             }
         }
     };
-    log.push_str(&err.join().unwrap_or_default());
+    // What is left, for at most a second: a grandchild may hold the pipes open.
+    let drained = Instant::now() + Duration::from_secs(1);
+    while let Ok((_, line)) = rx.recv_timeout(drained.saturating_duration_since(Instant::now())) {
+        log.push_str(&line);
+        log.push('\n');
+    }
     let ok = if stdin.is_some() { reached } else { status.is_some_and(|s| s.success()) };
     Ran { ok, log: format!("{cmd:?} exited {status:?}\n{log}") }
 }
@@ -217,6 +234,7 @@ fn assert_recorded(home: &str, channel: &str, act: impl Fn(&Probe) -> Ran, acted
         let probe = Probe::new();
         let ran = act(&probe);
         if !acted(&probe) {
+            assert!(ran.ok, "attempt {attempt}: the agent run failed:\n{}", ran.log);
             eprintln!("attempt {attempt}: the model never acted\n{}", ran.log);
             continue;
         }

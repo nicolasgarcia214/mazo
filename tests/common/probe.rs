@@ -16,7 +16,7 @@ use super::{Skima, stderr, stdout, write};
 
 /// A Pi extension registering the faux provider `probe`, whose one model
 /// answers `ok` without a network call.
-pub const PROBE_EXTENSION: &str = r#"import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai";
+const PROBE_EXTENSION: &str = r#"import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
@@ -32,7 +32,7 @@ export default function (pi: ExtensionAPI) {
 pub struct Probe {
     _temp: tempfile::TempDir,
     /// The temporary `HOME`.
-    pub home: PathBuf,
+    home: PathBuf,
     /// `CLAUDE_CONFIG_DIR`, the home named `claude`.
     pub claude: PathBuf,
     /// `CODEX_HOME`, the home named `codex`.
@@ -42,7 +42,7 @@ pub struct Probe {
     /// `skima-probe-<random>`.
     pub skill: String,
     /// The directory the agents run in.
-    pub work: PathBuf,
+    work: PathBuf,
     /// The faux-provider extension Pi loads with `-e`.
     pub extension: PathBuf,
     run: Skima,
@@ -60,6 +60,8 @@ impl Probe {
         for dir in [&home, &claude, &codex, &pi, &work] {
             fs::create_dir_all(dir).unwrap();
         }
+        // The real credentials, not copies, so a token refresh reaches them;
+        // `tests/live.rs` runs one agent at a time so no two refresh together.
         symlink(real_home.join(".claude/.credentials.json"), claude.join(".credentials.json")).unwrap();
         symlink(real_home.join(".codex/auth.json"), codex.join("auth.json")).unwrap();
 
@@ -113,7 +115,7 @@ impl Probe {
     }
 
     /// `skima args…`, asserted to succeed.
-    pub fn skima(&self, args: &[&str]) -> Output {
+    fn skima(&self, args: &[&str]) -> Output {
         let out = self.run.output(args);
         assert!(out.status.success(), "skima {args:?}\nstdout:\n{}\nstderr:\n{}", stdout(&out), stderr(&out));
         out
