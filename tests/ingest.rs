@@ -86,8 +86,14 @@ impl Env {
         fs::create_dir_all(&homes[0].path).unwrap();
         fs::copy(fixture("history.jsonl"), homes[0].path.join("history.jsonl")).unwrap();
         let skills: BTreeSet<String> = ["unslop", "gitmoji-conventional-commit", "grade"].map(String::from).into();
-        let inv =
-            Inventory { source: source.clone(), skills: skills.clone(), known: skills, worktree: None, history: None };
+        let inv = Inventory {
+            source: source.clone(),
+            skills: skills.clone(),
+            known: skills,
+            worktree: None,
+            history: None,
+            ..Default::default()
+        };
         let cfg = Config { source, loose: vec![], homes, policy: Default::default(), judge: Default::default() };
         let env = Env { data: tmp.path().join("data/mazo"), tmp, cfg, inv };
         for (dest, src) in files {
