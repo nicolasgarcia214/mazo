@@ -58,7 +58,7 @@ path  = "~/.pi/agent"
 links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 
 [judge]                           # the agent mazo audit calls; none without this table
-agent = "claude"                  # claude (default), codex, pi or command
+agent = "claude"                  # claude (default), codex, pi, command or http
 model = "sonnet"                  # optional; unset means the agent's own default
 billing = "subscription"          # subscription (default) or api
 ```
@@ -71,6 +71,23 @@ command judge takes one; `command` without a non-empty `argv` is a usage error:
 [judge]
 agent = "command"
 argv  = ["llm", "-m", "gpt-5"]
+```
+
+`agent = "http"` posts to an OpenAI-compatible chat completions endpoint,
+`<url>/chat/completions`, for a user with an API key or a local model server
+and no agent CLI. `url` and `model` are required; `api_key_env` is optional
+and names the variable holding the key, sent as `Authorization: Bearer <key>`
+and nowhere else: not to disk, the records, `--dry-run` or an error message.
+Without `api_key_env` no Authorization header is sent. A set `api_key_env`
+naming an unset or empty variable is a usage error, as are `url` or
+`api_key_env` for any other agent:
+
+```toml
+[judge]
+agent       = "http"
+url         = "https://api.openai.com/v1"   # or http://localhost:11434/v1
+model       = "gpt-5"
+api_key_env = "OPENAI_API_KEY"
 ```
 
 `trusted` lists the owners (`owner`, every repository of that owner) and
@@ -147,7 +164,10 @@ and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
 (default 20), or every one with `--all`. Claude and Pi run with tools off,
 Codex in a read-only sandbox with a scratch `CODEX_HOME`. A command judge gets
 the prompt, the answer schema and the input on stdin, and its stdout must be
-the answer as JSON. Every call runs in an empty directory under the data
+the answer as JSON. An http judge gets the same text as one user message, and
+its reply's `choices[0].message.content` must be the answer as JSON; a
+connection failure or a non-2xx status stops the run, naming the status and
+the endpoint. Every call runs in an empty directory under the data
 directory, and nothing is written inside the source. Each answer that cites
 real lines and quotes nothing is appended to `audits.jsonl`.
 
@@ -158,8 +178,8 @@ ranked improvements and curated examples, with the rates `followed`,
 
 **Budget.** With the Claude judge, the session calls share 75% of
 `--max-budget-usd` (default 1, at least 0.04), the skill report gets the rest,
-and no call starts with less than a cent left. Codex, Pi and a command judge
-report no cost, so `--limit` is their only cap, `--max-budget-usd` is a usage
+and no call starts with less than a cent left. Codex, Pi, a command judge and
+an http judge report no cost, so `--limit` is their only cap, `--max-budget-usd` is a usage
 error, and their records' `cost_usd` is null.
 
 **Who pays.** `[judge] billing` is `"subscription"`, the default, or `"api"`;
@@ -176,7 +196,8 @@ home's `auth.json` (else `~/.codex/auth.json`) must hold a ChatGPT login
 not checked: it picks its provider from its own settings, and a provider that
 logs in, such as OpenRouter, can still bill per token, so check the provider and
 model `--dry-run` prints. A command judge is not checked either: mazo only
-removes the variables above from its environment. A dry run, or a run with nothing to judge, starts no
+removes the variables above from its environment. An http judge runs no
+process, so `billing` changes nothing for it. A dry run, or a run with nothing to judge, starts no
 call and checks nothing. A Claude dollar figure is labelled `API-equivalent`:
 Claude's own estimate, not a charge, which `--max-budget-usd` still caps. A run
 stopped by a judge failure names `billing = "api"` as the way to use an API key
@@ -185,8 +206,8 @@ Each record in `audits.jsonl` names its billing; one written before mazo
 recorded it shows `unknown`.
 
 **Dry run.** `--dry-run` lists the sessions with their agent, project and
-condensed size, the judge command (a command judge's `argv`), the billing and,
-for Pi, the model, an
+condensed size, the judge command (a command judge's `argv`, an http judge's
+endpoint and key variable), the billing and, for Pi and http, the model, an
 input-token estimate and, once records exist, a dollar estimate. It starts no
 judge.
 

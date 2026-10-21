@@ -5,9 +5,9 @@
 use std::path::Path;
 use std::process::Output;
 
-use super::{Reply, Subprocess, exited};
+use super::{Reply, Subprocess, exited, prompted};
 use crate::Result;
-use crate::audit::{Stage, frame};
+use crate::audit::Stage;
 
 pub struct Command {
     pub argv: Vec<String>,
@@ -18,11 +18,8 @@ impl Subprocess for Command {
         self.argv.clone()
     }
 
-    /// The prompt, then the schema its answer must match, then the input.
     fn stdin(&self, stage: &Stage, input: &str) -> Option<String> {
-        let schema =
-            format!("Answer with one JSON object, and nothing else, matching this schema:\n{}", stage.schema.as_str());
-        Some(format!("{}\n{}{input}", stage.prompt, frame("answer-schema", &schema)))
+        Some(prompted(stage, input))
     }
 
     fn reply(&self, out: &Output, _written: Option<Vec<u8>>, _cap: Option<u64>) -> Result<Reply> {

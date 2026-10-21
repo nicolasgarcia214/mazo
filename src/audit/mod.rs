@@ -1,5 +1,5 @@
 //! `mazo audit`. Stage 1: selection, the judge's input, one
-//! Claude, Codex, Pi or command judge call per session, validation of its answer, and
+//! Claude, Codex, Pi, command or http judge call per session, validation of its answer, and
 //! the session records in `audits.jsonl`. Stage 2: one call over every
 //! session record of the skill, the rates mazo computes, and the skill
 //! record the card shows. `--dry-run` shows what a run would judge and calls
@@ -170,7 +170,7 @@ struct SessionRecord<'a> {
 pub struct JudgeRecord {
     pub agent: JudgeAgent,
     pub model: Option<String>,
-    /// None from a judge that reports no cost (Codex, Pi, command).
+    /// None from a judge that reports no cost (Codex, Pi, command, http).
     pub cost_usd: Option<Box<RawValue>>,
     /// None in records written before mazo recorded it: unknown.
     #[serde(default)]
@@ -474,7 +474,7 @@ fn estimate_cost(data: &Path, chars: usize) -> Result<Option<(u64, usize)>> {
 
 /// `mazo audit --dry-run`: each session the audit would judge with its agent,
 /// project and condensed size, the judge command, the billing (and the model
-/// for Pi), the token estimate and, once session records exist, the dollar
+/// for Pi and http), the token estimate and, once session records exist, the dollar
 /// estimate.
 pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String> {
     let skill = a.skill;
