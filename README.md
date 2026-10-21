@@ -32,6 +32,15 @@ with one that does not parse, every command but `init` exits 2.
 existing file. A config can be a symlink; `source` and a relative home `path`
 are resolved against the directory of the file it points to.
 
+A config without a `[judge]` table has no judge, and `mazo audit` exits 2.
+mazo once assumed Claude when the table was missing; a config that relied on
+that must now add it:
+
+```toml
+[judge]
+agent = "claude"
+```
+
 ```toml
 source = "."                      # the skills directory, relative to this file
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
@@ -47,7 +56,7 @@ agent = "pi"
 path  = "~/.pi/agent"
 links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 
-[judge]                           # optional: the agent mazo audit calls
+[judge]                           # the agent mazo audit calls; none without this table
 agent = "claude"                  # claude (default), codex or pi
 model = "sonnet"                  # optional; unset means the agent's own default
 billing = "subscription"          # subscription (default) or api
@@ -84,7 +93,7 @@ terminal, bare `mazo` prints the help.
 Exit codes: 0 on success; 1 when the command failed or found a problem
 (a `status` error, a refused `sync`, `retire` or `prune`, a failed audit run);
 2 for a usage error: a bad argument, a config that does not parse or names a
-missing source, an invalid Pi agent directory, or a failed judge login check. A usage error writes nothing,
+missing source, an invalid Pi agent directory, an `audit` with no `[judge]`, or a failed judge login check. A usage error writes nothing,
 except that `audit` checks the login after its scan.
 
 `usage`, `unused`, `show`, `report`, `audit` and `retire` scan first, so their numbers are current. Every

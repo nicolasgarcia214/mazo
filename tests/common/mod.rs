@@ -79,7 +79,7 @@ impl World {
             loose: vec![],
             homes: homes.iter().map(|&(name, agent, _)| home(name, agent, &source.join(name))).collect(),
             policy: Default::default(),
-            judge: Default::default(),
+            judge: None,
         };
         let coverage = homes
             .iter()
