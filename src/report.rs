@@ -404,8 +404,8 @@ pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
     if used.contains(skill) {
         out.push(format!("{skill} has a strong event in the last {days} days"));
     }
-    let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
-    let named = inventory::mentions(&input.inv.source, &input.inv.skills, &graph);
+    let graph = inventory::fan_in(input.inv);
+    let named = inventory::mentions(input.inv, &graph);
     for (citing, verb) in [(&graph, "held"), (&named, "named")] {
         let who: Vec<String> = citers(citing, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
         if !who.is_empty() {
@@ -445,8 +445,8 @@ fn unused_of(view: &View, since: Since) -> Unused {
     let start = view.start(since);
     let used = view.used(start);
     let weak: BTreeSet<&str> = view.select(&f, None, start).map(|(e, _)| e.skill.as_str()).collect();
-    let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
-    let named = inventory::mentions(&input.inv.source, &input.inv.skills, &graph);
+    let graph = inventory::fan_in(input.inv);
+    let named = inventory::mentions(input.inv, &graph);
     let mut rows: Vec<UnusedRow> = input
         .inv
         .skills
@@ -800,7 +800,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
 
 /// `skill`'s card over the events `args` keeps, listing the newest `limit`.
 pub fn skill_card<'a>(input: &'a Input<'a>, skill: &'a str, args: &UsageArgs, limit: usize) -> Card<'a> {
-    let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
+    let graph = inventory::fan_in(input.inv);
     card(&View::new(input), &graph, skill, args, limit)
 }
 
@@ -959,7 +959,7 @@ pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
             Some(GradeDue { skill: r.skill.clone(), state, command: format!("/grade {}", r.skill) })
         })
         .collect();
-    let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
+    let graph = inventory::fan_in(input.inv);
     let args = UsageArgs::new(since);
     let cards = input.inv.skills.iter().map(|s| card(&view, &graph, s, &args, SHOW_LIMIT)).collect();
     Report {

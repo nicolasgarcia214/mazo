@@ -198,3 +198,23 @@ fn new_and_retire_leave_store_skills_alone_and_show_reads_them() {
     let card: serde_json::Value = serde_json::from_str(&r.stdout()).unwrap();
     assert_eq!(card["description"], "From elsewhere.");
 }
+
+#[test]
+fn a_used_store_skill_holds_the_source_skill_it_cites() {
+    let (fx, dir) = fixture();
+    let mine = &fx.skills[0];
+    let text = format!("---\nname: theirs\ndescription: From elsewhere.\n---\n\nRun the {mine} skill first.\n");
+    fs::write(dir.join("SKILL.md"), text).unwrap();
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(24)).unwrap().to_string();
+    let used = mazo::ledger::Event {
+        cwd: None,
+        src: "/nonexistent/t.jsonl:1".into(),
+        ..common::event("theirs-1", "theirs", mazo::ledger::Channel::Slash, "s-theirs", &ts)
+    };
+    common::write(&fx.data.join("mazo/events.jsonl"), &(serde_json::to_string(&used).unwrap() + "\n"));
+    let r = fx.mazo(&["retire", mine]);
+    assert_eq!(r.code(), 1, "{}", r.stdout());
+    assert!(r.stderr().contains(&format!("{mine} is held by theirs")), "{}", r.stderr());
+    assert!(exists(&fx.source.join(mine).join("SKILL.md")));
+}

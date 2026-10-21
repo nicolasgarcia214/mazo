@@ -121,6 +121,9 @@ pub fn add(
     let installed = hashed.and_then(|hash| fs::rename(&staged, &to).map(|()| hash).map_err(|e| err(&to, e).into()));
     let content_hash = installed.inspect_err(|_| drop(fs::remove_dir_all(&staged)))?;
 
+    // From here until the lockfile is written, `store/<name>` has no lock
+    // entry. A crash in that window leaves it there unrecorded: a re-run of
+    // `add` refuses the name as taken, and `sync` links it like any store skill.
     let mut with = inv.clone();
     with.skills.insert(name.clone());
     with.known.insert(name.clone());
@@ -207,8 +210,9 @@ fn tree(root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-/// SHA-1 over every file under `dir` in sorted relative-path order: each
-/// contributes its path, a NUL, its length in decimal, a NUL and its bytes.
+/// SHA-1 over every file under `dir` in relative-path order, sorted
+/// component-wise (as `Path` orders, not by string bytes): each contributes
+/// its path, a NUL, its length in decimal, a NUL and its bytes.
 pub fn content_hash(dir: &Path) -> Result<String> {
     let mut sha = sha1_smol::Sha1::new();
     for rel in tree(dir)? {

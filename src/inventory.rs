@@ -83,11 +83,12 @@ pub type Graph = BTreeMap<String, BTreeSet<String>>;
 /// A → B when the body of A's `SKILL.md` (frontmatter dropped) or
 /// any `.md` under `A/references/`, with backticks removed and whitespace
 /// collapsed, contains `the B skill`, `owned by B`, or `B/` as a path
-/// component. Self-edges are dropped. Every skill in `skills` gets a key.
-pub fn fan_in(source: &Path, skills: &BTreeSet<String>) -> Graph {
+/// component. Self-edges are dropped. Every skill of `inv` gets a key.
+pub fn fan_in(inv: &Inventory) -> Graph {
+    let skills = &inv.skills;
     let mut graph = Graph::new();
     for a in skills {
-        let text = citing_text(&source.join(a));
+        let text = citing_text(&inv.root(a).join(a));
         let cited = skills.iter().filter(|b| *b != a).filter(|b| {
             text.contains(&format!("the {b} skill"))
                 || text.match_indices(&format!("owned by {b}")).any(|(i, m)| !text[i + m.len()..].starts_with(word))
@@ -100,11 +101,12 @@ pub fn fan_in(source: &Path, skills: &BTreeSet<String>) -> Graph {
 
 /// A → B when A's citing text names B as a whole word (case-sensitive) and
 /// A → B is not in `edges`. Mentions mark boundaries between siblings, so they
-/// never hold a skill. Self-mentions are dropped. Every skill in `skills` gets a key.
-pub fn mentions(source: &Path, skills: &BTreeSet<String>, edges: &Graph) -> Graph {
+/// never hold a skill. Self-mentions are dropped. Every skill of `inv` gets a key.
+pub fn mentions(inv: &Inventory, edges: &Graph) -> Graph {
+    let skills = &inv.skills;
     let mut graph = Graph::new();
     for a in skills {
-        let text = citing_text(&source.join(a));
+        let text = citing_text(&inv.root(a).join(a));
         let named = skills
             .iter()
             .filter(|b| *b != a && !edges.get(a).is_some_and(|e| e.contains(*b)))
@@ -151,7 +153,7 @@ fn citing_text(dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{fan_in, mentions, names};
+    use super::{Inventory, fan_in, mentions, names};
 
     #[test]
     fn a_name_is_a_whole_word_that_is_not_a_path() {
@@ -172,8 +174,8 @@ mod tests {
             std::fs::write(dir.path().join(name).join("SKILL.md"), format!("---\nname: {name}\n---\n{body}\n"))
                 .unwrap();
         }
-        let skills = ["goal-plan", "goal-smart"].map(String::from).into();
-        let m = mentions(dir.path(), &skills, &fan_in(dir.path(), &skills));
+        let inv = Inventory::load(dir.path()).unwrap();
+        let m = mentions(&inv, &fan_in(&inv));
         assert_eq!(m["goal-plan"], ["goal-smart".to_string()].into());
         assert!(m["goal-smart"].is_empty(), "goal-plan/ is an edge, not a mention");
     }
