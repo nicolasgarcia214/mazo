@@ -1,5 +1,5 @@
 //! `mazo add` of a local directory into the store, and the store as a second
-//! skill root for `status`, `sync`, `show`, `new` and `retire`.
+//! skill root for `status`, `sync`, `show` and `new`, and `retire` of a store skill.
 
 mod common;
 
@@ -181,7 +181,7 @@ fn an_add_the_sync_would_refuse_installs_nothing() {
 }
 
 #[test]
-fn new_and_retire_leave_store_skills_alone_and_show_reads_them() {
+fn new_leaves_store_skills_alone_and_show_reads_them() {
     let (fx, dir) = fixture();
     add(&fx, &[&s(&dir), "--trust"]).assert_ok();
     let r = fx.mazo(&["new", "theirs", "--description", "Mine."]);
@@ -189,14 +189,75 @@ fn new_and_retire_leave_store_skills_alone_and_show_reads_them() {
     assert!(r.stderr().contains(&format!("{} already exists", store(&fx).join("theirs").display())), "{}", r.stderr());
     assert!(!exists(&fx.source.join("theirs")));
 
-    let r = fx.mazo(&["retire", "theirs", "--force"]);
-    assert_eq!(r.code(), 2, "{}", r.stderr());
-    assert!(exists(&store(&fx).join("theirs/SKILL.md")));
-
     let r = fx.mazo(&["show", "theirs", "--json"]);
     r.assert_ok();
     let card: serde_json::Value = serde_json::from_str(&r.stdout()).unwrap();
     assert_eq!(card["description"], "From elsewhere.");
+}
+
+/// A ledger holding one strong use of `skill` a day ago.
+fn used(fx: &Fixture, skill: &str) {
+    let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(24)).unwrap().to_string();
+    let event = mazo::ledger::Event {
+        cwd: None,
+        src: "/nonexistent/t.jsonl:1".into(),
+        ..common::event(&format!("{skill}-1"), skill, mazo::ledger::Channel::Slash, &format!("s-{skill}"), &ts)
+    };
+    common::write(&fx.data.join("mazo/events.jsonl"), &(serde_json::to_string(&event).unwrap() + "\n"));
+}
+
+#[test]
+fn retire_removes_a_store_skill_its_lock_entry_and_its_links() {
+    let (mut fx, dir) = fixture();
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    fx.allow("other");
+    add(&fx, &[&s(&dir), "--as", "other", "--trust"]).assert_ok();
+    let source = fx.snapshot().into_iter().filter(|(p, _)| p.starts_with(&fx.source)).collect::<Vec<_>>();
+
+    let r = fx.mazo(&["retire", "theirs"]);
+    r.assert_ok();
+    let to = store(&fx).join("theirs");
+    assert!(r.stdout().contains(&format!("removed   {}", to.display())), "{}", r.stdout());
+    assert!(!exists(&to));
+    for skills in skills_dirs(&fx) {
+        assert!(!exists(&skills.join("theirs")), "{}", skills.display());
+        assert_eq!(fs::read_link(skills.join("other")).unwrap(), store(&fx).join("other"));
+    }
+    let names: Vec<String> = lock(&fx).iter().map(|e| e["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(names, ["other"]);
+    let after = fx.snapshot().into_iter().filter(|(p, _)| p.starts_with(&fx.source)).collect::<Vec<_>>();
+    assert_eq!(after, source, "the source, archive included, is untouched");
+    assert!(!exists(&fx.source.join(".archive/theirs")));
+    let r = fx.mazo(&["status", "--agent", "codex"]);
+    assert_eq!(r.stdout(), format!("codex: in sync ({} skills)\n", fx.skills.len() + 1), "{}", r.stderr());
+}
+
+#[test]
+fn retire_refuses_a_store_skill_cited_by_a_used_skill_and_force_overrides_it() {
+    let (fx, dir) = fixture();
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    let mine = &fx.skills[0];
+    let skill_md = fx.source.join(mine).join("SKILL.md");
+    let text = fs::read_to_string(&skill_md).unwrap();
+    fs::write(&skill_md, format!("{text}\nRun the theirs skill first.\n")).unwrap();
+    used(&fx, mine);
+
+    let before = fx.snapshot();
+    let r = fx.mazo(&["retire", "theirs"]);
+    assert_eq!(r.code(), 1, "{}", r.stdout());
+    assert!(r.stderr().contains(&format!("theirs is held by {mine}")), "{}", r.stderr());
+    assert!(r.stderr().contains("ERROR: retire refused; pass --force"), "{}", r.stderr());
+    let after = fx.snapshot();
+    let changed: Vec<&Path> =
+        after.iter().filter(|(p, v)| before.get(*p) != Some(*v)).map(|(p, _)| p.as_path()).collect();
+    assert!(changed.iter().all(|p| p.starts_with(fx.data.join("mazo")) && !p.starts_with(store(&fx))), "{changed:?}");
+    assert!(exists(&store(&fx).join("theirs/SKILL.md")));
+    assert_eq!(lock(&fx).len(), 1);
+
+    fx.mazo(&["retire", "theirs", "--force"]).assert_ok();
+    assert!(!exists(&store(&fx).join("theirs")));
+    assert!(lock(&fx).is_empty());
+    assert!(skills_dirs(&fx).iter().all(|d| !exists(&d.join("theirs"))));
 }
 
 #[test]
@@ -206,13 +267,7 @@ fn a_used_store_skill_holds_the_source_skill_it_cites() {
     let text = format!("---\nname: theirs\ndescription: From elsewhere.\n---\n\nRun the {mine} skill first.\n");
     fs::write(dir.join("SKILL.md"), text).unwrap();
     add(&fx, &[&s(&dir), "--trust"]).assert_ok();
-    let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(24)).unwrap().to_string();
-    let used = mazo::ledger::Event {
-        cwd: None,
-        src: "/nonexistent/t.jsonl:1".into(),
-        ..common::event("theirs-1", "theirs", mazo::ledger::Channel::Slash, "s-theirs", &ts)
-    };
-    common::write(&fx.data.join("mazo/events.jsonl"), &(serde_json::to_string(&used).unwrap() + "\n"));
+    used(&fx, "theirs");
     let r = fx.mazo(&["retire", mine]);
     assert_eq!(r.code(), 1, "{}", r.stdout());
     assert!(r.stderr().contains(&format!("{mine} is held by theirs")), "{}", r.stderr());
