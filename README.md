@@ -116,14 +116,17 @@ ranked improvements and curated examples, with the rates `followed`,
 and no call starts with less than a cent left. Codex and Pi report no cost, so
 `--limit` is their only cap and `--max-budget-usd` is a usage error.
 
-**Who pays.** `[judge] billing` is `"subscription"`, the default, or `"api"`.
-Under `"subscription"` every judge call runs without `ANTHROPIC_API_KEY`,
+**Who pays.** `[judge] billing` is `"subscription"`, the default, or `"api"`;
+any other value is a config error. Under `"subscription"` every judge call runs
+without `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
 `CLAUDE_CODE_USE_FOUNDRY`, `OPENAI_API_KEY` and `CODEX_API_KEY`, and before its
-first call the run checks the login once and exits 2 when the check fails:
+first call the run checks the login once, with the same variables removed, and
+exits 2 when the check fails:
 `claude auth status` must report a claude.ai login or an OAuth token (an
 `apiKeyHelper` fails, since no environment change removes it), and the Codex
-home's `auth.json` (else `~/.codex/auth.json`) must hold a ChatGPT login. Pi is
+home's `auth.json` (else `~/.codex/auth.json`) must hold a ChatGPT login
+(`auth_mode` `chatgpt`). Pi is
 not checked: it picks its provider from its own settings, and a provider that
 logs in, such as OpenRouter, can still bill per token, so check the provider and
 model `--dry-run` prints. A dry run, or a run with nothing to judge, starts no
