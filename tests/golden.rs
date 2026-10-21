@@ -8,8 +8,8 @@ use std::fs;
 use std::path::Path;
 
 use common::golden::Golden;
-use skima::report::{self, Since, UsageArgs};
-use skima::{audit, html};
+use mazo::report::{self, Since, UsageArgs};
+use mazo::{audit, html};
 
 /// `out` with the fixture's path, and its `~` form, replaced by `placeholder`.
 fn scrub(out: String, source: &Path, placeholder: &str) -> String {

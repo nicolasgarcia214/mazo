@@ -10,15 +10,15 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use common::{Skima, stderr};
+use common::{Mazo, stderr};
+use mazo::adapters::claude::Claude;
+use mazo::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Records, Session, SkillRoots};
+use mazo::config::Config;
+use mazo::inventory::Inventory;
+use mazo::ledger::{self, Agent, Channel, Event, Ledger};
+use mazo::scan::{self, ScanReport};
+use mazo::tail::{Chunk, Cursors};
 use serde_json::Value;
-use skima::adapters::claude::Claude;
-use skima::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Records, Session, SkillRoots};
-use skima::config::Config;
-use skima::inventory::Inventory;
-use skima::ledger::{self, Agent, Channel, Event, Ledger};
-use skima::scan::{self, ScanReport};
-use skima::tail::{Chunk, Cursors};
 use tempfile::TempDir;
 
 /// Every Claude transcript fixture: its path under the project directory and
@@ -89,7 +89,7 @@ impl Env {
         let inv =
             Inventory { source: source.clone(), skills: skills.clone(), known: skills, worktree: None, history: None };
         let cfg = Config { source, loose: vec![], homes, policy: Default::default(), judge: Default::default() };
-        let env = Env { data: tmp.path().join("data/skima"), tmp, cfg, inv };
+        let env = Env { data: tmp.path().join("data/mazo"), tmp, cfg, inv };
         for (dest, src) in files {
             env.put(dest, &fs::read(fixture(src)).unwrap());
         }
@@ -108,7 +108,7 @@ impl Env {
     }
 
     fn config(&self) -> PathBuf {
-        self.tmp.path().join("dotfiles/skills/skima.toml")
+        self.tmp.path().join("dotfiles/skills/mazo.toml")
     }
 
     fn project(&self) -> PathBuf {
@@ -116,7 +116,7 @@ impl Env {
     }
 
     fn transcript(&self, name: &str) -> PathBuf {
-        let p = skima::config::resolve(&self.project(), name);
+        let p = mazo::config::resolve(&self.project(), name);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         p
     }
@@ -146,9 +146,9 @@ impl Env {
         scan::scan_with(&self.cfg, &self.inv, &self.data, reparse, &|_| adapter).unwrap()
     }
 
-    /// The `skima` binary, configured for this machine with its data under `xdg`.
+    /// The `mazo` binary, configured for this machine with its data under `xdg`.
     fn cli(&self, xdg: &Path) -> Command {
-        Skima::new(self.tmp.path(), self.tmp.path(), &self.config(), xdg).command(&[], &[])
+        Mazo::new(self.tmp.path(), self.tmp.path(), &self.config(), xdg).command(&[], &[])
     }
 
     fn cursors(&self) -> Cursors {
@@ -442,7 +442,7 @@ fn concurrent_scan_processes_write_no_duplicate_ids() {
         for out in [a.wait_with_output().unwrap(), b.wait_with_output().unwrap()] {
             assert!(out.status.success(), "round {round}: {}", stderr(&out));
         }
-        let data = xdg.join("skima");
+        let data = xdg.join("mazo");
         let lines = ledger_lines(&data);
         let unique: HashSet<String> = lines.iter().map(|l| serde_json::from_str::<Event>(l).unwrap().id).collect();
         assert!(!lines.is_empty());
@@ -473,7 +473,7 @@ fn scan_off_a_tty_writes_only_its_warnings_to_stderr() {
 fn reparse_prints_each_homes_total_and_the_total_before() {
     let env = Env::new(&TRANSCRIPTS[..4], &["empty"]);
     let xdg = env.tmp.path().join("xdg");
-    let data = xdg.join("skima");
+    let data = xdg.join("mazo");
     let stdout = |args: &[&str]| {
         let out = env.cli(&xdg).args(args).output().unwrap();
         assert!(out.status.success());
@@ -669,9 +669,9 @@ fn a_skill_result_for_a_known_but_removed_skill_stays_canonical() {
     let mut env = Env::new(&[("pair.jsonl", "pair.jsonl")], &[]);
     env.inv.skills.remove("unslop"); // pruned from the repo, still in git history (known)
     env.scan();
-    let tool = events(&env.data).into_iter().find(|e| e.channel == skima::ledger::Channel::Tool).unwrap();
+    let tool = events(&env.data).into_iter().find(|e| e.channel == mazo::ledger::Channel::Tool).unwrap();
     assert_eq!(tool.skill, "unslop");
-    assert_eq!(tool.origin, skima::ledger::Origin::Canonical);
+    assert_eq!(tool.origin, mazo::ledger::Origin::Canonical);
 }
 
 #[test]
@@ -685,7 +685,7 @@ fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
     ];
     for audit in [false, true] {
         let tmp = tempfile::tempdir().unwrap();
-        let data = fs::canonicalize(tmp.path()).unwrap().join("data/skima");
+        let data = fs::canonicalize(tmp.path()).unwrap().join("data/mazo");
         let run = data.join("audit-runs/run-1");
         let mut homes = Vec::new();
         for (agent, fixture, cwd, dest) in sessions {
@@ -736,7 +736,7 @@ fn show_writes_no_example_text() {
             }
         }
     }
-    assert!(xdg.join("skima/events.jsonl").is_file() && files > 3);
+    assert!(xdg.join("mazo/events.jsonl").is_file() && files > 3);
 }
 
 /// The session of every event read from a chain's child transcript.

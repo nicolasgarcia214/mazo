@@ -1,7 +1,7 @@
 //! The live end-to-end fixture of `tests/live.rs`, built directly and never by
-//! `skima sync`: a temporary `HOME` with a Claude, a Codex and a Pi directory,
+//! `mazo sync`: a temporary `HOME` with a Claude, a Codex and a Pi directory,
 //! the real Claude and Codex credentials linked in, one probe skill linked into
-//! each home's `skills/`, a `skima.toml` with every policy rule on, and Claude
+//! each home's `skills/`, a `mazo.toml` with every policy rule on, and Claude
 //! settings that set the probe to `"name-only"`.
 
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use super::{Skima, stderr, stdout, write};
+use super::{Mazo, stderr, stdout, write};
 
 /// A Pi extension registering the faux provider `probe`, whose one model
 /// answers `ok` without a network call.
@@ -39,13 +39,13 @@ pub struct Probe {
     pub codex: PathBuf,
     /// `PI_CODING_AGENT_DIR`, the home named `pi`.
     pub pi: PathBuf,
-    /// `skima-probe-<random>`.
+    /// `mazo-probe-<random>`.
     pub skill: String,
     /// The directory the agents run in.
     work: PathBuf,
     /// The faux-provider extension Pi loads with `-e`.
     pub extension: PathBuf,
-    run: Skima,
+    run: Mazo,
 }
 
 impl Probe {
@@ -54,7 +54,7 @@ impl Probe {
         // Agents record physical paths, so build on a physical root.
         let root = fs::canonicalize(temp.path()).unwrap();
         let real_home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
-        let skill = format!("skima-probe-{:016x}", RandomState::new().hash_one(&root));
+        let skill = format!("mazo-probe-{:016x}", RandomState::new().hash_one(&root));
         let [home, claude, codex, pi, source, work] =
             ["home", "claude", "codex", "pi", "skills", "work"].map(|d| root.join(d));
         for dir in [&home, &claude, &codex, &pi, &work] {
@@ -80,7 +80,7 @@ impl Probe {
         }
         write(&claude.join("settings.json"), &serde_json::json!({"skillOverrides": {&skill: "name-only"}}).to_string());
 
-        let config = root.join("skima.toml");
+        let config = root.join("mazo.toml");
         let homes: String = [("claude", &claude), ("codex", &codex), ("pi", &pi)]
             .iter()
             .map(|(name, path)| format!("\n[[home]]\nname  = \"{name}\"\nagent = \"{name}\"\npath  = {path:?}\n"))
@@ -95,7 +95,7 @@ impl Probe {
         let extension = root.join("probe.ts");
         write(&extension, PROBE_EXTENSION);
 
-        let mut run = Skima::new(&work, &home, &config, &root.join("data"));
+        let mut run = Mazo::new(&work, &home, &config, &root.join("data"));
         run.set("PI_CODING_AGENT_DIR", Some(pi.as_os_str())).set("PI_CODING_AGENT_SESSION_DIR", None);
         Probe { _temp: temp, home, claude, codex, pi, skill, work, extension, run }
     }
@@ -114,20 +114,20 @@ impl Probe {
         cmd
     }
 
-    /// `skima args…`, asserted to succeed.
-    fn skima(&self, args: &[&str]) -> Output {
+    /// `mazo args…`, asserted to succeed.
+    fn mazo(&self, args: &[&str]) -> Output {
         let out = self.run.output(args);
-        assert!(out.status.success(), "skima {args:?}\nstdout:\n{}\nstderr:\n{}", stdout(&out), stderr(&out));
+        assert!(out.status.success(), "mazo {args:?}\nstdout:\n{}\nstderr:\n{}", stdout(&out), stderr(&out));
         out
     }
 
-    /// `skima <args…> --json`, parsed.
+    /// `mazo <args…> --json`, parsed.
     pub fn json(&self, args: &[&str]) -> serde_json::Value {
         let args: Vec<&str> = args.iter().copied().chain(["--json"]).collect();
-        serde_json::from_str(&stdout(&self.skima(&args))).unwrap()
+        serde_json::from_str(&stdout(&self.mazo(&args))).unwrap()
     }
 
-    /// `skima scan --json`: each home's new events.
+    /// `mazo scan --json`: each home's new events.
     pub fn scan(&self) -> BTreeMap<String, Vec<serde_json::Value>> {
         let report = self.json(&["scan"]);
         let homes = report.as_object().unwrap();

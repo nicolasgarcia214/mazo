@@ -1,4 +1,4 @@
-//! skima's own permanent sync and status tests, beyond the port
+//! mazo's own permanent sync and status tests, beyond the port
 //! of test_install.py.
 
 mod common;
@@ -20,7 +20,7 @@ fn fixture() -> Fixture {
 fn claude_work_is_linked_and_policy_checked() {
     let fx = fixture();
     let work = fx.home.join(".claude-work");
-    fx.skima(&["sync", "--agent", "claude"]).assert_ok();
+    fx.mazo(&["sync", "--agent", "claude"]).assert_ok();
     for name in &fx.skills {
         assert_eq!(fs::read_link(work.join("skills").join(name)).unwrap(), fx.source.join(name));
     }
@@ -31,7 +31,7 @@ fn claude_work_is_linked_and_policy_checked() {
     fs::write(work.join("settings.json"), missing.to_string()).unwrap();
     fs::remove_file(work.join("skills").join(first)).unwrap();
     let before = fx.snapshot();
-    let r = fx.skima(&["sync", "--agent", "claude"]);
+    let r = fx.mazo(&["sync", "--agent", "claude"]);
     assert_eq!(r.code(), 1);
     let needle = format!(
         "ERROR: {}: skillOverrides must set every skill to name-only:\n  \"{first}\": \"name-only\"",
@@ -41,10 +41,10 @@ fn claude_work_is_linked_and_policy_checked() {
     assert_eq!(fx.snapshot(), before);
 
     fs::remove_file(work.join("settings.json")).unwrap();
-    let r = fx.skima(&["sync"]);
+    let r = fx.mazo(&["sync"]);
     assert_eq!(r.code(), 1);
     assert!(r.stderr().contains(&format!("ERROR: {}: no Claude settings profile", work.display())), "{}", r.stderr());
-    assert_eq!(fx.skima(&["status", "--agent", "claude"]).code(), 1, "status runs the same check");
+    assert_eq!(fx.mazo(&["status", "--agent", "claude"]).code(), 1, "status runs the same check");
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn sync_agent_pi_runs_per_skill_rules_and_skips_claude_settings() {
     fs::write(&manifest, "policy:\n  allow_implicit_invocation: yes\n").unwrap();
 
     let before = fx.snapshot();
-    let r = fx.skima(&["sync", "--agent", "pi"]);
+    let r = fx.mazo(&["sync", "--agent", "pi"]);
     assert_eq!(r.code(), 1);
     assert!(r.stderr().contains(&format!("ERROR: {}:", skill.display())), "{}", r.stderr());
     assert!(r.stderr().contains("agents/openai.yaml"), "{}", r.stderr());
@@ -66,7 +66,7 @@ fn sync_agent_pi_runs_per_skill_rules_and_skips_claude_settings() {
     assert_eq!(fx.snapshot(), before);
 
     fs::write(&manifest, policy).unwrap();
-    fx.skima(&["sync", "--agent", "pi"]).assert_ok();
+    fx.mazo(&["sync", "--agent", "pi"]).assert_ok();
     assert_eq!(names(&fx.target), fx.skills);
     assert!(!fx.home.join(".claude").exists());
     assert!(!fx.home.join(".claude-work/skills").exists());
@@ -82,16 +82,16 @@ fn write_coverage(fx: &Fixture, ages: &[(&str, i64)]) {
             (home.to_string(), serde_json::json!({ "first": null, "last_scan": t.to_string() }))
         })
         .collect();
-    common::write(&fx.data.join("skima/coverage.json"), &serde_json::Value::Object(map).to_string());
+    common::write(&fx.data.join("mazo/coverage.json"), &serde_json::Value::Object(map).to_string());
 }
 
 #[test]
 fn status_warns_when_a_claude_home_nears_retention() {
     let fx = fixture();
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
 
     write_coverage(&fx, &[("claude", 24), ("claude-work", 22)]);
-    let r = fx.skima(&["status"]);
+    let r = fx.mazo(&["status"]);
     r.assert_ok();
     assert_eq!(r.stdout(), in_sync(&fx, &["claude", "claude-work", "codex", "pi"]));
     assert!(r.stderr().contains("warning: claude: last scanned"), "{}", r.stderr());
@@ -99,13 +99,13 @@ fn status_warns_when_a_claude_home_nears_retention() {
     assert!(!r.stderr().contains("warning: claude-work"), "22 days is fresh: {}", r.stderr());
 
     write_coverage(&fx, &[("claude", 22)]);
-    let r = fx.skima(&["status"]);
+    let r = fx.mazo(&["status"]);
     r.assert_ok();
     assert!(!r.stderr().contains("warning: claude:"), "{}", r.stderr());
     assert!(r.stderr().contains("warning: claude-work: last scanned never"), "never scanned warns: {}", r.stderr());
 
     write_coverage(&fx, &[("claude", 22), ("claude-work", 1)]);
-    let r = fx.skima(&["status"]);
+    let r = fx.mazo(&["status"]);
     r.assert_ok();
     assert_eq!(r.stderr(), "", "clean and fresh");
 }
@@ -116,16 +116,16 @@ fn status_writes_nothing() {
     fs::create_dir_all(fx.home.join(".codex/skills")).unwrap();
     std::os::unix::fs::symlink(fx.source.join("gone"), fx.home.join(".codex/skills/gone")).unwrap();
     let before = fx.snapshot();
-    let r = fx.skima(&["status"]);
+    let r = fx.mazo(&["status"]);
     assert_eq!(r.code(), 1, "missing links are drift");
     assert!(r.stdout().contains(&format!("codex: {} is not linked (missing)", fx.skills[0])), "{}", r.stdout());
     assert!(r.stdout().contains("codex: gone link target is gone (dangling)"), "{}", r.stdout());
     assert_eq!(fx.snapshot(), before);
 
     fs::remove_file(fx.home.join(".codex/skills/gone")).unwrap();
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     let before = fx.snapshot();
-    fx.skima(&["status"]).assert_ok();
+    fx.mazo(&["status"]).assert_ok();
     assert_eq!(fx.snapshot(), before);
 }
 
@@ -137,7 +137,7 @@ fn in_sync(fx: &Fixture, homes: &[&str]) -> String {
 #[test]
 fn status_prints_one_plain_line_per_finding() {
     let fx = fixture();
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     let codex = fx.home.join(".codex/skills");
     let [missing, wrong, obstructed] = [&fx.skills[0], &fx.skills[1], &fx.skills[2]];
     fs::remove_file(codex.join(missing)).unwrap();
@@ -148,7 +148,7 @@ fn status_prints_one_plain_line_per_finding() {
     std::os::unix::fs::symlink(fx.source.join("gone"), codex.join("gone")).unwrap();
     fs::create_dir(fx.home.join(".claude/skills/synced")).unwrap();
 
-    let r = fx.skima(&["status"]);
+    let r = fx.mazo(&["status"]);
     assert_eq!(r.code(), 1);
     let expected = format!(
         "{}claude: synced is not from the source; left alone (foreign)\n{}\
@@ -166,8 +166,8 @@ fn status_prints_one_plain_line_per_finding() {
     for name in [wrong.as_str(), obstructed, "gone"] {
         fs::remove_file(codex.join(name)).unwrap();
     }
-    fx.skima(&["sync"]).assert_ok();
-    let r = fx.skima(&["status"]);
+    fx.mazo(&["sync"]).assert_ok();
+    let r = fx.mazo(&["status"]);
     r.assert_ok();
     let expected = format!(
         "{}claude: synced is not from the source; left alone (foreign)\n{}",
@@ -180,31 +180,31 @@ fn status_prints_one_plain_line_per_finding() {
 #[test]
 fn a_skill_rule_errors_on_stderr_while_homes_stay_in_sync() {
     let fx = fixture();
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     let skill = fx.source.join(&fx.skills[0]);
     fs::write(skill.join("agents/openai.yaml"), "policy:\n  allow_implicit_invocation: true\n").unwrap();
-    let r = fx.skima(&["status"]);
+    let r = fx.mazo(&["status"]);
     assert_eq!(r.code(), 1);
     assert_eq!(r.stdout(), in_sync(&fx, &["claude", "claude-work", "codex", "pi"]));
     assert!(r.stderr().starts_with(&format!("ERROR: {}: ", skill.display())), "{}", r.stderr());
-    assert_eq!(fx.skima(&["status", "--agent", "nope"]).code(), 2, "usage error");
+    assert_eq!(fx.mazo(&["status", "--agent", "nope"]).code(), 2, "usage error");
 }
 
 #[test]
 fn dry_run_on_a_clean_tree_prints_in_sync() {
     let fx = fixture();
     let before = fx.snapshot();
-    let dirty = fx.skima(&["sync", "--dry-run"]);
+    let dirty = fx.mazo(&["sync", "--dry-run"]);
     dirty.assert_ok();
     assert!(dirty.stdout().contains("would link"), "{}", dirty.stdout());
     assert_eq!(fx.snapshot(), before, "a dry run writes nothing");
 
-    fx.skima(&["sync"]).assert_ok();
-    let clean = fx.skima(&["sync", "--dry-run"]);
+    fx.mazo(&["sync"]).assert_ok();
+    let clean = fx.mazo(&["sync", "--dry-run"]);
     clean.assert_ok();
     assert_eq!(clean.stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
     assert_eq!(clean.stderr(), "");
-    let pi = fx.skima(&["sync", "--dry-run", "--agent", "pi"]);
+    let pi = fx.mazo(&["sync", "--dry-run", "--agent", "pi"]);
     assert_eq!(pi.stdout(), format!("in sync: 1 homes, {} skills\n", fx.skills.len()));
 }
 
@@ -213,12 +213,12 @@ fn dry_run_on_a_clean_tree_prints_in_sync() {
 #[test]
 fn retention_of_seven_days_or_less_always_warns() {
     let fx = fixture();
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     let mut settings: serde_json::Value = serde_json::from_str(&fx.valid_settings()).unwrap();
     settings["cleanupPeriodDays"] = 5.into();
     fs::write(fx.settings(".claude"), settings.to_string()).unwrap();
     write_coverage(&fx, &[("claude", 0), ("claude-work", 0)]);
-    let r = fx.skima(&["status"]);
+    let r = fx.mazo(&["status"]);
     r.assert_ok();
     assert!(r.stderr().contains("warning: claude: last scanned"), "{}", r.stderr());
     assert!(!r.stderr().contains("warning: claude-work"), "{}", r.stderr());
@@ -230,7 +230,7 @@ fn a_description_of_only_python_whitespace_is_rejected() {
     let skill = fx.source.join(&fx.skills[0]).join("SKILL.md");
     let name = &fx.skills[0];
     fs::write(&skill, format!("---\nname: {name}\ndescription: \"\\x1f\"\n---\n\n# Test\n")).unwrap();
-    let r = fx.skima(&["sync", "--agent", "pi"]);
+    let r = fx.mazo(&["sync", "--agent", "pi"]);
     assert_eq!(r.code(), 1);
     assert!(r.stderr().contains("nonempty description"), "{}", r.stderr());
 }
@@ -240,7 +240,7 @@ fn a_name_other_than_the_directory_is_rejected_by_name() {
     let fx = fixture();
     let name = &fx.skills[0];
     fs::write(fx.source.join(name).join("SKILL.md"), "---\nname: other\ndescription: D.\n---\n").unwrap();
-    let r = fx.skima(&["sync", "--agent", "pi"]);
+    let r = fx.mazo(&["sync", "--agent", "pi"]);
     assert_eq!(r.code(), 1);
     assert!(r.stderr().contains(&format!("SKILL.md must declare name: {name}")), "{}", r.stderr());
 }
@@ -248,20 +248,20 @@ fn a_name_other_than_the_directory_is_rejected_by_name() {
 #[test]
 fn hidden_dangling_links_are_not_pruned() {
     let fx = fixture();
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     let hidden = fx.home.join(".claude/skills/.gone");
     std::os::unix::fs::symlink(fx.source.join(".gone"), &hidden).unwrap();
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     assert!(hidden.is_symlink(), "install.sh's `*` glob never pruned hidden names");
 }
 
 #[test]
 fn show_of_an_unknown_skill_is_a_usage_error() {
     let fx = fixture();
-    let r = fx.skima(&["show", "no-such-skill"]);
+    let r = fx.mazo(&["show", "no-such-skill"]);
     assert_eq!(r.code(), 2);
     assert!(r.stderr().contains("unknown skill: no-such-skill"), "{}", r.stderr());
-    assert!(!fx.data.join("skima/events.jsonl").exists(), "no scan before the usage error");
+    assert!(!fx.data.join("mazo/events.jsonl").exists(), "no scan before the usage error");
 }
 
 #[test]
@@ -269,10 +269,10 @@ fn a_shared_directory_prunes_once() {
     let mut fx = fixture();
     let codex = fx.home.join(".codex");
     fx.set_env("PI_CODING_AGENT_DIR", Some(&codex));
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     let gone = codex.join("skills/gone-skill");
     std::os::unix::fs::symlink(fx.source.join("gone-skill"), &gone).unwrap();
-    let r = fx.skima(&["sync"]);
+    let r = fx.mazo(&["sync"]);
     r.assert_ok();
     assert!(!gone.is_symlink());
     assert_eq!(r.stdout().lines().filter(|l| l.starts_with("pruned")).count(), 1, "{}", r.stdout());
@@ -285,21 +285,21 @@ fn a_directory_shared_through_a_symlink_is_synced_once() {
     let alias = fx.home.join("codex-alias");
     std::os::unix::fs::symlink(fx.home.join(".codex"), &alias).unwrap();
     fx.set_env("PI_CODING_AGENT_DIR", Some(&alias));
-    let r = fx.skima(&["sync"]);
+    let r = fx.mazo(&["sync"]);
     r.assert_ok();
-    assert_eq!(fx.skima(&["sync"]).assert_ok().stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
+    assert_eq!(fx.mazo(&["sync"]).assert_ok().stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
 }
 
 #[test]
 fn a_links_entry_colliding_with_a_skill_aborts_before_writes() {
     let fx = fixture();
-    let toml = fs::read_to_string(fx.source.join("skima.toml")).unwrap();
+    let toml = fs::read_to_string(fx.source.join("mazo.toml")).unwrap();
     let name = &fx.skills[0];
     let other = &fx.skills[1];
     let toml = toml.replace("links = {", &format!("links = {{ \"skills/{name}\" = \"{other}\", "));
-    fs::write(fx.source.join("skima.toml"), toml).unwrap();
+    fs::write(fx.source.join("mazo.toml"), toml).unwrap();
     let before = fx.snapshot();
-    let r = fx.skima(&["sync", "--agent", "pi"]);
+    let r = fx.mazo(&["sync", "--agent", "pi"]);
     assert_eq!(r.code(), 1, "{}", r.stderr());
     assert!(r.stderr().contains("claimed by two sources"), "{}", r.stderr());
     assert_eq!(fx.snapshot(), before);

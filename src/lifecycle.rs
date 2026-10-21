@@ -12,7 +12,7 @@ use crate::ledger::{self, Agent, Ledger};
 use crate::{Error, Result};
 use crate::{links, policy, report, scan, yaml};
 
-/// `skima new <name> --description <text>`: writes
+/// `mazo new <name> --description <text>`: writes
 /// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
 /// then prints the `name-only` line for each Claude home under `claude_name_only`.
 /// A name or description the always-on rules reject is a usage error; an
@@ -76,7 +76,7 @@ fn quoted(s: &str) -> String {
     out
 }
 
-/// `skima prune [<name>] [--yes] [--force]`: permanently deletes
+/// `mazo prune [<name>] [--yes] [--force]`: permanently deletes
 /// `<source>/.archive/<name>`, or every archived entry. A refusal or a
 /// declined confirmation deletes nothing and exits 1.
 pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: bool) -> Result<ExitCode> {
@@ -231,7 +231,7 @@ fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
 /// A strong event in this many days, the skill's, a holder's or a namer's, makes `retire` refuse.
 const RETIRE_DAYS: u32 = 30;
 
-/// `skima retire <name> [--force]`: scans first, refuses a held, named or
+/// `mazo retire <name> [--force]`: scans first, refuses a held, named or
 /// recently used skill unless `force`, and refuses any conflict or policy error
 /// in the sync plan as if the skill were archived, all before any write. Then
 /// moves `<source>/<name>` to `<source>/.archive/<name>` (`git mv` when tracked)

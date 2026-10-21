@@ -6,11 +6,11 @@ mod common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use skima::adapters::{Adapter, Key, Parent, Parsed, SkillRoots, pi};
-use skima::classify::{self, Roots};
-use skima::config::Home;
-use skima::ledger::{Actor, Agent, Channel};
-use skima::tail;
+use mazo::adapters::{Adapter, Key, Parent, Parsed, SkillRoots, pi};
+use mazo::classify::{self, Roots};
+use mazo::config::Home;
+use mazo::ledger::{Actor, Agent, Channel};
+use mazo::tail;
 
 const PI_SKILLS: &str = "/home/nicolas/.pi/agent/skills";
 const SOURCE: &str = "/home/nicolas/dotfiles/skills";

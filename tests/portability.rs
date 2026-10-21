@@ -9,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
 
-use common::{Skima, stderr, stdout};
+use common::{Mazo, stderr, stdout};
 
 /// Every configurable rule's violation at once: `disable-model-invocation` in
 /// the frontmatter, no `agents/openai.yaml`, no Claude `settings.json`.
@@ -51,11 +51,11 @@ impl Tree {
     }
 
     fn config(&self, policy: &str) {
-        fs::write(self.source.join("skima.toml"), format!("source = \".\"\n{policy}\n{HOMES}")).unwrap();
+        fs::write(self.source.join("mazo.toml"), format!("source = \".\"\n{policy}\n{HOMES}")).unwrap();
     }
 
-    fn skima(&self, args: &[&str]) -> Output {
-        let mut run = Skima::new(&self.home, &self.home, &self.source.join("skima.toml"), &self.home.join("data"));
+    fn mazo(&self, args: &[&str]) -> Output {
+        let mut run = Mazo::new(&self.home, &self.home, &self.source.join("mazo.toml"), &self.home.join("data"));
         run.set("PI_CODING_AGENT_DIR", None).set("PI_CODING_AGENT_SESSION_DIR", None).output(args)
     }
 
@@ -72,13 +72,13 @@ fn assert_ok(o: &Output) {
 fn a_plain_skill_and_a_claude_home_without_settings_pass_with_every_rule_off() {
     for policy in ["", "[policy]\n"] {
         let t = Tree::new(policy);
-        assert_ok(&t.skima(&["sync"]));
+        assert_ok(&t.mazo(&["sync"]));
         assert!(!t.home.join(".claude/settings.json").exists());
         for home in [".claude", ".codex"] {
             assert_eq!(t.link(home, "skills/plain"), t.source.join("plain"));
         }
         assert_eq!(t.link(".codex", "extra.md"), t.source.join("extra.md"));
-        assert_ok(&t.skima(&["status"]));
+        assert_ok(&t.mazo(&["status"]));
     }
 }
 
@@ -92,7 +92,7 @@ fn each_rule_alone_rejects_its_own_violation_and_nothing_else() {
     for (rule, own) in messages {
         let t = Tree::new(&format!("[policy]\n{rule} = true\n"));
         for cmd in ["sync", "status"] {
-            let o = t.skima(&[cmd]);
+            let o = t.mazo(&[cmd]);
             assert_eq!(o.status.code(), Some(1), "{rule} {cmd}");
             let err = stderr(&o);
             assert!(err.contains(own), "{rule} {cmd}: {err}");
@@ -113,9 +113,9 @@ fn an_unknown_key_anywhere_is_an_error_naming_it() {
         ("source = \".\"\n[[home]]\nname = \"c\"\nagent = \"claude\"\npath = \"~/.c\"\nlink = {}\n", "link"),
         ("source = \".\"\n[polcy]\n", "polcy"),
     ] {
-        fs::write(t.source.join("skima.toml"), config).unwrap();
+        fs::write(t.source.join("mazo.toml"), config).unwrap();
         for cmd in ["sync", "status"] {
-            let o = t.skima(&[cmd]);
+            let o = t.mazo(&[cmd]);
             assert_eq!(o.status.code(), Some(2), "{key}");
             assert!(stderr(&o).contains(&format!("unknown field `{key}`")), "{key}: {}", stderr(&o));
         }
@@ -150,7 +150,7 @@ fn always_on_rules_hold_with_every_rule_off() {
     let t = Tree::new("");
     for (dir, text) in &rejected {
         skill(&t, dir, text);
-        let o = t.skima(&["sync"]);
+        let o = t.mazo(&["sync"]);
         assert_eq!(o.status.code(), Some(1), "{dir} {text:?}");
         assert!(stderr(&o).contains("ERROR:"), "{dir} {text:?}: {}", stderr(&o));
         assert!(!t.home.join(".claude").exists(), "{dir} {text:?}: sync wrote before failing");
@@ -163,19 +163,19 @@ fn always_on_rules_hold_with_every_rule_off() {
     ];
     for (dir, text) in &accepted {
         skill(&t, dir, text);
-        assert_ok(&t.skima(&["sync", "--dry-run"]));
+        assert_ok(&t.mazo(&["sync", "--dry-run"]));
     }
 
     skill(&t, "plain", &fm("plain", "D."));
     fs::remove_file(t.source.join("extra.md")).unwrap();
-    let o = t.skima(&["sync"]);
+    let o = t.mazo(&["sync"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(stderr(&o).contains(&format!("{} is missing", t.source.join("extra.md").display())), "{}", stderr(&o));
-    assert_ok(&t.skima(&["sync", "--agent", "claude"]));
+    assert_ok(&t.mazo(&["sync", "--agent", "claude"]));
     assert!(!t.home.join(".codex").exists(), "the links rule applies to the selected homes only");
 }
 
-/// A fresh `HOME` with no config, `SKIMA_CONFIG` and `XDG_CONFIG_HOME` unset
+/// A fresh `HOME` with no config, `MAZO_CONFIG` and `XDG_CONFIG_HOME` unset
 /// unless a test sets them.
 struct Fresh {
     _temp: tempfile::TempDir,
@@ -189,9 +189,9 @@ impl Fresh {
         Fresh { _temp: temp, home }
     }
 
-    fn skima(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
-        let mut run = Skima::new(&self.home, &self.home, &self.home.join("skima.toml"), &self.home.join("data"));
-        for key in ["SKIMA_CONFIG", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"] {
+    fn mazo(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
+        let mut run = Mazo::new(&self.home, &self.home, &self.home.join("mazo.toml"), &self.home.join("data"));
+        for key in ["MAZO_CONFIG", "XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"] {
             run.set(key, None);
         }
         run.command(env, args).output().unwrap()
@@ -208,9 +208,9 @@ impl Fresh {
     fn discovery(&self) -> [(Vec<(&'static str, PathBuf)>, PathBuf); 3] {
         let (explicit, xdg) = (self.home.join("explicit.toml"), self.home.join("xdg"));
         [
-            (vec![], self.home.join(".config/skima/config.toml")),
-            (vec![("XDG_CONFIG_HOME", xdg.clone())], xdg.join("skima/config.toml")),
-            (vec![("XDG_CONFIG_HOME", xdg), ("SKIMA_CONFIG", explicit.clone())], explicit),
+            (vec![], self.home.join(".config/mazo/config.toml")),
+            (vec![("XDG_CONFIG_HOME", xdg.clone())], xdg.join("mazo/config.toml")),
+            (vec![("XDG_CONFIG_HOME", xdg), ("MAZO_CONFIG", explicit.clone())], explicit),
         ]
     }
 }
@@ -223,12 +223,12 @@ fn env_refs<'a>(env: &'a [(&'static str, PathBuf)]) -> Vec<(&'static str, &'a Os
 fn a_missing_config_exits_2_naming_the_discovered_path() {
     let f = Fresh::new();
     // The removed default is not a fallback.
-    common::write(&f.home.join("dotfiles/skills/skima.toml"), "source = \".\"\n");
+    common::write(&f.home.join("dotfiles/skills/mazo.toml"), "source = \".\"\n");
     for (env, path) in f.discovery() {
         for cmd in ["status", "sync", "usage", "prune"] {
-            let o = f.skima(&env_refs(&env), &[cmd]);
+            let o = f.mazo(&env_refs(&env), &[cmd]);
             assert_eq!(o.status.code(), Some(2), "{cmd} {env:?}");
-            let want = format!("ERROR: no config at {}; run skima init --source <skills dir>\n", path.display());
+            let want = format!("ERROR: no config at {}; run mazo init --source <skills dir>\n", path.display());
             assert_eq!(stderr(&o), want, "{cmd} {env:?}");
         }
     }
@@ -240,7 +240,7 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     let source = f.plain_skill();
     for (env, path) in f.discovery() {
         // A relative `--source` is written absolute.
-        assert_ok(&f.skima(&env_refs(&env), &["init", "--source", "skills"]));
+        assert_ok(&f.mazo(&env_refs(&env), &["init", "--source", "skills"]));
         let v: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
         assert_eq!(v["source"].as_str(), Some(source.to_str().unwrap()), "{env:?}");
     }
@@ -248,8 +248,8 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     fs::create_dir(f.home.join(".claude")).unwrap();
     fs::create_dir_all(f.home.join(".pi/agent")).unwrap();
     let path = f.home.join("homes.toml");
-    let env = [("SKIMA_CONFIG", path.as_os_str())];
-    assert_ok(&f.skima(&env, &["init", "--source", "skills"]));
+    let env = [("MAZO_CONFIG", path.as_os_str())];
+    assert_ok(&f.mazo(&env, &["init", "--source", "skills"]));
     let text = fs::read_to_string(&path).unwrap();
     let v: toml::Table = text.parse().unwrap();
     assert_eq!(v.keys().collect::<Vec<_>>(), ["home", "loose", "policy", "source"], "{text}");
@@ -270,7 +270,7 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     assert_eq!(homes, [["claude", "claude", "~/.claude"], ["pi", "pi", "~/.pi/agent"]], "{text}");
 
     fs::write(&path, "mine\n").unwrap();
-    let o = f.skima(&env, &["init", "--source", "skills"]);
+    let o = f.mazo(&env, &["init", "--source", "skills"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(stderr(&o).contains("not overwriting"), "{}", stderr(&o));
     assert_eq!(fs::read_to_string(&path).unwrap(), "mine\n");
@@ -282,12 +282,12 @@ fn a_symlinked_config_resolves_source_against_the_physical_file() {
     let source = f.plain_skill();
     fs::create_dir(f.home.join(".codex")).unwrap();
     common::write(
-        &source.join("skima.toml"),
+        &source.join("mazo.toml"),
         "source = \".\"\n[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n",
     );
-    fs::create_dir_all(f.home.join(".config/skima")).unwrap();
-    std::os::unix::fs::symlink(source.join("skima.toml"), f.home.join(".config/skima/config.toml")).unwrap();
-    assert_ok(&f.skima(&[], &["sync"]));
+    fs::create_dir_all(f.home.join(".config/mazo")).unwrap();
+    std::os::unix::fs::symlink(source.join("mazo.toml"), f.home.join(".config/mazo/config.toml")).unwrap();
+    assert_ok(&f.mazo(&[], &["sync"]));
     assert_eq!(fs::read_link(f.home.join(".codex/skills/plain")).unwrap(), source.join("plain"));
 }
 
@@ -296,24 +296,24 @@ fn a_fresh_home_runs_init_then_sync() {
     let f = Fresh::new();
     let source = f.plain_skill();
     common::write(&f.home.join(".claude/settings.json"), "");
-    assert_ok(&f.skima(&[], &["init", "--source", source.to_str().unwrap()]));
-    assert_ok(&f.skima(&[], &["sync"]));
+    assert_ok(&f.mazo(&[], &["init", "--source", source.to_str().unwrap()]));
+    assert_ok(&f.mazo(&[], &["sync"]));
     assert_eq!(fs::read_link(f.home.join(".claude/skills/plain")).unwrap(), source.join("plain"));
-    assert_ok(&f.skima(&[], &["status"]));
+    assert_ok(&f.mazo(&[], &["status"]));
 }
 
 #[test]
 fn relative_home_paths_resolve_against_the_config_file_not_the_cwd() {
     let f = Fresh::new();
     let source = f.plain_skill();
-    let config = source.join("skima.toml");
+    let config = source.join("mazo.toml");
     common::write(
         &config,
         "source = \".\"\n\
          [[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"../agents/codex\"\n\
          [[home]]\nname = \"pi\"\nagent = \"pi\"\npath = \"../agents/pi\"\n",
     );
-    assert_ok(&f.skima(&[("SKIMA_CONFIG", config.as_os_str())], &["sync"]));
+    assert_ok(&f.mazo(&[("MAZO_CONFIG", config.as_os_str())], &["sync"]));
     for agent in ["codex", "pi"] {
         let link = f.home.join("agents").join(agent).join("skills/plain");
         assert_eq!(fs::read_link(&link).unwrap(), source.join("plain"), "{agent}");
@@ -324,10 +324,10 @@ fn relative_home_paths_resolve_against_the_config_file_not_the_cwd() {
 fn two_homes_with_one_name_are_an_error() {
     let f = Fresh::new();
     let source = f.plain_skill();
-    let config = source.join("skima.toml");
+    let config = source.join("mazo.toml");
     let home = "[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n";
     common::write(&config, &format!("source = \".\"\n{home}{home}"));
-    let o = f.skima(&[("SKIMA_CONFIG", config.as_os_str())], &["status"]);
+    let o = f.mazo(&[("MAZO_CONFIG", config.as_os_str())], &["status"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(stderr(&o).contains("two homes are named \"codex\""), "{}", stderr(&o));
 }

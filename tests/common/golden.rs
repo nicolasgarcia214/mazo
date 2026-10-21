@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use skima::ledger::{Actor, Agent, Channel, Event, Origin};
+use mazo::ledger::{Actor, Agent, Channel, Event, Origin};
 
 use super::{NOW, World, ago, event, git, report_repo, report_world, skill_record, write};
 
@@ -86,7 +86,7 @@ impl Golden {
         let audits = tempfile::tempdir().unwrap();
         write(&audits.path().join("audits.jsonl"), &skill_record("Good on <short> texts", "2026-10-12T10:00:00Z"));
         let mut world = report_world(repo.path());
-        world.audits = skima::audit::latest(audits.path()).unwrap();
+        world.audits = mazo::audit::latest(audits.path()).unwrap();
         let events = events(&repo.path().join("t.jsonl"));
         Golden { repo, world, events }
     }

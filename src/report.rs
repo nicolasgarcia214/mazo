@@ -379,7 +379,7 @@ pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
     ]
 }
 
-/// Rendered `skima usage` output (text, or JSON when `json`).
+/// Rendered `mazo usage` output (text, or JSON when `json`).
 pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
     let view = View::new(input);
     let usage = usage_of(&view, args);
@@ -512,7 +512,7 @@ pub fn unused_cells(r: &UnusedRow, tty: bool) -> Vec<String> {
     vec![r.skill.clone(), render::paint(r.status, tty), notes.join("; ")]
 }
 
-/// Rendered `skima unused` output.
+/// Rendered `mazo unused` output.
 pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
     let view = View::new(input);
     let unused = unused_of(&view, since);
@@ -791,7 +791,7 @@ fn locator(e: &ShownEvent) -> String {
     format!("{}:{file}:{line}", name(e.agent))
 }
 
-/// Rendered `skima show <skill>` output; Err for an unknown skill.
+/// Rendered `mazo show <skill>` output; Err for an unknown skill.
 pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
     check_skill(input.inv, skill)?;
     let card = skill_card(input, skill, &UsageArgs::new(since), limit);
@@ -926,7 +926,7 @@ pub struct GradeDue {
     pub command: String,
 }
 
-/// The model of `skima report`: the `usage --all` rows and coverage, the
+/// The model of `mazo report`: the `usage --all` rows and coverage, the
 /// grades to run, and every inventory skill's card. The page renders this
 /// struct, so it shows nothing the JSON lacks.
 #[derive(Serialize)]

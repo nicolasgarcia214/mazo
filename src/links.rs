@@ -70,7 +70,7 @@ pub struct Plan {
     pub conflicts: Vec<(String, String)>,
 }
 
-/// One directory skima links into, with the canonical entries it should hold.
+/// One directory mazo links into, with the canonical entries it should hold.
 struct Target {
     home: String,
     dir: PathBuf,

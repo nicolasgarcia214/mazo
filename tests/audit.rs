@@ -1,4 +1,4 @@
-//! `skima audit`: selection, judge input, `--dry-run`, the session records
+//! `mazo audit`: selection, judge input, `--dry-run`, the session records
 //! of stage 1 and the skill record of stage 2.
 
 mod common;
@@ -9,10 +9,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{Skima, stderr, stdout};
-use skima::adapters;
-use skima::audit::{self, Candidate, SkillText};
-use skima::ledger::{Actor, Agent, Channel, Event};
+use common::{Mazo, stderr, stdout};
+use mazo::adapters;
+use mazo::audit::{self, Candidate, SkillText};
+use mazo::ledger::{Actor, Agent, Channel, Event};
 
 /// Line 5 of the Claude fixture is a strong `unslop` load; its first record is
 /// at 2026-10-14T04:00:01Z.
@@ -22,7 +22,7 @@ const CLAUDE_LOAD: u64 = 5;
 fn event(agent: Agent, session: &str, ts: &str, actor: Actor, channel: Channel, cwd: &str, src: String) -> Event {
     Event {
         agent,
-        home: skima::ledger::name(agent),
+        home: mazo::ledger::name(agent),
         actor,
         cwd: Some(cwd.into()),
         src,
@@ -292,9 +292,9 @@ impl Fixture {
             "source = \".\"\n{judge}\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"{}\"\n",
             root.join("home/.claude").display()
         );
-        common::write(&root.join("skills/skima.toml"), &config);
+        common::write(&root.join("skills/mazo.toml"), &config);
         let ledger: String = events(&root).iter().map(|e| serde_json::to_string(e).unwrap() + "\n").collect();
-        common::write(&root.join("data/skima/events.jsonl"), &ledger);
+        common::write(&root.join("data/mazo/events.jsonl"), &ledger);
         let r = root.display();
         let stub = format!(
             r#"#!/bin/sh
@@ -378,15 +378,15 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
         fs::read_to_string(self.root.join(format!("calls/{}/{f}", call.n))).ok()
     }
 
-    fn skima(&self, args: &[&str]) -> Output {
-        self.skima_env(&[], args)
+    fn mazo(&self, args: &[&str]) -> Output {
+        self.mazo_env(&[], args)
     }
 
-    /// `skima args…` with `env` set for this run.
-    fn skima_env(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
+    /// `mazo args…` with `env` set for this run.
+    fn mazo_env(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
         let root = &self.root;
-        let skima = Skima::new(root, &root.join("home"), &root.join("skills/skima.toml"), &root.join("data"));
-        skima.command(env, args).output().unwrap()
+        let mazo = Mazo::new(root, &root.join("home"), &root.join("skills/mazo.toml"), &root.join("data"));
+        mazo.command(env, args).output().unwrap()
     }
 
     /// The environments `claude auth status` ran in, one `env` listing after
@@ -396,7 +396,7 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
     }
 
     fn data(&self) -> PathBuf {
-        self.root.join("data/skima")
+        self.root.join("data/mazo")
     }
 
     /// Every stub call, in order.
@@ -481,12 +481,12 @@ fn dry_run_lists_sessions_the_judge_command_and_the_estimate_and_starts_nothing(
     let chars: Vec<usize> = candidates.iter().map(|c| c.condensed.chars().count()).collect();
     let total: usize = chars.iter().sum();
 
-    let out = fx.skima(&["audit", "unslop", "--dry-run"]);
+    let out = fx.mazo(&["audit", "unslop", "--dry-run"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let text = stdout(&out);
     assert!(text.starts_with("unslop: 3 sessions to judge with the claude judge\n"), "{text}");
     for (c, n) in candidates.iter().zip(&chars) {
-        let agent = skima::ledger::name(c.event.agent);
+        let agent = mazo::ledger::name(c.event.agent);
         let cwd = c.event.cwd.as_deref().unwrap();
         let row = text.lines().find(|l| l.contains(&c.event.session) && l.contains(cwd)).unwrap();
         assert!(row.contains(&format!(" {agent} ")) && row.contains(&format!(" {n} ")), "{row}");
@@ -496,9 +496,9 @@ fn dry_run_lists_sessions_the_judge_command_and_the_estimate_and_starts_nothing(
     assert!(text.contains(judge), "{text}");
     assert!(text.ends_with(&format!("input: {total} condensed characters, about {} tokens\n", total / 4)), "{text}");
 
-    let one = stdout(&fx.skima(&["audit", "unslop", "--dry-run", "--limit", "1"]));
+    let one = stdout(&fx.mazo(&["audit", "unslop", "--dry-run", "--limit", "1"]));
     assert!(one.starts_with("unslop: 1 session to judge with"), "{one}");
-    let all = stdout(&fx.skima(&["audit", "unslop", "--dry-run", "--all"]));
+    let all = stdout(&fx.mazo(&["audit", "unslop", "--dry-run", "--all"]));
     assert!(all.starts_with("unslop: 3 sessions to judge"), "{all}");
     assert!(fx.calls().is_empty(), "--dry-run started the judge");
     assert!(!fx.data().join("audit-runs").exists());
@@ -520,7 +520,7 @@ fn dry_run_estimates_dollars_from_the_recorded_cost_per_character() {
             "{\"v\":1,\"kind\":\"session\",\"skill\":\"grade\",\"session\":\"o2\",\"condensed_chars\":3000,\"judge\":{\"agent\":\"claude\",\"model\":null,\"cost_usd\":0.1}}\n",
         ),
     );
-    let text = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let text = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     let micros = total as u64 * 100;
     let want =
         format!("cost: about ${} API-equivalent, at the rate of 2 earlier session records\n", audit::cents(micros));
@@ -531,15 +531,15 @@ fn dry_run_estimates_dollars_from_the_recorded_cost_per_character() {
 #[test]
 fn audit_usage_errors_exit_2_and_start_nothing() {
     let fx = Fixture::new("", three_agents);
-    let both = fx.skima(&["audit", "unslop", "--dry-run", "--limit", "3", "--all"]);
+    let both = fx.mazo(&["audit", "unslop", "--dry-run", "--limit", "3", "--all"]);
     assert_eq!(both.status.code(), Some(2), "--limit and --all conflict");
-    let unknown = fx.skima(&["audit", "nope", "--dry-run"]);
+    let unknown = fx.mazo(&["audit", "nope", "--dry-run"]);
     assert_eq!(unknown.status.code(), Some(2));
     for budget in ["0.039", "0", "abc", "-1"] {
-        let out = fx.skima(&["audit", "unslop", "--max-budget-usd", budget]);
+        let out = fx.mazo(&["audit", "unslop", "--max-budget-usd", budget]);
         assert_eq!(out.status.code(), Some(2), "{budget}: {}", stderr(&out));
     }
-    assert!(stderr(&fx.skima(&["audit", "unslop", "--max-budget-usd", "0.039"])).contains("at least 0.04"));
+    assert!(stderr(&fx.mazo(&["audit", "unslop", "--max-budget-usd", "0.039"])).contains("at least 0.04"));
     assert!(fx.calls().is_empty());
     // Codex and Pi report no dollar figure: `--limit` is their only cap.
     for agent in ["codex", "pi"] {
@@ -548,13 +548,13 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
             &["audit", "unslop", "--max-budget-usd", "1"][..],
             &["audit", "unslop", "--max-budget-usd", "5", "--dry-run"],
         ] {
-            let out = fx.skima(args);
+            let out = fx.mazo(args);
             assert_eq!(out.status.code(), Some(2), "{agent}");
             assert!(stderr(&out).contains(&format!("the {agent} judge is capped by --limit")), "{}", stderr(&out));
         }
         assert!(fx.calls().is_empty());
     }
-    let typo = Fixture::new("[judge]\nmodle = \"sonnet\"\n", three_agents).skima(&["audit", "unslop", "--dry-run"]);
+    let typo = Fixture::new("[judge]\nmodle = \"sonnet\"\n", three_agents).mazo(&["audit", "unslop", "--dry-run"]);
     assert!(stderr(&typo).contains("unknown field `modle`"), "{}", stderr(&typo));
     assert_ne!(typo.status.code(), Some(0));
 }
@@ -562,7 +562,7 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
 #[test]
 fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
     let fx = Fixture::new("", three_agents);
-    let out = fx.skima(&["audit", "unslop", "--max-budget-usd", "0.04"]);
+    let out = fx.mazo(&["audit", "unslop", "--max-budget-usd", "0.04"]);
     assert_eq!(out.status.code(), Some(1), "the call overshot, so stage 2 is skipped: {}", stdout(&out));
     let calls = fx.calls();
     assert_eq!(calls.len(), 1, "$0.04 leaves one call of $0.03 at $0.10 each");
@@ -570,7 +570,7 @@ fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
 
     let fx = Fixture::new("", three_agents);
     let source = snapshot(&fx.root.join("skills"));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let calls = fx.calls();
     assert_eq!(calls.len(), 4, "three sessions, then the skill report");
@@ -615,7 +615,7 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     let homes = agent_homes(&fx);
     let scratch = fx.data().join("codex-judge-home");
 
-    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     let judge = format!(
         "judge: CODEX_HOME={} codex exec --ephemeral --skip-git-repo-check --sandbox read-only \
          --output-schema <schema file> -o <result file> --json -m gpt-5 - < <prompt + input>\n",
@@ -625,7 +625,7 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     assert!(!dry.contains("cost:"), "{dry}");
     assert!(!scratch.exists(), "--dry-run made the scratch home");
 
-    let out = fx.skima(&["audit", "unslop", "--limit", "2"]);
+    let out = fx.mazo(&["audit", "unslop", "--limit", "2"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(stdout(&out).starts_with("unslop: 2 judged, 0 dropped\nunslop: skill report over 2 sessions: "));
     let calls = fx.calls();
@@ -673,7 +673,7 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     );
     assert_eq!(skill["rates"]["followed"]["of"], 2);
     let json: serde_json::Value =
-        serde_json::from_str(&stdout(&fx.skima(&["audit", "unslop", "--resynth", "--json"]))).unwrap();
+        serde_json::from_str(&stdout(&fx.mazo(&["audit", "unslop", "--resynth", "--json"]))).unwrap();
     assert_eq!(json["spent_usd"], serde_json::Value::Null, "Codex reports no cost");
     assert_eq!(json["record"]["judge"]["cost_usd"], serde_json::Value::Null);
     let left: Vec<_> = fs::read_dir(&scratch).unwrap().map(|e| e.unwrap().file_name()).collect();
@@ -685,7 +685,7 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     // dropped every session it judged exits 1 and has no skill report to write.
     let fx = Fixture::new("[judge]\nagent = \"codex\"\n", claude_sessions(1));
     fx.raw_reply("default", "");
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(stdout(&out), "unslop: 0 judged, 1 dropped\n");
     assert!(stderr(&out).contains("no answer in the -o file"), "{}", stderr(&out));
@@ -714,12 +714,12 @@ fn the_pi_judge_reads_its_input_file_and_its_final_message_is_validated() {
     fx.raw_reply("2", &pi_stream("Here is my verdict.", "stop"));
     let homes = agent_homes(&fx);
 
-    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     let judge = "judge: pi -p --no-session --no-tools --no-extensions --no-skills --no-context-files \
                  --system-prompt \"$(cat <prompt>)\" --mode json --model sonnet @<input file>\n";
     assert!(dry.contains(judge), "{dry}");
 
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(stdout(&out).starts_with("unslop: 2 judged, 1 dropped\nunslop: skill report over 2 sessions: "));
     let err = stderr(&out);
@@ -769,7 +769,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
         fx.calls().iter().map(|c| c.arg("--max-budget-usd").unwrap().to_string()).collect()
     };
     let fx = Fixture::new("", claude_sessions(12));
-    let out = fx.skima(&["audit", "unslop", "--max-budget-usd", "1"]);
+    let out = fx.mazo(&["audit", "unslop", "--max-budget-usd", "1"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     // Stage 1 shares $0.75; stage 2 gets the rest: $1 - $0.80.
     assert_eq!(caps(&fx), ["0.75", "0.65", "0.55", "0.45", "0.35", "0.25", "0.15", "0.05", "0.20"]);
@@ -788,7 +788,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
 
     let fx = Fixture::new("", claude_sessions(30));
     fx.reply("default", "0.031", &answer("LINE"));
-    let out = fx.skima(&["audit", "unslop", "--all"]);
+    let out = fx.mazo(&["audit", "unslop", "--all"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let all = caps(&fx);
     assert_eq!(all.len(), 25);
@@ -806,7 +806,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     // $0.30 a call: stage 1 judges 3 sessions for $0.90 and stage 2 gets $0.10.
     let fx = Fixture::new("", claude_sessions(12));
     fx.reply("default", "0.30", &answer("LINE"));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(caps(&fx), ["0.75", "0.45", "0.15", "0.10"]);
     assert_eq!(fx.records().len(), 3);
@@ -815,7 +815,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     // $0.50 a call: stage 1 spends the whole $1, so stage 2 is skipped and the run exits 1.
     let fx = Fixture::new("", claude_sessions(12));
     fx.reply("default", "0.50", &answer("LINE"));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(caps(&fx), ["0.75", "0.25"]);
     assert_eq!(fx.records().len(), 2);
@@ -859,7 +859,7 @@ fn costs_are_read_from_their_decimal_text_into_micro_dollars() {
     // A run records the stub's exact cost, never a float's rounding of it.
     let fx = Fixture::new("", claude_sessions(1));
     fx.reply("default", "0.1234567", &answer("LINE"));
-    fx.skima(&["audit", "unslop"]);
+    fx.mazo(&["audit", "unslop"]);
     let line = fs::read_to_string(fx.data().join("audits.jsonl")).unwrap();
     assert!(line.contains("\"cost_usd\":0.123456,"), "{line}");
 }
@@ -867,7 +867,7 @@ fn costs_are_read_from_their_decimal_text_into_micro_dollars() {
 #[test]
 fn session_records_hold_every_field_and_are_judged_once() {
     let fx = Fixture::new("[judge]\nmodel = \"sonnet\"\n", three_agents);
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let records = fx.records();
     assert_eq!(records.len(), 3);
@@ -895,7 +895,7 @@ fn session_records_hold_every_field_and_are_judged_once() {
         assert_eq!(r["kind"], "session");
         assert_eq!(r["skill"], "unslop");
         assert_eq!(r["session"], c.event.session.as_str());
-        assert_eq!(r["agent"], skima::ledger::name(c.event.agent).as_str());
+        assert_eq!(r["agent"], mazo::ledger::name(c.event.agent).as_str());
         assert_eq!(r["src"], c.event.src.as_str());
         assert_eq!(r["session_ts"], c.started().unwrap().to_string().as_str());
         assert!(r["audited_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
@@ -912,7 +912,7 @@ fn session_records_hold_every_field_and_are_judged_once() {
     // The lock the records were written under is the ledger's.
     assert!(fx.data().join("scan.lock").exists());
 
-    let again = fx.skima(&["audit", "unslop"]);
+    let again = fx.mazo(&["audit", "unslop"]);
     assert_eq!(stdout(&again), "unslop: no session to judge\n");
     assert_eq!(fx.calls().len(), 4, "a judged session was judged again, or stage 2 ran with nothing new");
     assert_eq!(fx.records().len(), 3);
@@ -932,7 +932,7 @@ fn an_invalid_answer_is_retried_once_then_dropped() {
     short["asked"] = "The user said: please   TIDY the prose.".into();
     fx.reply("3", "0.1", &short);
     fx.reply("4", "0.1", &answer(3));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let calls = fx.calls();
     assert_eq!(calls.len(), 6, "five session calls, then the skill report");
@@ -1001,7 +1001,7 @@ fn validation_checks_schema_lines_and_quotes() {
 fn a_call_whose_output_is_no_json_stops_the_run_at_no_cost() {
     let fx = Fixture::new("", three_agents);
     fx.raw_reply("1", "not json\n");
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
     let text = stdout(&out);
@@ -1023,7 +1023,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     let fx = Fixture::new("", claude_sessions(2));
     let invalid = r#"{"subtype":"success","is_error":true,"terminal_reason":"api_error","total_cost_usd":0,"result":"Invalid API key"}"#;
     fx.script("1", &format!("echo '{invalid}'\n{FAIL}"));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1, "no retry or later call starts");
     assert_eq!(
@@ -1041,7 +1041,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     // Plain text on stdout, exit 1; the record written before stays and stage 2 never runs.
     let fx = Fixture::new("", claude_sessions(3));
     fx.script("2", &format!("echo 'Not logged in'\n{FAIL}"));
-    let out = fx.skima(&["audit", "unslop", "--json"]);
+    let out = fx.mazo(&["audit", "unslop", "--json"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 2);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
@@ -1056,7 +1056,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     // The stage-2 judge stops the run the same way.
     let fx = Fixture::new("", claude_sessions(1));
     fx.script("2", &format!("echo '{invalid}'\n{FAIL}"));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 2);
     assert_eq!(
@@ -1071,7 +1071,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     // Sessions the budget left stay the budget's when the stage-2 judge then stops.
     let fx = Fixture::new("", claude_sessions(12));
     fx.script("9", &format!("echo '{invalid}'\n{FAIL}"));
-    let out = fx.skima(&["audit", "unslop", "--max-budget-usd", "1"]);
+    let out = fx.mazo(&["audit", "unslop", "--max-budget-usd", "1"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 9, "eight sessions, then the skill report");
     let text = stdout(&out);
@@ -1101,7 +1101,7 @@ fn a_codex_or_pi_judge_that_exits_nonzero_without_its_result_stops_the_run() {
             _ => (String::new(), "no answer in the -o file"),
         };
         fx.script("1", &format!("printf '%s' '{stdout_text}'\n{FAIL}"));
-        let out = fx.skima(&["audit", "unslop"]);
+        let out = fx.mazo(&["audit", "unslop"]);
         assert_eq!(out.status.code(), Some(1), "{agent}: {}", stderr(&out));
         assert_eq!(fx.calls().len(), 1, "{agent}");
         let want =
@@ -1114,12 +1114,12 @@ fn a_codex_or_pi_judge_that_exits_nonzero_without_its_result_stops_the_run() {
 }
 
 #[test]
-fn a_claude_judge_killed_by_a_signal_skima_did_not_send_stops_the_run_at_its_cap() {
+fn a_claude_judge_killed_by_a_signal_mazo_did_not_send_stops_the_run_at_its_cap() {
     let fx = Fixture::new("", claude_sessions(2));
     // A stderr line is cut to 200 characters.
     let long = "y".repeat(300);
     fx.script("1", &format!("echo dying >&2\necho {long} >&2\nkill -9 $$\n"));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 1);
     let text = stdout(&out);
@@ -1140,7 +1140,7 @@ fn a_quote_rejection_names_the_field_and_the_shared_text() {
     quote["notes"] = format!("Output was {}.", "R".repeat(80)).into();
     fx.reply("1", "0.1", &quote);
     fx.reply("2", "0.1", &answer(3));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let calls = fx.calls();
     let rejected = calls[1].stdin.strip_prefix(&calls[0].stdin).unwrap();
@@ -1162,47 +1162,47 @@ fn the_audits_own_sessions_add_no_event() {
     let load: String = fixture.lines().skip(3).take(2).map(|l| l.to_string() + "\n").collect();
     let template = load.replace("/home/u/proj", "CWD").replace("c0de0000-0000-4000-8000-000000000001", "SID");
     common::write(&fx.root.join("transcript"), &template);
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let written = fx.root.join("home/.claude/projects/run");
     assert_eq!(fs::read_dir(&written).unwrap().count(), 4, "three sessions and the skill report");
 
     let events = || fs::read_to_string(fx.data().join("events.jsonl")).unwrap().lines().count();
     let before = events();
-    let scan = fx.skima(&["scan"]);
+    let scan = fx.mazo(&["scan"]);
     assert_eq!(scan.status.code(), Some(0), "{}", stderr(&scan));
     assert_eq!(events(), before, "an audit session became an event");
 
     // The same transcript from a project outside audit-runs is usage.
     common::write(&written.join("elsewhere.jsonl"), &template.replace("CWD", "/p/elsewhere").replace("SID", "x"));
-    fx.skima(&["scan"]);
+    fx.mazo(&["scan"]);
     assert!(events() > before, "the control transcript added no event");
 }
 
 #[test]
 fn stage_two_runs_on_every_session_record_after_new_ones_or_with_resynth() {
     let fx = Fixture::new("", claude_sessions(3));
-    let first = fx.skima(&["audit", "unslop", "--limit", "1"]);
+    let first = fx.mazo(&["audit", "unslop", "--limit", "1"]);
     assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
     assert_eq!(fx.calls().len(), 2, "one session, then the skill report");
     assert_eq!(fx.skill_records()[0]["sessions"], serde_json::json!(["s00"]));
 
     // A later run with one new session reports on the old record too.
-    fx.skima(&["audit", "unslop", "--limit", "1"]);
+    fx.mazo(&["audit", "unslop", "--limit", "1"]);
     let calls = fx.calls();
     assert_eq!(calls.len(), 4);
     assert!(calls[3].stdin.contains("\"session\":\"s00\"") && calls[3].stdin.contains("\"session\":\"s01\""));
     assert_eq!(fx.skill_records()[1]["sessions"], serde_json::json!(["s00", "s01"]));
 
     // Nothing new and no --resynth: no call at all.
-    fx.skima(&["audit", "unslop", "--limit", "1"]);
+    fx.mazo(&["audit", "unslop", "--limit", "1"]);
     let before = fx.calls().len();
-    let idle = fx.skima(&["audit", "unslop"]);
+    let idle = fx.mazo(&["audit", "unslop"]);
     assert_eq!(stdout(&idle), "unslop: no session to judge\n");
     assert_eq!(fx.calls().len(), before);
 
     // --resynth: one stage-2 call over all three records; older skill records stay.
-    let resynth = fx.skima(&["audit", "unslop", "--resynth"]);
+    let resynth = fx.mazo(&["audit", "unslop", "--resynth"]);
     assert_eq!(resynth.status.code(), Some(0), "{}", stderr(&resynth));
     let calls = fx.calls();
     assert_eq!(calls.len(), before + 1);
@@ -1235,7 +1235,7 @@ fn stage_two_reads_the_skill_its_history_grades_retros_usage_and_records() {
             format!("---\ndate: 2026-05-0{}\nscore: 6.{i}\nverdict: v{i}\n---\n{}", i + 1, letter.repeat(5_000));
         common::write(&source.join(format!(".retros/unslop/{i}.md")), &retro);
     }
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let input = &fx.calls()[1].stdin;
 
@@ -1282,7 +1282,7 @@ fn rates_come_from_the_session_records_not_the_judge() {
     with_rates["rates"] = serde_json::json!({"followed": [9, 9]});
     fx.reply("4", "0.1", &with_rates);
     fx.reply("5", "0.1", &claimed);
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 5, "the answer carrying rates was refused and retried");
     let record = &fx.skill_records()[0];
@@ -1303,7 +1303,7 @@ fn a_skill_report_citing_an_unknown_session_is_retried_once_then_dropped() {
     let mut example = skill_answer("s00");
     example["examples"][0]["session"] = "ghost".into();
     fx.reply("3", "0.1", &example);
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "a due report that was dropped fails the run");
     assert_eq!(fx.calls().len(), 3);
     assert!(fx.skill_records().is_empty());
@@ -1316,7 +1316,7 @@ fn a_skill_report_citing_an_unknown_session_is_retried_once_then_dropped() {
 
     let fx = Fixture::new("", claude_sessions(1));
     fx.reply("2", "0.1", &skill_answer("nope"));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 3, "the retry passed");
     let records = fx.skill_records();
@@ -1330,8 +1330,8 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
     let mut old = skill_answer("s00");
     old["verdict"] = "OLD VERDICT".into();
     fx.reply("2", "0.1", &old);
-    fx.skima(&["audit", "unslop", "--limit", "1"]);
-    let out = fx.skima(&["audit", "unslop", "--limit", "1"]);
+    fx.mazo(&["audit", "unslop", "--limit", "1"]);
+    let out = fx.mazo(&["audit", "unslop", "--limit", "1"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let records = fx.skill_records();
     assert_eq!(records.len(), 2);
@@ -1352,7 +1352,7 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
     assert_eq!(r["prompt"], "skill-v1");
     assert_eq!(r["result"], skill_answer("s00"));
 
-    let show = fx.skima(&["show", "unslop"]);
+    let show = fx.mazo(&["show", "unslop"]);
     assert_eq!(show.status.code(), Some(0), "{}", stderr(&show));
     let text = stdout(&show);
     let date = common::local_date(r["audited_at"].as_str().unwrap());
@@ -1366,7 +1366,7 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
     );
     let curated = "curated:\n  A short note. Asked: Tidy the note. Happened: It was tidied. Tip: Say the tone. (s00)\n";
     assert!(text.contains(curated), "{text}");
-    let json: serde_json::Value = serde_json::from_str(&stdout(&fx.skima(&["show", "unslop", "--json"]))).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout(&fx.mazo(&["show", "unslop", "--json"]))).unwrap();
     assert_eq!(&json["audit"], r);
     assert_eq!(json["examples"]["curated"], r["result"]["examples"]);
 }
@@ -1376,7 +1376,7 @@ fn json_prints_the_skill_record_the_counts_and_the_spend() {
     let fx = Fixture::new("", claude_sessions(3));
     fx.reply("1", "0.1", &answer(999));
     fx.reply("2", "0.1", &answer(999));
-    let out = fx.skima(&["audit", "unslop", "--json"]);
+    let out = fx.mazo(&["audit", "unslop", "--json"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(v["record"], fx.skill_records()[0]);
@@ -1386,8 +1386,8 @@ fn json_prints_the_skill_record_the_counts_and_the_spend() {
     assert_eq!(v["left"], serde_json::json!([]));
 
     // The dropped session is judged on the next run; the one after has nothing to do.
-    fx.skima(&["audit", "unslop"]);
-    let idle = fx.skima(&["audit", "unslop", "--json"]);
+    fx.mazo(&["audit", "unslop"]);
+    let idle = fx.mazo(&["audit", "unslop", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&idle)).unwrap();
     assert_eq!(v, serde_json::json!({"record": null, "written": 0, "dropped": 0, "spent_usd": 0, "left": []}));
 }
@@ -1417,7 +1417,7 @@ fn under_subscription_no_judge_call_sees_a_billing_variable_and_under_api_every_
             fx.raw_reply("default", &pi_stream(&answer("LINE").to_string(), "stop"));
             fx.raw_reply("skill", &pi_stream(&skill_answer("SESSION").to_string(), "stop"));
         }
-        let out = fx.skima_env(&env, &["audit", "unslop"]);
+        let out = fx.mazo_env(&env, &["audit", "unslop"]);
         assert_eq!(out.status.code(), Some(0), "{agent}: {}", stderr(&out));
         let calls = fx.calls();
         assert_eq!(calls.len(), 2, "{agent}");
@@ -1438,7 +1438,7 @@ fn under_subscription_no_judge_call_sees_a_billing_variable_and_under_api_every_
 
         let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\nbilling = \"api\"\n"), claude_sessions(1));
         fx.raw_reply("1", &fs::read_to_string(fx.root.join("replies/default")).unwrap());
-        fx.skima_env(&env, &["audit", "unslop", "--limit", "1"]);
+        fx.mazo_env(&env, &["audit", "unslop", "--limit", "1"]);
         let calls = fx.calls();
         assert!(!calls.is_empty(), "{agent}");
         let listing = fx.left(&calls[0], "env").unwrap();
@@ -1451,7 +1451,7 @@ fn under_subscription_no_judge_call_sees_a_billing_variable_and_under_api_every_
 fn a_claude_login_that_would_bill_otherwise_exits_2_before_any_judge_call() {
     let fx = Fixture::new("", claude_sessions(2));
     common::write(&fx.root.join("auth_status"), "{\"loggedIn\":true,\"authMethod\":\"api_key_helper\"}\n");
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(
         stderr(&out),
@@ -1460,7 +1460,7 @@ fn a_claude_login_that_would_bill_otherwise_exits_2_before_any_judge_call() {
     assert_eq!(stdout(&out), "");
     assert!(fx.auth_status_env().is_some());
     assert!(fx.calls().is_empty() && fx.lines().is_empty());
-    // The check runs where a judge call would, not in skima's working directory.
+    // The check runs where a judge call would, not in mazo's working directory.
     let pwd = fs::read_to_string(fx.root.join("auth_status_pwd")).unwrap();
     assert!(Path::new(pwd.trim_end()).starts_with(fx.data().join("audit-runs")), "{pwd}");
     assert_eq!(fs::read_to_string(fx.root.join("auth_status_ls")).unwrap(), "");
@@ -1468,7 +1468,7 @@ fn a_claude_login_that_would_bill_otherwise_exits_2_before_any_judge_call() {
 
     // An OAuth token is a login; so is claude.ai, the stub's default.
     common::write(&fx.root.join("auth_status"), "{\"loggedIn\":true,\"authMethod\":\"oauth_token\"}\n");
-    assert_eq!(fx.skima(&["audit", "unslop", "--limit", "1"]).status.code(), Some(0));
+    assert_eq!(fx.mazo(&["audit", "unslop", "--limit", "1"]).status.code(), Some(0));
     assert_eq!(fx.calls().len(), 2);
 }
 
@@ -1480,12 +1480,12 @@ fn a_codex_judge_without_a_chatgpt_login_in_the_configured_home_is_never_started
     // `~/.codex` holds a ChatGPT login, but the configured Codex home is read.
     let home = fx.root.join("home/codex");
     common::write(&home.join("auth.json"), "{\"auth_mode\":\"apikey\",\"OPENAI_API_KEY\":\"k\"}\n");
-    let config = fx.root.join("skills/skima.toml");
+    let config = fx.root.join("skills/mazo.toml");
     let text = fs::read_to_string(&config).unwrap();
     let codex = format!("[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"{}\"\n", home.display());
     fs::write(&config, format!("{text}{codex}")).unwrap();
 
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     let want = format!(
         "ERROR: {}: no ChatGPT login for the Codex judge; run codex login, or set billing = \"api\" under [judge]\n",
@@ -1498,13 +1498,13 @@ fn a_codex_judge_without_a_chatgpt_login_in_the_configured_home_is_never_started
     // An unreadable or malformed `auth.json` refuses too, and says why.
     let needs = "; the Codex judge needs a ChatGPT login: run codex login, or set billing = \"api\" under [judge]\n";
     common::write(&home.join("auth.json"), "{not json\n");
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     let err = stderr(&out);
     assert!(err.starts_with(&format!("ERROR: {}: not JSON: ", home.join("auth.json").display())), "{err}");
     assert!(err.ends_with(needs), "{err}");
     fs::remove_file(home.join("auth.json")).unwrap();
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     let err = stderr(&out);
     assert!(err.starts_with(&format!("ERROR: {}: No such file", home.join("auth.json").display())), "{err}");
@@ -1512,7 +1512,7 @@ fn a_codex_judge_without_a_chatgpt_login_in_the_configured_home_is_never_started
     assert!(fx.calls().is_empty());
 
     common::write(&home.join("auth.json"), "{\"auth_mode\":\"chatgpt\"}\n");
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), 2);
     assert_eq!(fx.left(&fx.calls()[0], "auth").unwrap().trim_end(), home.join("auth.json").display().to_string());
@@ -1523,12 +1523,12 @@ fn a_run_that_starts_no_judge_call_checks_no_login() {
     let refused = "{\"loggedIn\":true,\"authMethod\":\"api_key_helper\"}\n";
     let fx = Fixture::new("", three_agents);
     common::write(&fx.root.join("auth_status"), refused);
-    let out = fx.skima(&["audit", "unslop", "--dry-run"]);
+    let out = fx.mazo(&["audit", "unslop", "--dry-run"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 
     let idle = Fixture::new("", |_| Vec::new());
     common::write(&idle.root.join("auth_status"), refused);
-    let out = idle.skima(&["audit", "unslop"]);
+    let out = idle.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(stdout(&out), "unslop: no session to judge\n");
     for fx in [&fx, &idle] {
@@ -1537,11 +1537,11 @@ fn a_run_that_starts_no_judge_call_checks_no_login() {
     }
     // Once every session is judged, `--resynth` still starts a call, so it checks.
     fs::remove_file(fx.root.join("auth_status")).unwrap();
-    assert_eq!(fx.skima(&["audit", "unslop"]).status.code(), Some(0));
+    assert_eq!(fx.mazo(&["audit", "unslop"]).status.code(), Some(0));
     let calls = fx.calls().len();
     common::write(&fx.root.join("auth_status"), refused);
-    assert_eq!(fx.skima(&["audit", "unslop"]).status.code(), Some(0), "nothing left to judge");
-    let out = fx.skima(&["audit", "unslop", "--resynth"]);
+    assert_eq!(fx.mazo(&["audit", "unslop"]).status.code(), Some(0), "nothing left to judge");
+    let out = fx.mazo(&["audit", "unslop", "--resynth"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(fx.calls().len(), calls);
 }
@@ -1549,28 +1549,28 @@ fn a_run_that_starts_no_judge_call_checks_no_login() {
 #[test]
 fn dry_run_names_the_billing_and_the_pi_judges_model() {
     let fx = Fixture::new("", three_agents);
-    assert!(stdout(&fx.skima(&["audit", "unslop", "--dry-run"])).contains("\nbilling: subscription\ninput: "));
+    assert!(stdout(&fx.mazo(&["audit", "unslop", "--dry-run"])).contains("\nbilling: subscription\ninput: "));
     let fx = Fixture::new("[judge]\nagent = \"codex\"\nbilling = \"api\"\n", three_agents);
-    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     assert!(dry.contains("\nbilling: api\ninput: "), "{dry}");
 
     let fx = Fixture::new("[judge]\nagent = \"pi\"\n", three_agents);
     let settings = fx.root.join("home/.pi/agent/settings.json");
-    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     let want = format!(
         "\nbilling: subscription\nmodel: unknown; {} names no defaultProvider and defaultModel\n",
         settings.display()
     );
     assert!(dry.contains(&want), "{dry}");
     common::write(&settings, "{\"defaultProvider\":\"openrouter\",\"defaultModel\":\"anthropic/claude-sonnet\"}\n");
-    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     assert!(dry.contains("\nbilling: subscription\nmodel: openrouter/anthropic/claude-sonnet\ninput: "), "{dry}");
     let fx = Fixture::new("[judge]\nagent = \"pi\"\nmodel = \"sonnet\"\nbilling = \"api\"\n", three_agents);
     common::write(
         &fx.root.join("home/.pi/agent/settings.json"),
         "{\"defaultProvider\":\"openrouter\",\"defaultModel\":\"x\"}\n",
     );
-    let dry = stdout(&fx.skima(&["audit", "unslop", "--dry-run"]));
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     assert!(dry.contains("\nbilling: api\nmodel: sonnet\ninput: "), "{dry}");
     assert!(fx.calls().is_empty());
 }
@@ -1578,31 +1578,31 @@ fn dry_run_names_the_billing_and_the_pi_judges_model() {
 #[test]
 fn api_billing_prints_plain_dollars_and_records_say_who_paid() {
     let fx = Fixture::new("[judge]\nbilling = \"api\"\n", claude_sessions(1));
-    let out = fx.skima(&["audit", "unslop"]);
+    let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped, $0.20 spent of $1.00\n"), "{}", stdout(&out));
     for r in fx.lines() {
         assert_eq!(r["judge"]["billing"], "api", "{r}");
     }
-    let text = stdout(&fx.skima(&["show", "unslop"]));
+    let text = stdout(&fx.mazo(&["show", "unslop"]));
     assert!(text.contains(", 1 sessions, api billing: "), "{text}");
 }
 
 #[test]
 fn a_record_written_before_billing_was_recorded_reads_as_unknown() {
     let fx = Fixture::new("", claude_sessions(1));
-    fx.skima(&["audit", "unslop"]);
+    fx.mazo(&["audit", "unslop"]);
     let mut record = fx.skill_records().pop().unwrap();
     record["judge"].as_object_mut().unwrap().remove("billing");
     fs::write(fx.data().join("audits.jsonl"), format!("{record}\n")).unwrap();
 
-    let show = fx.skima(&["show", "unslop"]);
+    let show = fx.mazo(&["show", "unslop"]);
     assert_eq!(show.status.code(), Some(0), "{}", stderr(&show));
     assert!(stdout(&show).contains(", 1 sessions, unknown billing: "), "{}", stdout(&show));
-    let json: serde_json::Value = serde_json::from_str(&stdout(&fx.skima(&["show", "unslop", "--json"]))).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stdout(&fx.mazo(&["show", "unslop", "--json"]))).unwrap();
     assert_eq!(json["audit"]["judge"]["billing"], serde_json::Value::Null);
     let page = fx.root.join("report.html");
-    let out = fx.skima(&["report", "--out", page.to_str().unwrap()]);
+    let out = fx.mazo(&["report", "--out", page.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(fs::read_to_string(&page).unwrap().contains(", 1 sessions, unknown billing</span>"));
 }
@@ -1613,7 +1613,7 @@ fn a_judge_failure_under_subscription_names_api_billing() {
     for (billing, stage) in [("subscription", "1"), ("subscription", "2"), ("api", "1")] {
         let fx = Fixture::new(&format!("[judge]\nbilling = \"{billing}\"\n"), claude_sessions(1));
         fx.script(stage, &format!("echo 'Not logged in'\n{FAIL}"));
-        let out = fx.skima(&["audit", "unslop"]);
+        let out = fx.mazo(&["audit", "unslop"]);
         assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
         let err = stderr(&out);
         assert!(err.contains("the judge failed without an answer"), "{err}");

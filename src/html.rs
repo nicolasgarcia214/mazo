@@ -242,7 +242,7 @@ fn examples(ex: &Examples, tz: &TimeZone) -> String {
 }
 
 /// The latest audit: its date and session count, verdict, the
-/// rates skima computed and the top three improvements.
+/// rates mazo computed and the top three improvements.
 fn audit(a: Option<&SkillRecord>, tz: &TimeZone) -> String {
     let Some(a) = a else { return "<dt>audit</dt><dd>none</dd>".into() };
     let rates: Vec<String> = a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect();
@@ -328,7 +328,7 @@ pub fn render(model: &Report) -> String {
     format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>skima report</title><style>{CSS}</style></head>\n<body><h1>skima report</h1>\
+         <title>mazo report</title><style>{CSS}</style></head>\n<body><h1>mazo report</h1>\
          <p class=\"muted\">generated {} · usage {from} · times and days in {}</p>{}{}{}<h2>Skills</h2>{cards}</body></html>\n",
         local(Some(&model.generated), tz, MINUTE),
         local(Some(&model.generated), tz, "%Z"),

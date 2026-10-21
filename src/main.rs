@@ -4,18 +4,18 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use skima::config::{self, Config, Home};
-use skima::inventory::Inventory;
-use skima::ledger::{self, Agent, Channel, Ledger};
-use skima::report::{self, Since, UsageArgs};
-use skima::{Error, audit, html, links, policy, render, scan, tui};
+use mazo::config::{self, Config, Home};
+use mazo::inventory::Inventory;
+use mazo::ledger::{self, Agent, Channel, Ledger};
+use mazo::report::{self, Since, UsageArgs};
+use mazo::{Error, audit, html, links, policy, render, scan, tui};
 
 #[derive(Parser)]
 #[command(
-    name = "skima",
+    name = "mazo",
     version,
     about = "Skill usage from agent transcripts, and sync of skill links",
-    after_help = "Bare `skima` at a terminal opens a read-only TUI: usage, unused and skill cards.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
+    after_help = "Bare `mazo` at a terminal opens a read-only TUI: usage, unused and skill cards.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -172,7 +172,7 @@ struct AuditArgs {
 }
 
 fn main() -> ExitCode {
-    // Bare `skima` on a terminal opens the TUI; off one, clap prints the help and exits 2.
+    // Bare `mazo` on a terminal opens the TUI; off one, clap prints the help and exits 2.
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let cmd = if std::env::args_os().len() == 1 && tty { None } else { Some(Cli::parse().cmd) };
     match run(cmd) {
@@ -184,8 +184,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// `None` is bare `skima` on a terminal: the TUI.
-fn run(cmd: Option<Cmd>) -> skima::Result<ExitCode> {
+/// `None` is bare `mazo` on a terminal: the TUI.
+fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let path = config::path()?;
     if let Some(Cmd::Init { source }) = &cmd {
         config::init(&path, source)?;
@@ -193,7 +193,7 @@ fn run(cmd: Option<Cmd>) -> skima::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     let Some(cfg) = config::load(&path)? else {
-        return Err(Error::Usage(format!("no config at {}; run skima init --source <skills dir>", path.display())));
+        return Err(Error::Usage(format!("no config at {}; run mazo init --source <skills dir>", path.display())));
     };
     let inv = Inventory::load(&cfg.source)?;
     let Some(cmd) = cmd else {
@@ -221,11 +221,11 @@ fn run(cmd: Option<Cmd>) -> skima::Result<ExitCode> {
             cmd_status(&cfg, &inv, agent, json, render::colour(std::io::stderr().is_terminal(), no_color.as_deref()))
         }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
-        Cmd::New { name, description } => skima::lifecycle::new(&cfg, &name, &description),
+        Cmd::New { name, description } => mazo::lifecycle::new(&cfg, &name, &description),
         Cmd::Prune { name, yes, force } => {
-            skima::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
+            mazo::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
-        Cmd::Retire { name, force } => skima::lifecycle::retire(&cfg, &inv, &name, force),
+        Cmd::Retire { name, force } => mazo::lifecycle::retire(&cfg, &inv, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
@@ -235,8 +235,8 @@ fn run(cmd: Option<Cmd>) -> skima::Result<ExitCode> {
 fn scanned<T>(
     cfg: &Config,
     inv: &Inventory,
-    f: impl FnOnce(&std::path::Path, &report::Input) -> skima::Result<T>,
-) -> skima::Result<T> {
+    f: impl FnOnce(&std::path::Path, &report::Input) -> mazo::Result<T>,
+) -> mazo::Result<T> {
     let data = ledger::data_dir()?;
     scan::scan(cfg, inv, &data, false)?.warn();
     let ledger = Ledger::load(&data)?;
@@ -251,8 +251,8 @@ fn scanned<T>(
 fn with_scanned(
     cfg: &Config,
     inv: &Inventory,
-    render: impl FnOnce(&report::Input) -> skima::Result<String>,
-) -> skima::Result<ExitCode> {
+    render: impl FnOnce(&report::Input) -> mazo::Result<String>,
+) -> mazo::Result<ExitCode> {
     scanned(cfg, inv, |_, input| {
         print!("{}", render(input)?);
         for w in policy::freshness(cfg, input.coverage, input.now) {
@@ -262,9 +262,9 @@ fn with_scanned(
     })
 }
 
-/// `skima audit`: usage errors are caught before the scan, and a failed
+/// `mazo audit`: usage errors are caught before the scan, and a failed
 /// login check before any judge call.
-fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skima::Result<ExitCode> {
+fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo::Result<ExitCode> {
     let (skill, budget) = (args.skill.as_str(), args.max_budget_usd);
     if !inv.skills.contains(skill) {
         return Err(Error::Usage(format!("not a skill in the source: {skill}")));
@@ -294,7 +294,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
             judge: &cfg.judge,
             backend: backend.as_ref(),
             budget,
-            evals: &skima::evals::load(inv, skill),
+            evals: &mazo::evals::load(inv, skill),
             usage: &report::usage_section(input, skill),
         };
         if args.dry_run {
@@ -319,7 +319,7 @@ fn cmd_report(
     since: Since,
     out: Option<std::path::PathBuf>,
     open: bool,
-) -> skima::Result<ExitCode> {
+) -> mazo::Result<ExitCode> {
     let path = match &out {
         // Absolute, so the opener and the printed path do not depend on its cwd.
         Some(p) => std::path::absolute(p).map_err(|e| format!("{}: {e}", p.display()))?,
@@ -339,7 +339,7 @@ fn cmd_report(
     Ok(code)
 }
 
-fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bool) -> skima::Result<ExitCode> {
+fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bool) -> mazo::Result<ExitCode> {
     let data = ledger::data_dir()?;
     let was = if reparse { Some(home_counts(&Ledger::load(&data)?)) } else { None };
     let r = scan::scan(cfg, inv, &data, reparse)?;
@@ -400,13 +400,7 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
 }
 
 /// `colour` paints the `ERROR:` and `warning:` prefixes on stderr.
-fn cmd_status(
-    cfg: &Config,
-    inv: &Inventory,
-    agent: Option<Agent>,
-    json: bool,
-    colour: bool,
-) -> skima::Result<ExitCode> {
+fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, colour: bool) -> mazo::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let skill_errors = policy::per_skill(cfg, inv);
     let plan = links::plan(cfg, inv, &homes, None);
@@ -444,7 +438,7 @@ fn cmd_status(
     Ok(if failed { ExitCode::from(1) } else { ExitCode::SUCCESS })
 }
 
-fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> skima::Result<ExitCode> {
+fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> mazo::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let plan = links::plan(cfg, inv, &homes, None);
     let errors = links::sync_errors(cfg, inv, &homes, &plan);
@@ -495,7 +489,7 @@ mod tests {
     #[test]
     fn every_argument_has_help_text() {
         let mut out = Vec::new();
-        undocumented(&Cli::command(), "skima", &mut out);
+        undocumented(&Cli::command(), "mazo", &mut out);
         assert_eq!(out, Vec::<String>::new());
     }
 }

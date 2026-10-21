@@ -101,12 +101,12 @@ pub struct Coverage {
     pub last_scan: Option<String>,
 }
 
-/// `${XDG_DATA_HOME:-~/.local/share}/skima`.
+/// `${XDG_DATA_HOME:-~/.local/share}/mazo`.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|x| !x.is_empty()) {
-        return Ok(PathBuf::from(x).join("skima"));
+        return Ok(PathBuf::from(x).join("mazo"));
     }
-    Ok(PathBuf::from(crate::config::home_dir()?).join(".local/share/skima"))
+    Ok(PathBuf::from(crate::config::home_dir()?).join(".local/share/mazo"))
 }
 
 /// The ledger, held under `scan.lock` while a scan or reparse writes it.

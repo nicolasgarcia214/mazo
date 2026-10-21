@@ -46,7 +46,7 @@ Return JSON with these fields:
 Rules:
 
 - Cite only session ids that appear in `<session-records>`.
-- Do not count rates such as "17 of 20"; skima computes them itself.
+- Do not count rates such as "17 of 20"; mazo computes them itself.
 - Paraphrase. The records may describe private client work; name no client,
   person, file path or repository.
 - Keep every text field to one or two short sentences.

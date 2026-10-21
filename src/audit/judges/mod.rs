@@ -22,7 +22,7 @@ use crate::Result;
 use crate::config::{Billing, Home, Judge};
 use crate::ledger::Agent;
 
-/// How skima calls one agent as its judge.
+/// How mazo calls one agent as its judge.
 pub trait Backend {
     /// The argv of a call with `stage`'s prompt and schema, `[judge] model`, and
     /// [`SCHEMA_FILE`], [`RESULT_FILE`] or [`INPUT_FILE`] standing in for the files
@@ -108,7 +108,7 @@ pub enum NoAnswer {
     /// Over its cap, past its time, or an answer that does not parse: retried as it was.
     Retry(String),
     /// A judge that failed without an answer: a login, key or network failure,
-    /// or a signal skima did not send. The run stops.
+    /// or a signal mazo did not send. The run stops.
     Stop(String),
 }
 
@@ -176,7 +176,7 @@ pub fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<R
     let argv = a.backend.argv(stage);
     let (unique, dir) = run_dir(a.data)?;
     let scratch = a.backend.scratch(a.data)?;
-    let files = std::env::temp_dir().join(format!("skima-judge-{unique}"));
+    let files = std::env::temp_dir().join(format!("mazo-judge-{unique}"));
     let result = files.join("result.json");
     let output = DirBuilder::new().mode(0o700).create(&files).and_then(|()| {
         let mut cmd = Command::new(&argv[0]);

@@ -1,4 +1,4 @@
-//! Stage 2: one call over every session record of a skill, the rates skima
+//! Stage 2: one call over every session record of a skill, the rates mazo
 //! computes, and the skill record the card shows.
 
 use std::collections::BTreeMap;
@@ -124,7 +124,7 @@ impl Rate {
     }
 }
 
-/// The rates skima computes from session records, never the judge.
+/// The rates mazo computes from session records, never the judge.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Rates {
     pub followed: Rate,
@@ -273,7 +273,7 @@ pub(super) fn session_records(a: &Audit) -> Result<Vec<Judged>> {
 
 /// Stage 2: one call over every session record of the skill; with
 /// a budget, capped at it minus what is spent, and skipped when that is under
-/// a cent. A valid answer is appended as the skill record with the rates skima
+/// a cent. A valid answer is appended as the skill record with the rates mazo
 /// computes; an invalid one is retried once, then dropped. A judge that
 /// failed without an answer stops the run.
 pub(super) fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {

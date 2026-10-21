@@ -1,7 +1,7 @@
-//! `skima audit`. Stage 1: selection, the judge's input, one
+//! `mazo audit`. Stage 1: selection, the judge's input, one
 //! Claude, Codex or Pi judge call per session, validation of its answer, and
 //! the session records in `audits.jsonl`. Stage 2: one call over every
-//! session record of the skill, the rates skima computes, and the skill
+//! session record of the skill, the rates mazo computes, and the skill
 //! record the card shows. `--dry-run` shows what a run would judge and calls
 //! nothing.
 //!
@@ -172,7 +172,7 @@ pub struct JudgeRecord {
     pub model: Option<String>,
     /// None from a judge that reports no cost (Codex, Pi).
     pub cost_usd: Option<Box<RawValue>>,
-    /// None in records written before skima recorded it: unknown.
+    /// None in records written before mazo recorded it: unknown.
     #[serde(default)]
     pub billing: Option<Billing>,
 }
@@ -430,7 +430,7 @@ impl Run<'_> {
                 out.push_str(&format!("{skill}: skill report stopped: {why}\n"));
             }
             Synthesis::Skipped => out.push_str(&format!(
-                "{skill}: skill report skipped: {} of the budget is left, under $0.01; run `skima audit {skill} --resynth`\n",
+                "{skill}: skill report skipped: {} of the budget is left, under $0.01; run `mazo audit {skill} --resynth`\n",
                 a.usd(a.budget.unwrap_or_default().saturating_sub(self.spent))
             )),
         }
@@ -471,7 +471,7 @@ fn estimate_cost(data: &Path, chars: usize) -> Result<Option<(u64, usize)>> {
     Ok(Some(((cost * chars as u128 / seen) as u64, n)))
 }
 
-/// `skima audit --dry-run`: each session the audit would judge with its agent,
+/// `mazo audit --dry-run`: each session the audit would judge with its agent,
 /// project and condensed size, the judge command, the billing (and the model
 /// for Pi), the token estimate and, once session records exist, the dollar
 /// estimate.

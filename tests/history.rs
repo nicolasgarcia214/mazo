@@ -7,10 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Skima, World, git, stderr, write};
-use skima::evals;
-use skima::inventory::Inventory;
-use skima::report::{self, Since};
+use common::{Mazo, World, git, stderr, write};
+use mazo::evals;
+use mazo::inventory::Inventory;
+use mazo::report::{self, Since};
 
 /// `git add -A` and commit everything under `repo` on `date`.
 fn commit(repo: &Path, subject: &str, date: &str) {
@@ -92,7 +92,7 @@ fn edit(src: &Path, path: &str, text: &str, date: &str) {
     commit(src, path, date);
 }
 
-/// `(skima's +N, git rev-list --count G..HEAD -- <skill>)` for each skill,
+/// `(mazo's +N, git rev-list --count G..HEAD -- <skill>)` for each skill,
 /// with whether the grade of `s` is stale.
 fn parity(src: &Path, skills: &[&str]) -> (Vec<(usize, usize)>, bool) {
     let inv = Inventory::load(src).unwrap();
@@ -195,7 +195,7 @@ fn a_report_runs_one_log_and_one_status_whatever_the_skill_count() {
         write(&src.join("s0/notes.md"), "later");
         commit(&root.join("repo"), "edit s0", "2026-02-01T00:00:00Z");
         fs::create_dir_all(root.join("claude/projects")).unwrap();
-        let config = root.join("skima.toml");
+        let config = root.join("mazo.toml");
         fs::write(
             &config,
             "source = \"repo/skills\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"claude\"\n",
@@ -212,7 +212,7 @@ fn a_report_runs_one_log_and_one_status_whatever_the_skill_count() {
             ),
         );
         Command::new("chmod").arg("+x").arg(bin.join("git")).status().unwrap();
-        let run = Skima::new(&root, &root, &config, &root.join("xdg"));
+        let run = Mazo::new(&root, &root, &config, &root.join("xdg"));
 
         for args in [&["usage", "--json"][..], &["unused", "--json"], &["show", "s0", "--json"]] {
             let _ = fs::remove_file(&log);

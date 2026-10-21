@@ -1,4 +1,4 @@
-//! The read-only TUI of bare `skima`: the usage table, the unused list and
+//! The read-only TUI of bare `mazo`: the usage table, the unused list and
 //! one skill's card, rendered from the typed report model over a finished
 //! scan. It writes nothing.
 
