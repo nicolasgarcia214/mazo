@@ -23,6 +23,8 @@ pub struct Inventory {
     pub worktree: Option<PathBuf>,
     /// The source's git history; None outside a git worktree.
     pub history: Option<History>,
+    /// Each store skill's lockfile `installed_at` (RFC 3339).
+    pub installed: BTreeMap<String, String>,
 }
 
 impl Inventory {
@@ -48,7 +50,8 @@ impl Inventory {
         let mut known = skills.clone();
         known.extend(history.iter().flat_map(History::skill_names));
         let roots = roots.iter().map(|r| r.to_path_buf()).collect();
-        Ok(Inventory { source: source.to_path_buf(), roots, skills, origins, known, worktree, history })
+        let installed = BTreeMap::new();
+        Ok(Inventory { source: source.to_path_buf(), roots, skills, origins, known, worktree, history, installed })
     }
 
     /// The root a skill is read from; the source for a name in no root.

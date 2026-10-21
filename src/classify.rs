@@ -198,7 +198,10 @@ impl Classifier<'_> {
             return if self.inv.known.contains(skill) { Origin::Canonical } else { Origin::Other };
         };
         let p = Path::new(path);
-        if std::fs::canonicalize(p).is_ok_and(|r| r.starts_with(&self.inv.source)) {
+        // Under any skill root, the store's included, whether reached through a home link or not.
+        let rooted =
+            |r: PathBuf| std::iter::once(&self.inv.source).chain(&self.inv.roots).any(|root| r.starts_with(root));
+        if std::fs::canonicalize(p).is_ok_and(rooted) {
             return Origin::Canonical;
         }
         let in_home_skills = self.homes.iter().any(|h| {
@@ -242,5 +245,25 @@ mod tests {
         assert_eq!(actor(Agent::Claude, &a(Some("sdk-cli"), false, false)), Actor::Headless);
         assert_eq!(actor(Agent::Codex, &a(None, false, true)), Actor::Headless);
         assert_eq!(actor(Agent::Pi, &a(None, false, false)), Actor::Main);
+    }
+
+    #[test]
+    fn a_load_at_the_store_path_is_canonical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tmp.path().canonicalize().unwrap();
+        let (source, store) = (tmp.join("source"), tmp.join("store"));
+        for dir in [source.join("mine"), store.join("theirs"), tmp.join("elsewhere/theirs")] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), "x").unwrap();
+        }
+        let inv = Inventory::load_roots(&source, &[&source, &store]).unwrap();
+        let home =
+            Home { name: "claude".into(), agent: Agent::Claude, path: tmp.join("home"), links: Default::default() };
+        let homes = [home.clone()];
+        let c = Classifier { inv: &inv, home: &home, homes: &homes, audit_runs: &tmp.join("audit-runs") };
+        let origin = |skill: &str, dir: &Path| c.path_origin(skill, dir.join(skill).join("SKILL.md").to_str());
+        assert_eq!(origin("mine", &source), Origin::Canonical);
+        assert_eq!(origin("theirs", &store), Origin::Canonical);
+        assert_eq!(origin("theirs", &tmp.join("elsewhere")), Origin::Other);
     }
 }

@@ -18,6 +18,14 @@ pub fn dir(data: &Path) -> PathBuf {
     data.join("store")
 }
 
+/// The inventory over the source and the store, with each store skill's
+/// install date from the lockfile.
+pub fn inventory(source: &Path, data: &Path) -> Result<Inventory> {
+    let mut inv = Inventory::load_roots(source, &[source, &dir(data)])?;
+    inv.installed = Lock::load(data)?.skills.into_iter().map(|l| (l.name, l.installed_at)).collect();
+    Ok(inv)
+}
+
 /// `<data dir>/mazo.lock`: one `[[skill]]` per installed skill.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
