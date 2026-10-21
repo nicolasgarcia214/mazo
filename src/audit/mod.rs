@@ -203,6 +203,7 @@ fn append(data: &Path, record: &impl Serialize) -> Result<()> {
 /// One audit run's settings.
 pub struct Audit<'a> {
     pub skill: &'a str,
+    /// The root the skill is read from: the source or the store.
     pub source: &'a Path,
     pub data: &'a Path,
     pub judge: &'a Judge,

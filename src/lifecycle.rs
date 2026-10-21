@@ -16,8 +16,8 @@ use crate::{links, policy, report, scan, yaml};
 /// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
 /// then prints the `name-only` line for each Claude home under `claude_name_only`.
 /// A name or description the always-on rules reject is a usage error; an
-/// existing entry is a refusal. It never runs `sync`.
-pub fn new(cfg: &Config, name: &str, description: &str) -> Result<ExitCode> {
+/// existing entry, or a store skill of that name, is a refusal. It never runs `sync`.
+pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Result<ExitCode> {
     let skill_md = format!("---\nname: {name}\ndescription: {}\n---\n\n# {name}\n", quoted(description));
     // Parsed back through the rules `sync` runs, so what is written passes them.
     let checked = yaml::frontmatter(&skill_md).and_then(|meta| {
@@ -28,6 +28,9 @@ pub fn new(cfg: &Config, name: &str, description: &str) -> Result<ExitCode> {
         }
     });
     checked.map_err(|e| Error::Usage(format!("new {name}: {e}")))?;
+    if inv.root(name) != cfg.source {
+        return Err(format!("new refused: {} already exists", inv.root(name).join(name).display()).into());
+    }
     let dir = cfg.source.join(name);
     match std::fs::create_dir(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -237,7 +240,8 @@ const RETIRE_DAYS: u32 = 30;
 /// moves `<source>/<name>` to `<source>/.archive/<name>` (`git mv` when tracked)
 /// and applies that plan. Never commits.
 pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<ExitCode> {
-    if !inv.skills.contains(name) {
+    // A store skill is not the source's to archive.
+    if !inv.skills.contains(name) || inv.root(name) != cfg.source {
         return Err(Error::Usage(format!("{name} is not a canonical skill in {}", cfg.source.display())));
     }
     let to = cfg.source.join(".archive").join(name);

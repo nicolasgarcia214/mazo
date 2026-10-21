@@ -21,6 +21,7 @@ pub mod readcmd;
 pub mod render;
 pub mod report;
 pub mod scan;
+pub mod store;
 pub mod tail;
 pub mod tui;
 pub mod yaml;

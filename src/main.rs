@@ -8,7 +8,7 @@ use mazo::config::{self, Config, Home};
 use mazo::inventory::Inventory;
 use mazo::ledger::{self, Agent, Channel, Ledger};
 use mazo::report::{self, Since, UsageArgs};
-use mazo::{Error, audit, html, links, policy, render, scan, tui};
+use mazo::{Error, audit, html, links, policy, render, scan, store, tui};
 
 #[derive(Parser)]
 #[command(
@@ -145,6 +145,17 @@ enum Cmd {
     },
     /// Judge how a skill performs in real sessions; reports, never edits the source.
     Audit(AuditArgs),
+    /// Install a skill from a local directory into the store and link it into every home.
+    Add {
+        /// The skill's directory, holding its SKILL.md.
+        path: std::path::PathBuf,
+        /// Install under this name; rewrites the SKILL.md `name:` field.
+        #[arg(long = "as", value_name = "NAME")]
+        name: Option<String>,
+        /// Install without vetting.
+        #[arg(long)]
+        trust: bool,
+    },
 }
 
 #[derive(clap::Args)]
@@ -195,7 +206,8 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let Some(cfg) = config::load(&path)? else {
         return Err(Error::Usage(format!("no config at {}; run mazo init --source <skills dir>", path.display())));
     };
-    let inv = Inventory::load(&cfg.source)?;
+    let data = ledger::data_dir()?;
+    let inv = Inventory::load_roots(&cfg.source, &[&cfg.source, &store::dir(&data)])?;
     let Some(cmd) = cmd else {
         return scanned(&cfg, &inv, |_, input| {
             tui::run(input).map_err(|e| e.to_string())?;
@@ -221,12 +233,13 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             cmd_status(&cfg, &inv, agent, json, render::colour(std::io::stderr().is_terminal(), no_color.as_deref()))
         }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
-        Cmd::New { name, description } => mazo::lifecycle::new(&cfg, &name, &description),
+        Cmd::New { name, description } => mazo::lifecycle::new(&cfg, &inv, &name, &description),
         Cmd::Prune { name, yes, force } => {
             mazo::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
         Cmd::Retire { name, force } => mazo::lifecycle::retire(&cfg, &inv, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
+        Cmd::Add { path, name, trust } => store::add(&cfg, &inv, &data, &path, name.as_deref(), trust),
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }
@@ -294,7 +307,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
         let candidates = audit::select(input.events, skill, &audit::audited(data, skill)?, limit);
         let a = audit::Audit {
             skill,
-            source: &cfg.source,
+            source: inv.root(skill),
             data,
             judge,
             backend: backend.as_ref(),

@@ -44,6 +44,7 @@ agent = "claude"
 ```toml
 source = "."                      # the skills directory, relative to this file
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
+trusted = ["owner", "owner/repo"] # sources whose skills install without vetting
 
 [[home]]
 name  = "claude"
@@ -72,8 +73,31 @@ agent = "command"
 argv  = ["llm", "-m", "gpt-5"]
 ```
 
+`trusted` lists the owners (`owner`, every repository of that owner) and
+repositories (`owner/repo`) whose skills `mazo add` installs without vetting.
+An entry with an empty segment or more than two segments is a usage error.
+Skills in `source` are always trusted. A config without `trusted` trusts no
+other source.
+
 The ledger lives in `${XDG_DATA_HOME:-~/.local/share}/mazo/`. Back it up: once
 Claude deletes a session log, the ledger holds the only record of its loads.
+
+Skills installed with `mazo add` live in the store, `store/<name>/` in the same
+directory, and every command reads them beside the skills in `source`: `sync`
+links both, and a name in both is a conflict. `mazo.lock` there records one
+`[[skill]]` per installed skill:
+
+```toml
+[[skill]]
+name = "theirs"
+origin = "/home/me/src/theirs"    # where it came from
+subpath = "."                     # its directory inside origin
+content_hash = "3f2a…"            # SHA-1 of its sorted relative paths and file contents
+trusted = true
+installed_at = "2026-10-21T12:00:00Z"
+```
+
+`commit` and the vetting `verdict` are optional and not written yet.
 
 ## Commands
 
@@ -87,8 +111,9 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `mazo status` | Drift and policy for every home. Writes nothing. |
 | `mazo sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
 | `mazo init --source <dir>` | Writes the config for a skills directory: one home per existing agent directory, every policy rule off. Refuses to overwrite. |
-| `mazo new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry. Does not sync. |
-| `mazo retire <name>` | Moves a skill to `.archive/` (`git mv` when tracked) and prunes its links. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
+| `mazo new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry or a store skill of that name. Does not sync. |
+| `mazo add <path>` | Copies the skill directory at `<path>` into the store, records it in `mazo.lock` and links it into every home. Refuses (exit 2, writing nothing) a name already in `source` or the store; `--as <name>` installs it under another name and rewrites its `SKILL.md` `name:`. A skill containing a symlink is refused. A local path is not on the trust list and vetting is not available yet, so it needs `--trust`. Installs nothing if the resulting sync would fail. |
+| `mazo retire <name>` | Moves a skill of `source` (not of the store) to `.archive/` (`git mv` when tracked) and prunes its links. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `mazo prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 | `mazo audit <skill>` | Has an agent judge how the skill performs in real sessions and writes a skill report; see [Auditing a skill](#auditing-a-skill). |
 
@@ -101,9 +126,9 @@ unused list), and `q` quits. It scans first and writes nothing else. Off a
 terminal, bare `mazo` prints the help.
 
 Exit codes: 0 on success; 1 when the command failed or found a problem
-(a `status` error, a refused `sync`, `retire` or `prune`, a failed audit run);
+(a `status` error, a refused `sync`, `add`, `retire` or `prune`, a failed audit run);
 2 for a usage error: a bad argument, a config that does not parse or names a
-missing source, an invalid Pi agent directory, an `audit` with no `[judge]`, or a failed judge login check. A usage error writes nothing,
+missing source, an invalid Pi agent directory, an `add` of a taken name or an untrusted source, an `audit` with no `[judge]`, or a failed judge login check. A usage error writes nothing,
 except that `audit` checks the login after its scan.
 
 `usage`, `unused`, `show`, `report`, `audit` and `retire` scan first, so their numbers are current. Every

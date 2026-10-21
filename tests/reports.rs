@@ -47,7 +47,7 @@ fn counts(r: &Value) -> [u64; 6] {
 #[test]
 fn fan_in_on_the_fixture_tree_matches_each_rule() {
     let src = common::fixture("skills");
-    let g = inventory::fan_in(&src, &inventory::canonical_skills(&src).unwrap());
+    let g = inventory::fan_in(&Inventory::load(&src).unwrap());
     let edges: Vec<String> = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
     assert_eq!(
         edges,
@@ -68,20 +68,20 @@ fn fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
         eprintln!("fan_in real repo: SKIPPED (MAZO_TEST_SKILLS unset)");
         return;
     };
-    let skills = inventory::canonical_skills(&src).unwrap();
-    let g = inventory::fan_in(&src, &skills);
-    assert_eq!(g.keys().cloned().collect::<BTreeSet<_>>(), skills);
+    let inv = Inventory::load(&src).unwrap();
+    let skills = &inv.skills;
+    let g = inventory::fan_in(&inv);
+    assert_eq!(&g.keys().cloned().collect::<BTreeSet<_>>(), skills);
     for (a, cited) in &g {
         assert!(!cited.contains(a), "self-edge {a}");
-        assert!(cited.is_subset(&skills), "{a} cites a non-skill: {cited:?}");
+        assert!(cited.is_subset(skills), "{a} cites a non-skill: {cited:?}");
     }
 }
 
 #[test]
 fn fan_in_on_fixtures_ignores_frontmatter_and_name_suffixes() {
     let repo = report_repo();
-    let skills = inventory::canonical_skills(repo.path()).unwrap();
-    let g = inventory::fan_in(repo.path(), &skills);
+    let g = inventory::fan_in(&Inventory::load(repo.path()).unwrap());
     let edges: Vec<String> = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
     assert_eq!(
         edges,
@@ -170,12 +170,12 @@ fn a_skill_first_committed_inside_the_window_is_new() {
 #[test]
 fn mentions_on_fixtures_are_whole_words_that_are_not_edges() {
     let repo = report_repo();
-    let skills = inventory::canonical_skills(repo.path()).unwrap();
-    let edges = inventory::fan_in(repo.path(), &skills);
-    let m = inventory::mentions(repo.path(), &skills, &edges);
+    let inv = Inventory::load(repo.path()).unwrap();
+    let edges = inventory::fan_in(&inv);
+    let m = inventory::mentions(&inv, &edges);
     let pairs: Vec<String> = m.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
     assert_eq!(pairs, ["unslop->goal-plan"]);
-    assert_eq!(m.keys().cloned().collect::<BTreeSet<_>>(), skills);
+    assert_eq!(m.keys().cloned().collect::<BTreeSet<_>>(), inv.skills);
 }
 
 /// `router` names wfa-helper in a routing table and is used; wfa-helper

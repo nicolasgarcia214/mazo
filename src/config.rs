@@ -118,6 +118,10 @@ struct RawConfig {
     source: String,
     #[serde(default)]
     loose: Vec<String>,
+    /// Owners (`owner`) and repositories (`owner/repo`) whose skills install
+    /// without vetting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    trusted: Vec<String>,
     #[serde(default)]
     policy: Policy,
     judge: Option<Judge>,
@@ -159,6 +163,9 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     };
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let raw: RawConfig = toml::from_str(&text).map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
+    if let Some(bad) = raw.trusted.iter().find(|t| t.split('/').count() > 2 || t.split('/').any(str::is_empty)) {
+        return Err(Error::Usage(format!("{}: trusted entry {bad:?} must be owner or owner/repo", path.display())));
+    }
     if let Some(judge) = &raw.judge {
         judge.check().map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
     }
@@ -206,7 +213,8 @@ pub fn init(path: &Path, source: &Path) -> Result<()> {
                 links: BTreeMap::new(),
             })
             .collect();
-    let raw = RawConfig { source, loose: Vec::new(), policy: Policy::default(), judge: None, homes };
+    let raw =
+        RawConfig { source, loose: Vec::new(), trusted: Vec::new(), policy: Policy::default(), judge: None, homes };
     let text = toml::to_string(&raw).map_err(|e| e.to_string())?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -348,6 +356,23 @@ mod tests {
         let err = judge("[judge]\nmodel = \"sonnet\"\ntemperature = 1\n").unwrap_err();
         assert!(err.contains("unknown field `temperature`"), "{err}");
         assert!(judge("[judge]\nagent = \"gemini\"\n").is_err());
+    }
+
+    #[test]
+    fn trusted_takes_owners_and_repos_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let load = |trusted: &str| {
+            let path = tmp.path().join("config.toml");
+            fs::write(&path, format!("source = \".\"\n{trusted}")).unwrap();
+            load(&path).map(|c| c.is_some())
+        };
+        for ok in ["", "trusted = []\n", "trusted = [\"owner\", \"owner/repo\"]\n"] {
+            assert!(load(ok).unwrap(), "{ok:?}");
+        }
+        for bad in ["", "/", "owner/", "/repo", "owner//repo", "owner/repo/skill"] {
+            let err = load(&format!("trusted = [\"owner\", {bad:?}]\n")).unwrap_err();
+            assert!(matches!(&err, Error::Usage(m) if m.contains(&format!("{bad:?}"))), "{bad:?}: {err}");
+        }
     }
 
     #[test]
