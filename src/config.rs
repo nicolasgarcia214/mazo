@@ -33,22 +33,37 @@ pub struct Judge {
     /// The `command` judge's program and arguments; no other judge takes one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
+    /// The `http` judge's base URL, posted to at `<url>/chat/completions`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The variable holding the `http` judge's API key; unset sends no key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
 }
 
 impl Judge {
-    /// Why the table is invalid: `command` without an `argv`, or an `argv`
-    /// for another agent.
+    /// Why the table is invalid: `command` without an `argv`, `http` without
+    /// a `url` or a `model`, or another agent's fields.
     fn check(&self) -> std::result::Result<(), &'static str> {
-        match (self.agent, self.argv.is_empty()) {
-            (JudgeAgent::Command, true) => Err("[judge] agent = \"command\" needs a non-empty argv"),
-            (JudgeAgent::Command, false) | (_, true) => Ok(()),
-            (_, false) => Err("[judge] argv is for agent = \"command\" only"),
+        let (command, http) = (self.agent == JudgeAgent::Command, self.agent == JudgeAgent::Http);
+        let blank = |v: &Option<String>| v.as_deref().is_none_or(str::is_empty);
+        if command && self.argv.is_empty() {
+            Err("[judge] agent = \"command\" needs a non-empty argv")
+        } else if !command && !self.argv.is_empty() {
+            Err("[judge] argv is for agent = \"command\" only")
+        } else if http && (blank(&self.url) || blank(&self.model)) {
+            Err("[judge] agent = \"http\" needs a url and a model")
+        } else if !http && (self.url.is_some() || self.api_key_env.is_some()) {
+            Err("[judge] url and api_key_env are for agent = \"http\" only")
+        } else {
+            Ok(())
         }
     }
 }
 
-/// The agent mazo audit calls: one of the homes' agents, or any CLI that
-/// reads a prompt on stdin and prints its answer.
+/// The agent mazo audit calls: one of the homes' agents, any CLI that
+/// reads a prompt on stdin and prints its answer, or an OpenAI-compatible
+/// chat completions endpoint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JudgeAgent {
@@ -57,6 +72,7 @@ pub enum JudgeAgent {
     Codex,
     Pi,
     Command,
+    Http,
 }
 
 /// Who pays for the judge's calls. Under `Subscription` every call runs
@@ -381,6 +397,7 @@ mod tests {
             "[judge]\nagent = \"claude\"\nbilling = \"subscription\"\n",
             "[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\nbilling = \"api\"\n",
             "[judge]\nagent = \"command\"\nbilling = \"subscription\"\nargv = [\"llm\", \"-m\", \"x\"]\n",
+            "[judge]\nagent = \"http\"\nmodel = \"m\"\nbilling = \"api\"\nurl = \"http://h/v1\"\napi_key_env = \"K\"\n",
         ];
         for table in tables {
             let raw: RawConfig = toml::from_str(&format!("source = \".\"\n{table}")).unwrap();
@@ -409,9 +426,50 @@ mod tests {
         for table in ["[judge]\nagent = \"command\"\n", "[judge]\nagent = \"command\"\nargv = []\n"] {
             assert!(usage(table).ends_with("[judge] agent = \"command\" needs a non-empty argv"), "{table:?}");
         }
-        for table in ["[judge]\nargv = [\"llm\"]\n", "[judge]\nagent = \"pi\"\nargv = [\"llm\"]\n"] {
+        for table in [
+            "[judge]\nargv = [\"llm\"]\n",
+            "[judge]\nagent = \"pi\"\nargv = [\"llm\"]\n",
+            "[judge]\nagent = \"http\"\nurl = \"u\"\nmodel = \"m\"\nargv = [\"llm\"]\n",
+        ] {
             assert!(usage(table).ends_with("[judge] argv is for agent = \"command\" only"), "{table:?}");
         }
         assert!(usage("[judge]\nagent = \"command\"\nargv = \"llm\"\n").contains("invalid type"));
+    }
+
+    #[test]
+    fn an_http_judge_takes_a_url_a_model_and_an_api_key_env_and_no_other_judge_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let load_judge = |table: &str| {
+            let path = dir.path().join("config.toml");
+            fs::write(&path, format!("source = \".\"\n{table}")).unwrap();
+            load(&path).map(|c| c.unwrap().judge.unwrap())
+        };
+        let j = load_judge("[judge]\nagent = \"http\"\nurl = \"http://h/v1\"\nmodel = \"m\"\napi_key_env = \"K\"\n")
+            .unwrap();
+        assert_eq!(
+            (j.agent, j.url.as_deref(), j.model.as_deref(), j.api_key_env.as_deref()),
+            (JudgeAgent::Http, Some("http://h/v1"), Some("m"), Some("K"))
+        );
+        assert_eq!(load_judge("[judge]\nagent = \"http\"\nurl = \"u\"\nmodel = \"m\"\n").unwrap().api_key_env, None);
+        let usage = |table: &str| match load_judge(table) {
+            Err(Error::Usage(e)) => e,
+            other => panic!("{table:?}: {other:?}"),
+        };
+        for table in [
+            "[judge]\nagent = \"http\"\n",
+            "[judge]\nagent = \"http\"\nmodel = \"m\"\n",
+            "[judge]\nagent = \"http\"\nurl = \"u\"\n",
+            "[judge]\nagent = \"http\"\nurl = \"\"\nmodel = \"m\"\n",
+            "[judge]\nagent = \"http\"\nurl = \"u\"\nmodel = \"\"\n",
+        ] {
+            assert!(usage(table).ends_with("[judge] agent = \"http\" needs a url and a model"), "{table:?}");
+        }
+        for table in [
+            "[judge]\nurl = \"u\"\n",
+            "[judge]\nagent = \"codex\"\napi_key_env = \"K\"\n",
+            "[judge]\nagent = \"command\"\nargv = [\"llm\"]\nurl = \"u\"\n",
+        ] {
+            assert!(usage(table).ends_with("[judge] url and api_key_env are for agent = \"http\" only"), "{table:?}");
+        }
     }
 }

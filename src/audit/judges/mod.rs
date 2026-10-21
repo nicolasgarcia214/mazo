@@ -5,6 +5,7 @@
 mod claude;
 mod codex;
 mod command;
+mod http;
 mod pi;
 
 use std::fs::{self, DirBuilder};
@@ -19,7 +20,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use super::session::{SESSION, SESSION_PROMPT, SESSION_SCHEMA};
-use super::{Audit, Stage, cents};
+use super::{Audit, Stage, cents, frame};
 use crate::Result;
 use crate::config::{Billing, Home, Judge, JudgeAgent};
 use crate::ledger::Agent;
@@ -113,8 +114,8 @@ impl<T: Subprocess> Backend for T {
 }
 
 /// The backend of `judge`; Codex links the configured Codex home's
-/// `auth.json`, Pi reads its `settings.json` for the default model, and
-/// the command judge runs `[judge] argv`.
+/// `auth.json`, Pi reads its `settings.json` for the default model,
+/// the command judge runs `[judge] argv`, and the http judge reads its key.
 pub fn backend(judge: &Judge, homes: &[Home]) -> Result<Box<dyn Backend>> {
     let model = judge.model.clone();
     Ok(match judge.agent {
@@ -126,6 +127,7 @@ pub fn backend(judge: &Judge, homes: &[Home]) -> Result<Box<dyn Backend>> {
             Box::new(pi::Pi { model, settings: agent_home(homes, Agent::Pi, ".pi/agent")?.join("settings.json") })
         }
         JudgeAgent::Command => Box::new(command::Command { argv: judge.argv.clone() }),
+        JudgeAgent::Http => Box::new(http::Http::new(judge)?),
     })
 }
 
@@ -143,6 +145,14 @@ fn agent_home(homes: &[Home], agent: Agent, default: &str) -> Result<PathBuf> {
 pub const SCHEMA_FILE: &str = "<schema file>";
 pub const RESULT_FILE: &str = "<result file>";
 pub const INPUT_FILE: &str = "<input file>";
+
+/// The prompt, then the schema its answer must match, then the input: all a
+/// judge without a schema flag of its own is sent.
+fn prompted(stage: &Stage, input: &str) -> String {
+    let schema =
+        format!("Answer with one JSON object, and nothing else, matching this schema:\n{}", stage.schema.as_str());
+    format!("{}\n{}{input}", stage.prompt, frame("answer-schema", &schema))
+}
 
 /// `base`, then `flag model` when a model is set, then `tail`.
 fn argv(base: &[&str], flag: &str, model: &Option<String>, tail: Option<&str>) -> Vec<String> {
@@ -371,7 +381,7 @@ mod tests {
     #[test]
     fn a_backend_that_owns_its_call_is_called_without_a_subprocess() {
         let data = tempfile::tempdir().unwrap();
-        let judge = Judge { agent: JudgeAgent::Claude, model: None, billing: Billing::Subscription, argv: vec![] };
+        let judge = Judge { agent: JudgeAgent::Claude, ..Judge::default() };
         let evals = crate::evals::Evals { grades: vec![], retros: vec![] };
         let a = Audit {
             skill: "s",

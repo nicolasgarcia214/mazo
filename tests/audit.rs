@@ -6,8 +6,11 @@ mod common;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Arc, Mutex};
 
 use common::{Mazo, stderr, stdout};
 use mazo::adapters;
@@ -250,10 +253,19 @@ const CLAUDE: &str = "[judge]\nagent = \"claude\"\n";
 /// The `[judge]` table of a command judge running the stub as `judge`.
 const COMMAND: &str = "[judge]\nagent = \"command\"\nargv = [\"judge\", \"--fast\"]\n";
 
-/// The `[judge]` table of `agent`, with the stub's argv for `command`.
+/// The `[judge]` table of an http judge posting to `url`, sending the key in
+/// `key_env` when set.
+fn http_table(url: &str, key_env: Option<&str>) -> String {
+    let key = key_env.map(|k| format!("api_key_env = \"{k}\"\n")).unwrap_or_default();
+    format!("[judge]\nagent = \"http\"\nurl = \"{url}\"\nmodel = \"m\"\n{key}")
+}
+
+/// The `[judge]` table of `agent`, with the stub's argv for `command` and an
+/// unserved url for `http`.
 fn table(agent: &str) -> String {
     match agent {
         "command" => COMMAND.into(),
+        "http" => http_table("http://127.0.0.1:9/v1", None),
         _ => format!("[judge]\nagent = \"{agent}\"\n"),
     }
 }
@@ -555,8 +567,9 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
     }
     assert!(stderr(&fx.mazo(&["audit", "unslop", "--max-budget-usd", "0.039"])).contains("at least 0.04"));
     assert!(fx.calls().is_empty());
-    // Codex, Pi and a command report no dollar figure: `--limit` is their only cap.
-    for agent in ["codex", "pi", "command"] {
+    // Codex, Pi, a command and an http judge report no dollar figure: `--limit`
+    // is their only cap.
+    for agent in ["codex", "pi", "command", "http"] {
         let fx = Fixture::new(&table(agent), three_agents);
         for args in [
             &["audit", "unslop", "--max-budget-usd", "1"][..],
@@ -711,6 +724,234 @@ fn a_command_judges_two_invalid_answers_drop_the_session() {
     assert!(err.contains("warning: s00: judge answer dropped after one retry: stdout is not JSON"), "{err}");
     assert_eq!(fx.calls().len(), 2);
     assert!(fx.records().is_empty());
+}
+
+/// One request the stub server read: its head and its JSON body.
+struct Request {
+    head: String,
+    body: serde_json::Value,
+}
+
+impl Request {
+    /// The user message's content.
+    fn content(&self) -> &str {
+        self.body["messages"][0]["content"].as_str().unwrap()
+    }
+
+    /// The value of header `name`, matched without case.
+    fn header(&self, name: &str) -> Option<&str> {
+        self.head.lines().find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.eq_ignore_ascii_case(name).then(|| v.trim())
+        })
+    }
+}
+
+/// A chat completions server on a local port, reading each request into
+/// `requests` and answering the `n`-th (from 0) with `respond(n, request)`'s
+/// status and body.
+struct Server {
+    /// `http://127.0.0.1:<port>/v1`.
+    url: String,
+    requests: Arc<Mutex<Vec<Request>>>,
+}
+
+impl Server {
+    fn new(respond: impl Fn(usize, &Request) -> (u16, String) + Send + 'static) -> Server {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&requests);
+        std::thread::spawn(move || {
+            for (n, stream) in listener.incoming().enumerate() {
+                let mut reader = BufReader::new(stream.unwrap());
+                let mut head = String::new();
+                while !head.ends_with("\r\n\r\n") {
+                    reader.read_line(&mut head).unwrap();
+                }
+                let request = Request { head, body: serde_json::Value::Null };
+                let length: usize = request.header("content-length").unwrap().parse().unwrap();
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                let request = Request { body: serde_json::from_slice(&body).unwrap(), ..request };
+                let (status, body) = respond(n, &request);
+                kept.lock().unwrap().push(request);
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                reader.get_mut().write_all(reply.as_bytes()).unwrap();
+            }
+        });
+        Server { url, requests }
+    }
+
+    /// A server whose every answer is valid: a stage-2 call's cites the first
+    /// session record, a stage-1 call's the first line of its input.
+    fn valid() -> Server {
+        Server::new(|_, r| (200, completion(&judged(r.content()).to_string())))
+    }
+
+    fn requests(&self) -> std::sync::MutexGuard<'_, Vec<Request>> {
+        self.requests.lock().unwrap()
+    }
+}
+
+/// A chat completion whose message content is `content`.
+fn completion(content: &str) -> String {
+    serde_json::json!({"choices": [{"index": 0, "message": {"role": "assistant", "content": content}}]}).to_string()
+}
+
+/// A valid answer to a call sent `content`, as the stub judge gives.
+fn judged(content: &str) -> serde_json::Value {
+    if let Some((_, rest)) = content.split_once("\n<session-records>\n") {
+        let session = rest.split("\"session\":\"").nth(1).unwrap().split('"').next().unwrap();
+        return skill_answer(session);
+    }
+    let line = content.lines().find_map(|l| l.strip_prefix('L')?.split_once(':')?.0.parse::<u64>().ok()).unwrap();
+    answer(line)
+}
+
+/// The key the http tests send, and the variable holding it.
+const KEY: &str = "sk-test-0123456789";
+const KEY_ENV: &str = "MAZO_TEST_KEY";
+
+#[test]
+fn the_http_judge_posts_the_prompt_schema_and_input_to_chat_completions_with_a_bearer_key() {
+    let server = Server::valid();
+    let fx = Fixture::new(&http_table(&server.url, Some(KEY_ENV)), three_agents);
+    let env = [(KEY_ENV, OsStr::new(KEY))];
+    let endpoint = format!("{}/chat/completions", server.url);
+    let dry = fx.mazo_env(&env, &["audit", "unslop", "--dry-run"]);
+    let dry = stdout(&dry);
+    assert!(dry.starts_with("unslop: 3 sessions to judge with the http judge\n"), "{dry}");
+    let want =
+        format!("\njudge: POST {endpoint} with a Bearer token from ${KEY_ENV}\nbilling: subscription\nmodel: m\n");
+    assert!(dry.contains(&want), "{dry}");
+    assert!(server.requests().is_empty());
+
+    let out = fx.mazo_env(&env, &["audit", "unslop", "--limit", "1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped\nunslop: skill report over 1 sessions: "));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "one session call under --limit 1, then the skill report");
+    let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
+    let session_input = audit::input(&fx.root.join("skills"), &candidates[0]).unwrap().1;
+    for (request, prompt, schema) in [
+        (&requests[0], audit::SESSION_PROMPT, &*audit::SESSION_SCHEMA),
+        (&requests[1], audit::SKILL_PROMPT, &*audit::SKILL_SCHEMA),
+    ] {
+        assert!(request.head.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"), "{}", request.head);
+        assert_eq!(request.header("authorization"), Some(format!("Bearer {KEY}").as_str()));
+        assert_eq!(request.body["model"], "m");
+        assert_eq!(request.body["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(request.body["messages"][0]["role"], "user");
+        let rest = request.content().strip_prefix(prompt).unwrap();
+        let want = format!(
+            "\n<answer-schema>\nAnswer with one JSON object, and nothing else, matching this schema:\n{schema}\n</answer-schema>\n"
+        );
+        assert!(rest.starts_with(&want), "{rest}");
+    }
+    assert!(requests[0].content().ends_with(&session_input));
+    let judge = serde_json::json!({"agent": "http", "model": "m", "cost_usd": null, "billing": "subscription"});
+    assert_eq!(fx.records()[0]["judge"], judge);
+    assert_eq!(fx.skill_records()[0]["judge"], judge);
+    // The key reaches the server and nothing else mazo writes or prints.
+    let audits = fs::read_to_string(fx.data().join("audits.jsonl")).unwrap();
+    for text in [&audits, &dry, &stdout(&out), &stderr(&out)] {
+        assert!(!text.contains(KEY), "{text}");
+    }
+    assert!(!fx.data().join("audit-runs").exists());
+}
+
+#[test]
+fn an_http_judge_without_api_key_env_sends_no_authorization_header() {
+    let server = Server::valid();
+    let fx = Fixture::new(&http_table(&server.url, None), claude_sessions(1));
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
+    assert!(dry.contains(&format!("\njudge: POST {}/chat/completions with no Authorization header\n", server.url)));
+    let out = fx.mazo_env(&[(KEY_ENV, OsStr::new(KEY))], &["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|r| r.header("authorization").is_none()));
+}
+
+#[test]
+fn an_http_judges_invalid_answer_is_retried_once_and_a_valid_retry_is_kept() {
+    // s00: content that is not JSON, retried as it was. s01: a line outside
+    // the session, retried with why it was rejected.
+    let server = Server::new(|n, r| match n {
+        0 => (200, completion("Here is my verdict.")),
+        2 => (200, completion(&answer(999).to_string())),
+        _ => (200, completion(&judged(r.content()).to_string())),
+    });
+    let fx = Fixture::new(&http_table(&server.url, None), claude_sessions(2));
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("unslop: 2 judged, 0 dropped\nunslop: skill report over 2 sessions: "));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 5, "two calls per session, then the skill report");
+    assert_eq!(requests[1].content(), requests[0].content());
+    let rejected = &requests[3].content()[requests[2].content().len()..];
+    assert!(requests[3].content().starts_with(requests[2].content()), "{rejected}");
+    assert!(rejected.contains("cites L999, which is not in the session"), "{rejected}");
+    let sessions: Vec<String> = fx.records().iter().map(|r| r["session"].as_str().unwrap().to_string()).collect();
+    assert_eq!(sessions, ["s00", "s01"]);
+}
+
+#[test]
+fn an_http_judges_two_invalid_answers_drop_the_session() {
+    let server = Server::new(|_, _| (200, "{\"choices\": []}".into()));
+    let fx = Fixture::new(&http_table(&server.url, None), claude_sessions(1));
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "unslop: 0 judged, 1 dropped\n");
+    let err = stderr(&out);
+    assert!(err.contains("s00: judge answer dropped after one retry: the reply has no choices[0].message.content"));
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn an_http_status_or_connection_failure_stops_the_run_naming_the_endpoint() {
+    let server = Server::new(|_, _| (401, format!("{{\"error\": {{\"message\": \"Incorrect API key: {KEY}\"}}}}")));
+    let fx = Fixture::new(&http_table(&server.url, Some(KEY_ENV)), claude_sessions(2));
+    let out = fx.mazo_env(&[(KEY_ENV, OsStr::new(KEY))], &["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    let want = format!("ERROR: s00: {}/chat/completions returned 401 Unauthorized: ", server.url);
+    assert!(err.contains(&want), "{err}");
+    assert!(err.contains("Incorrect API key: <key>"), "{err}");
+    assert!(!err.contains(KEY) && !stdout(&out).contains(KEY), "{err}");
+    assert!(stdout(&out).contains("the judge failed; left for the next run: 2\n"), "{}", stdout(&out));
+    assert_eq!(server.requests().len(), 1, "a failed judge is not retried");
+    assert!(fx.records().is_empty());
+
+    // Nothing listens on a port just freed.
+    let url = format!("http://{}/v1", TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap());
+    let fx = Fixture::new(&http_table(&url, None), claude_sessions(1));
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).contains(&format!("ERROR: s00: {url}/chat/completions: ")), "{}", stderr(&out));
+}
+
+#[test]
+fn an_http_judge_whose_api_key_env_is_unset_or_empty_is_a_usage_error_naming_it() {
+    let server = Server::valid();
+    let fx = Fixture::new(&http_table(&server.url, Some(KEY_ENV)), claude_sessions(1));
+    for env in [&[][..], &[(KEY_ENV, OsStr::new(""))]] {
+        for args in [&["audit", "unslop"][..], &["audit", "unslop", "--dry-run"]] {
+            let out = fx.mazo_env(env, args);
+            assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+            let want = format!("[judge] api_key_env names {KEY_ENV}, which is unset or empty");
+            assert!(stderr(&out).contains(&want), "{}", stderr(&out));
+        }
+    }
+    let bare = Fixture::new("[judge]\nagent = \"http\"\nmodel = \"m\"\n", claude_sessions(1));
+    let out = bare.mazo(&["audit", "unslop", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stderr(&out).contains("[judge] agent = \"http\" needs a url and a model"), "{}", stderr(&out));
+    assert!(server.requests().is_empty());
 }
 
 #[test]
