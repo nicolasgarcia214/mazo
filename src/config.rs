@@ -18,11 +18,12 @@ pub struct Config {
     pub loose: Vec<String>,
     pub homes: Vec<Home>,
     pub policy: Policy,
-    pub judge: Judge,
+    /// `None` without a `[judge]` table: no agent is assumed.
+    pub judge: Option<Judge>,
 }
 
-/// The optional `[judge]` table.
-#[derive(Debug, Clone, Default, Deserialize)]
+/// The `[judge]` table.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Judge {
     pub agent: Agent,
@@ -92,8 +93,7 @@ struct RawConfig {
     loose: Vec<String>,
     #[serde(default)]
     policy: Policy,
-    #[serde(default, skip_serializing)]
-    judge: Judge,
+    judge: Option<Judge>,
     #[serde(default, rename = "home")]
     homes: Vec<RawHome>,
 }
@@ -176,7 +176,7 @@ pub fn init(path: &Path, source: &Path) -> Result<()> {
                 links: BTreeMap::new(),
             })
             .collect();
-    let raw = RawConfig { source, loose: Vec::new(), policy: Policy::default(), judge: Judge::default(), homes };
+    let raw = RawConfig { source, loose: Vec::new(), policy: Policy::default(), judge: None, homes };
     let text = toml::to_string(&raw).map_err(|e| e.to_string())?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -293,16 +293,20 @@ mod tests {
         assert!(p.no_disable_model_invocation && p.claude_name_only && !p.codex_manifest);
     }
 
-    fn judge(table: &str) -> std::result::Result<Judge, String> {
+    fn judge(table: &str) -> std::result::Result<Option<Judge>, String> {
         toml::from_str::<RawConfig>(&format!("source = \".\"\n{table}")).map(|r| r.judge).map_err(|e| e.to_string())
     }
 
     #[test]
+    fn no_judge_table_is_no_judge() {
+        assert!(judge("").unwrap().is_none());
+    }
+
+    #[test]
     fn judge_table_takes_agent_model_and_billing_only() {
-        for table in ["", "[judge]\n"] {
-            let j = judge(table).unwrap();
-            assert_eq!((j.agent, j.model, j.billing), (Agent::Claude, None, Billing::Subscription), "{table:?}");
-        }
+        let judge = |table: &str| judge(table).map(|j| j.expect("a [judge] table is a judge"));
+        let j = judge("[judge]\n").unwrap();
+        assert_eq!((j.agent, j.model, j.billing), (Agent::Claude, None, Billing::Subscription));
         assert_eq!(judge("[judge]\nbilling = \"subscription\"\n").unwrap().billing, Billing::Subscription);
         assert_eq!(judge("[judge]\nbilling = \"api\"\n").unwrap().billing, Billing::Api);
         for bad in ["\"API\"", "\"apikey\"", "\"\"", "true"] {
@@ -314,5 +318,20 @@ mod tests {
         let err = judge("[judge]\nmodel = \"sonnet\"\ntemperature = 1\n").unwrap_err();
         assert!(err.contains("unknown field `temperature`"), "{err}");
         assert!(judge("[judge]\nagent = \"gemini\"\n").is_err());
+    }
+
+    #[test]
+    fn a_judge_table_round_trips_through_serialize_and_load() {
+        let tables = [
+            "[judge]\nagent = \"claude\"\nbilling = \"subscription\"\n",
+            "[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\nbilling = \"api\"\n",
+        ];
+        for table in tables {
+            let raw: RawConfig = toml::from_str(&format!("source = \".\"\n{table}")).unwrap();
+            let text = toml::to_string(&raw).unwrap();
+            assert!(text.contains(table), "{text}");
+            let again: RawConfig = toml::from_str(&text).unwrap();
+            assert_eq!(toml::to_string(&again).unwrap(), text);
+        }
     }
 }

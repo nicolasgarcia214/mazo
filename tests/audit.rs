@@ -244,6 +244,9 @@ struct Fixture {
     root: PathBuf,
 }
 
+/// The `[judge]` table of a Claude judge.
+const CLAUDE: &str = "[judge]\nagent = \"claude\"\n";
+
 /// A judge answer citing `line` in every finding.
 fn answer(line: impl Into<serde_json::Value>) -> serde_json::Value {
     let line = line.into();
@@ -506,7 +509,7 @@ fn dry_run_lists_sessions_the_judge_command_and_the_estimate_and_starts_nothing(
 
 #[test]
 fn dry_run_estimates_dollars_from_the_recorded_cost_per_character() {
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     let total: usize = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None)
         .iter()
         .map(|c| c.condensed.chars().count())
@@ -530,7 +533,7 @@ fn dry_run_estimates_dollars_from_the_recorded_cost_per_character() {
 
 #[test]
 fn audit_usage_errors_exit_2_and_start_nothing() {
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     let both = fx.mazo(&["audit", "unslop", "--dry-run", "--limit", "3", "--all"]);
     assert_eq!(both.status.code(), Some(2), "--limit and --all conflict");
     let unknown = fx.mazo(&["audit", "nope", "--dry-run"]);
@@ -560,15 +563,28 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
 }
 
 #[test]
-fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
+fn a_config_without_a_judge_table_has_no_judge_and_audit_refuses() {
     let fx = Fixture::new("", three_agents);
+    for args in [&["audit", "unslop"][..], &["audit", "unslop", "--dry-run"]] {
+        let out = fx.mazo(args);
+        assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+        assert!(stderr(&out).contains("no judge configured"), "{}", stderr(&out));
+        assert!(stderr(&out).contains("[judge]\nagent = \"claude\""), "{}", stderr(&out));
+    }
+    assert!(fx.calls().is_empty(), "a missing [judge] started a judge");
+    assert!(fx.lines().is_empty());
+}
+
+#[test]
+fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
+    let fx = Fixture::new(CLAUDE, three_agents);
     let out = fx.mazo(&["audit", "unslop", "--max-budget-usd", "0.04"]);
     assert_eq!(out.status.code(), Some(1), "the call overshot, so stage 2 is skipped: {}", stdout(&out));
     let calls = fx.calls();
     assert_eq!(calls.len(), 1, "$0.04 leaves one call of $0.03 at $0.10 each");
     assert_eq!(calls[0].arg("--max-budget-usd"), Some("0.03"));
 
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     let source = snapshot(&fx.root.join("skills"));
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -768,7 +784,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     let caps = |fx: &Fixture| -> Vec<String> {
         fx.calls().iter().map(|c| c.arg("--max-budget-usd").unwrap().to_string()).collect()
     };
-    let fx = Fixture::new("", claude_sessions(12));
+    let fx = Fixture::new(CLAUDE, claude_sessions(12));
     let out = fx.mazo(&["audit", "unslop", "--max-budget-usd", "1"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     // Stage 1 shares $0.75; stage 2 gets the rest: $1 - $0.80.
@@ -786,7 +802,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     assert_eq!(named.len(), 4);
     assert!(named.iter().all(|s| !judged.contains(*s)), "{text}");
 
-    let fx = Fixture::new("", claude_sessions(30));
+    let fx = Fixture::new(CLAUDE, claude_sessions(30));
     fx.reply("default", "0.031", &answer("LINE"));
     let out = fx.mazo(&["audit", "unslop", "--all"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -804,7 +820,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     );
 
     // $0.30 a call: stage 1 judges 3 sessions for $0.90 and stage 2 gets $0.10.
-    let fx = Fixture::new("", claude_sessions(12));
+    let fx = Fixture::new(CLAUDE, claude_sessions(12));
     fx.reply("default", "0.30", &answer("LINE"));
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -813,7 +829,7 @@ fn caps_are_three_quarters_of_the_budget_minus_the_spend_in_cents() {
     assert_eq!(fx.skill_records().len(), 1);
 
     // $0.50 a call: stage 1 spends the whole $1, so stage 2 is skipped and the run exits 1.
-    let fx = Fixture::new("", claude_sessions(12));
+    let fx = Fixture::new(CLAUDE, claude_sessions(12));
     fx.reply("default", "0.50", &answer("LINE"));
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
@@ -857,7 +873,7 @@ fn costs_are_read_from_their_decimal_text_into_micro_dollars() {
     assert!(serde_json.contains("\"raw_value\"") && !serde_json.contains("arbitrary_precision"), "{serde_json}");
 
     // A run records the stub's exact cost, never a float's rounding of it.
-    let fx = Fixture::new("", claude_sessions(1));
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
     fx.reply("default", "0.1234567", &answer("LINE"));
     fx.mazo(&["audit", "unslop"]);
     let line = fs::read_to_string(fx.data().join("audits.jsonl")).unwrap();
@@ -920,7 +936,7 @@ fn session_records_hold_every_field_and_are_judged_once() {
 
 #[test]
 fn an_invalid_answer_is_retried_once_then_dropped() {
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     // Codex first: a line outside its window, then 45 characters of a tool
     // result, differently cased and spaced: dropped.
     fx.reply("1", "0.1", &answer(999));
@@ -999,7 +1015,7 @@ fn validation_checks_schema_lines_and_quotes() {
 
 #[test]
 fn a_call_whose_output_is_no_json_stops_the_run_at_no_cost() {
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     fx.raw_reply("1", "not json\n");
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
@@ -1020,7 +1036,7 @@ const FAIL: &str = "for i in 1 2 3 4 5 6; do echo err$i >&2; done\nexit 1\n";
 #[test]
 fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     // An invalid key: `api_error` JSON on stdout, exit 1.
-    let fx = Fixture::new("", claude_sessions(2));
+    let fx = Fixture::new(CLAUDE, claude_sessions(2));
     let invalid = r#"{"subtype":"success","is_error":true,"terminal_reason":"api_error","total_cost_usd":0,"result":"Invalid API key"}"#;
     fx.script("1", &format!("echo '{invalid}'\n{FAIL}"));
     let out = fx.mazo(&["audit", "unslop"]);
@@ -1039,7 +1055,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     assert!((1..=5).all(|i| err.contains(&format!("  err{i}\n"))) && !err.contains("err6"), "{err}");
 
     // Plain text on stdout, exit 1; the record written before stays and stage 2 never runs.
-    let fx = Fixture::new("", claude_sessions(3));
+    let fx = Fixture::new(CLAUDE, claude_sessions(3));
     fx.script("2", &format!("echo 'Not logged in'\n{FAIL}"));
     let out = fx.mazo(&["audit", "unslop", "--json"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
@@ -1054,7 +1070,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     assert!(fx.skill_records().is_empty());
 
     // The stage-2 judge stops the run the same way.
-    let fx = Fixture::new("", claude_sessions(1));
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
     fx.script("2", &format!("echo '{invalid}'\n{FAIL}"));
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
@@ -1069,7 +1085,7 @@ fn a_claude_judge_that_fails_without_an_answer_stops_the_run() {
     assert!(fx.skill_records().is_empty());
 
     // Sessions the budget left stay the budget's when the stage-2 judge then stops.
-    let fx = Fixture::new("", claude_sessions(12));
+    let fx = Fixture::new(CLAUDE, claude_sessions(12));
     fx.script("9", &format!("echo '{invalid}'\n{FAIL}"));
     let out = fx.mazo(&["audit", "unslop", "--max-budget-usd", "1"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
@@ -1115,7 +1131,7 @@ fn a_codex_or_pi_judge_that_exits_nonzero_without_its_result_stops_the_run() {
 
 #[test]
 fn a_claude_judge_killed_by_a_signal_mazo_did_not_send_stops_the_run_at_its_cap() {
-    let fx = Fixture::new("", claude_sessions(2));
+    let fx = Fixture::new(CLAUDE, claude_sessions(2));
     // A stderr line is cut to 200 characters.
     let long = "y".repeat(300);
     fx.script("1", &format!("echo dying >&2\necho {long} >&2\nkill -9 $$\n"));
@@ -1135,7 +1151,7 @@ fn a_claude_judge_killed_by_a_signal_mazo_did_not_send_stops_the_run_at_its_cap(
 
 #[test]
 fn a_quote_rejection_names_the_field_and_the_shared_text() {
-    let fx = Fixture::new("", claude_sessions(1));
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
     let mut quote = answer(3);
     quote["notes"] = format!("Output was {}.", "R".repeat(80)).into();
     fx.reply("1", "0.1", &quote);
@@ -1156,7 +1172,7 @@ fn a_quote_rejection_names_the_field_and_the_shared_text() {
 
 #[test]
 fn the_audits_own_sessions_add_no_event() {
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     // The stub leaves a Claude transcript with a Skill load, cwd its own directory.
     let fixture = fs::read_to_string(common::fixture("claude/condense.jsonl")).unwrap();
     let load: String = fixture.lines().skip(3).take(2).map(|l| l.to_string() + "\n").collect();
@@ -1181,7 +1197,7 @@ fn the_audits_own_sessions_add_no_event() {
 
 #[test]
 fn stage_two_runs_on_every_session_record_after_new_ones_or_with_resynth() {
-    let fx = Fixture::new("", claude_sessions(3));
+    let fx = Fixture::new(CLAUDE, claude_sessions(3));
     let first = fx.mazo(&["audit", "unslop", "--limit", "1"]);
     assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
     assert_eq!(fx.calls().len(), 2, "one session, then the skill report");
@@ -1217,7 +1233,7 @@ fn stage_two_runs_on_every_session_record_after_new_ones_or_with_resynth() {
 
 #[test]
 fn stage_two_reads_the_skill_its_history_grades_retros_usage_and_records() {
-    let fx = Fixture::new("", claude_sessions(1));
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
     let source = fx.root.join("skills");
     common::git(&source, &["init", "-q"], "2026-01-01T00:00:00Z");
     for i in 1..=32 {
@@ -1264,7 +1280,7 @@ fn stage_two_reads_the_skill_its_history_grades_retros_usage_and_records() {
 
 #[test]
 fn rates_come_from_the_session_records_not_the_judge() {
-    let fx = Fixture::new("", claude_sessions(3));
+    let fx = Fixture::new(CLAUDE, claude_sessions(3));
     let verdict = |followed: &str, outcome: &str, redone: bool| {
         let mut a = answer(3);
         a["followed"] = followed.into();
@@ -1298,7 +1314,7 @@ fn rates_come_from_the_session_records_not_the_judge() {
 
 #[test]
 fn a_skill_report_citing_an_unknown_session_is_retried_once_then_dropped() {
-    let fx = Fixture::new("", claude_sessions(1));
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
     fx.reply("2", "0.1", &skill_answer("nope"));
     let mut example = skill_answer("s00");
     example["examples"][0]["session"] = "ghost".into();
@@ -1314,7 +1330,7 @@ fn a_skill_report_citing_an_unknown_session_is_retried_once_then_dropped() {
     );
     assert_eq!(fx.records().len(), 1, "the session record stays");
 
-    let fx = Fixture::new("", claude_sessions(1));
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
     fx.reply("2", "0.1", &skill_answer("nope"));
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -1373,7 +1389,7 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
 
 #[test]
 fn json_prints_the_skill_record_the_counts_and_the_spend() {
-    let fx = Fixture::new("", claude_sessions(3));
+    let fx = Fixture::new(CLAUDE, claude_sessions(3));
     fx.reply("1", "0.1", &answer(999));
     fx.reply("2", "0.1", &answer(999));
     let out = fx.mazo(&["audit", "unslop", "--json"]);
@@ -1449,7 +1465,7 @@ fn under_subscription_no_judge_call_sees_a_billing_variable_and_under_api_every_
 
 #[test]
 fn a_claude_login_that_would_bill_otherwise_exits_2_before_any_judge_call() {
-    let fx = Fixture::new("", claude_sessions(2));
+    let fx = Fixture::new(CLAUDE, claude_sessions(2));
     common::write(&fx.root.join("auth_status"), "{\"loggedIn\":true,\"authMethod\":\"api_key_helper\"}\n");
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
@@ -1521,12 +1537,12 @@ fn a_codex_judge_without_a_chatgpt_login_in_the_configured_home_is_never_started
 #[test]
 fn a_run_that_starts_no_judge_call_checks_no_login() {
     let refused = "{\"loggedIn\":true,\"authMethod\":\"api_key_helper\"}\n";
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     common::write(&fx.root.join("auth_status"), refused);
     let out = fx.mazo(&["audit", "unslop", "--dry-run"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 
-    let idle = Fixture::new("", |_| Vec::new());
+    let idle = Fixture::new(CLAUDE, |_| Vec::new());
     common::write(&idle.root.join("auth_status"), refused);
     let out = idle.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -1548,7 +1564,7 @@ fn a_run_that_starts_no_judge_call_checks_no_login() {
 
 #[test]
 fn dry_run_names_the_billing_and_the_pi_judges_model() {
-    let fx = Fixture::new("", three_agents);
+    let fx = Fixture::new(CLAUDE, three_agents);
     assert!(stdout(&fx.mazo(&["audit", "unslop", "--dry-run"])).contains("\nbilling: subscription\ninput: "));
     let fx = Fixture::new("[judge]\nagent = \"codex\"\nbilling = \"api\"\n", three_agents);
     let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
@@ -1590,7 +1606,7 @@ fn api_billing_prints_plain_dollars_and_records_say_who_paid() {
 
 #[test]
 fn a_record_written_before_billing_was_recorded_reads_as_unknown() {
-    let fx = Fixture::new("", claude_sessions(1));
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
     fx.mazo(&["audit", "unslop"]);
     let mut record = fx.skill_records().pop().unwrap();
     record["judge"].as_object_mut().unwrap().remove("billing");

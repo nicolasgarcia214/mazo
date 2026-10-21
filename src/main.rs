@@ -269,14 +269,19 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
     if !inv.skills.contains(skill) {
         return Err(Error::Usage(format!("not a skill in the source: {skill}")));
     }
+    let Some(judge) = &cfg.judge else {
+        return Err(Error::Usage(
+            "no judge configured; add one to the config, for example:\n[judge]\nagent = \"claude\"".into(),
+        ));
+    };
     // A judge that reports no dollar figure has `--limit` as its only cap.
-    let backend = audit::backend(&cfg.judge, &cfg.homes)?;
+    let backend = audit::backend(judge, &cfg.homes)?;
     let budget = match (backend.budget_flag(), budget) {
         (Some(_), budget) => Some(budget.unwrap_or(1_000_000)),
         (None, Some(_)) => {
             return Err(Error::Usage(format!(
                 "--max-budget-usd needs a judge that reports its cost; the {} judge is capped by --limit",
-                ledger::name(cfg.judge.agent)
+                ledger::name(judge.agent)
             )));
         }
         (None, None) => None,
@@ -291,7 +296,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
             skill,
             source: &cfg.source,
             data,
-            judge: &cfg.judge,
+            judge,
             backend: backend.as_ref(),
             budget,
             evals: &mazo::evals::load(inv, skill),
