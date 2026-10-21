@@ -242,7 +242,7 @@ const RETIRE_DAYS: u32 = 30;
 /// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never commits.
 pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<ExitCode> {
     if !inv.skills.contains(name) {
-        return Err(Error::Usage(format!("{name} is not a canonical skill in {}", cfg.source.display())));
+        return Err(Error::Usage(format!("{name} is not a canonical skill")));
     }
     let from = inv.root(name).join(name);
     let in_source = inv.root(name) == cfg.source;
@@ -267,6 +267,8 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
             return Err("retire refused; pass --force to retire it anyway".into());
         }
     }
+    // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
+    let _lock = if in_source { None } else { Some(ledger::lock(&data)?) };
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
@@ -297,7 +299,6 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
         // Links first, then the lock entry, then the directory: a failure
         // leaves at worst an unrecorded store skill, never an entry for a
         // missing one.
-        let _lock = ledger::lock(&data)?;
         for line in links::apply(&plan)? {
             println!("{line}");
         }
