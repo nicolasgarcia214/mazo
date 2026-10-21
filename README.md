@@ -235,24 +235,22 @@ computed once, in `classify.rs`.
 
 ```rust
 pub trait Adapter {
-    /// Transcript files of a home, sorted by basename.
-    fn files(&self, home: &Home) -> Vec<PathBuf>;
     /// Raw events from the lines of `chunk`; `header` is line 1 of the file.
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
-    /// The user-authored text behind the load at `src` (`<file>:<line>`).
-    fn prompt_at(&self, src: &str) -> Option<String>;
-    /// The judge's view of the session window around the strong load at `src`.
-    fn condense(&self, src: &str, max_chars: usize) -> Option<String>;
+    /// Which records are user-authored, and what the judge keeps of each.
+    fn records(&self) -> Records;
+    // Provided: files, prompt_at, condense.
 }
 ```
 
-- `files` has a default: every `*.jsonl` under the home's transcripts directory.
 - `parse` gets the new lines since the file's cursor that pass the scan's
   prefilter, not the whole file.
-- `prompt_at` and `condense` read the transcript at display or audit time and
-  return `None` when it is gone. Both share the walk in `adapters/mod.rs`; an
-  adapter supplies which records are user-authored and what the judge keeps
-  of each record.
+- `records` returns two functions: `authored`, the user's text in a record if
+  it has any, and `render`, the parts of a record the judge sees.
+- The provided methods need no override. `files` lists every `*.jsonl` under
+  the home's transcripts directory. `prompt_at` (the prompt behind a load, for
+  the card) and `condense` (the judge's view of a session) walk the transcript
+  with `records` at display or audit time and return `None` once it is gone.
 
 A judge backend holds what differs between agents when skima calls one:
 
