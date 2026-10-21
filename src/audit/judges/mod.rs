@@ -1,6 +1,6 @@
 //! The judge agents. Each [`Backend`] holds one agent's argv, input, login
-//! check, scratch home and output format; [`call`] runs any of them the same
-//! way.
+//! check, scratch home and output format, and [`Backend::call`] sends it a
+//! prompt; by default [`spawn`] runs any of them the same way.
 
 mod claude;
 mod codex;
@@ -24,9 +24,14 @@ use crate::ledger::Agent;
 
 /// How mazo calls one agent as its judge.
 pub trait Backend {
+    /// One judge call with `stage`'s prompt on `input`, capped at `cap`; by
+    /// default the subprocess [`spawn`] runs.
+    fn call(&self, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+        spawn(self, a, stage, cap, input)
+    }
     /// The argv of a call with `stage`'s prompt and schema, `[judge] model`, and
     /// [`SCHEMA_FILE`], [`RESULT_FILE`] or [`INPUT_FILE`] standing in for the files
-    /// [`call`] writes.
+    /// [`spawn`] writes.
     fn argv(&self, stage: &Stage) -> Vec<String>;
     /// What the call reads on stdin; none closes it.
     fn stdin(&self, stage: &Stage, input: &str) -> Option<String>;
@@ -166,16 +171,16 @@ fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
     Ok((unique, dir))
 }
 
-/// One judge call: the backend's argv run in a fresh empty directory under
+/// One subprocess judge call: `backend`'s argv run in a fresh empty directory under
 /// `<data>/audit-runs/`, with the files it names in a fresh temporary
 /// directory, both removed after, and its scratch home made afresh before and
 /// after. A capped call of an agent with a [`Backend::budget_flag`] gets that
 /// flag, and is counted at its cap when killed past its time, the most it
 /// could have spent.
-pub fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
-    let argv = a.backend.argv(stage);
+fn spawn<B: Backend + ?Sized>(backend: &B, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+    let argv = backend.argv(stage);
     let (unique, dir) = run_dir(a.data)?;
-    let scratch = a.backend.scratch(a.data)?;
+    let scratch = backend.scratch(a.data)?;
     let files = std::env::temp_dir().join(format!("mazo-judge-{unique}"));
     let result = files.join("result.json");
     let output = DirBuilder::new().mode(0o700).create(&files).and_then(|()| {
@@ -196,12 +201,12 @@ pub fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<R
                 _ => cmd.arg(arg),
             };
         }
-        let stdin = a.backend.stdin(stage, input);
+        let stdin = backend.stdin(stage, input);
         cmd.current_dir(&dir)
             .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let (Some(cap), Some(flag)) = (cap, a.backend.budget_flag()) {
+        if let (Some(cap), Some(flag)) = (cap, backend.budget_flag()) {
             cmd.args([flag, &cents(cap)]);
         }
         if let Some((var, home)) = &scratch {
@@ -217,14 +222,14 @@ pub fn call(a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<R
     removed.map_err(|e| format!("{}: {e}", dir.display()))?;
     cleaned.map_err(|e| format!("{}: {e}", files.display()))?;
     if scratch.is_some() {
-        a.backend.scratch(a.data)?;
+        backend.scratch(a.data)?;
     }
     let Some(output) = output else {
         let minutes = JUDGE_TIMEOUT.as_secs() / 60;
         let answer = Err(NoAnswer::Retry(format!("no answer within {minutes} minutes; the judge was killed")));
-        return Ok(Reply { cost: cap.filter(|_| a.backend.budget_flag().is_some()), answer });
+        return Ok(Reply { cost: cap.filter(|_| backend.budget_flag().is_some()), answer });
     };
-    a.backend.reply(&output, written.ok(), cap)
+    backend.reply(&output, written.ok(), cap)
 }
 
 /// How long one judge call may run before it is killed and counted as invalid.
@@ -296,6 +301,47 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
+    }
+
+    /// A judge that answers without a subprocess.
+    struct Canned;
+
+    impl Backend for Canned {
+        fn call(&self, _: &Audit, _: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+            Ok(Reply { cost: cap, answer: Ok(Value::from(input)) })
+        }
+        fn argv(&self, _: &Stage) -> Vec<String> {
+            unreachable!("a canned judge spawns nothing")
+        }
+        fn stdin(&self, _: &Stage, _: &str) -> Option<String> {
+            None
+        }
+        fn reply(&self, _: &Output, _: Option<Vec<u8>>, _: Option<u64>) -> Result<Reply> {
+            unreachable!("a canned judge spawns nothing")
+        }
+        fn shown(&self, _: &Path, _: &str) -> String {
+            String::new()
+        }
+    }
+
+    #[test]
+    fn a_backend_that_owns_its_call_is_called_without_a_subprocess() {
+        let data = tempfile::tempdir().unwrap();
+        let judge = Judge { agent: Agent::Claude, model: None, billing: Billing::Subscription };
+        let evals = crate::evals::Evals { grades: vec![], retros: vec![] };
+        let a = Audit {
+            skill: "s",
+            source: data.path(),
+            data: data.path(),
+            judge: &judge,
+            backend: &Canned,
+            budget: None,
+            evals: &evals,
+            usage: &Value::Null,
+        };
+        let reply = a.backend.call(&a, &super::super::session::SESSION, Some(7), "in").unwrap();
+        assert_eq!((reply.cost, reply.answer.ok()), (Some(7), Some(Value::from("in"))));
+        assert!(!data.path().join("audit-runs").exists());
     }
 
     #[test]

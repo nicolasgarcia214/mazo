@@ -26,8 +26,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
+use judges::NoAnswer;
 pub use judges::{Backend, backend};
-use judges::{NoAnswer, call};
 pub use select::{Candidate, MAX_CHARS, SkillText, input, select, skill_at};
 pub use session::{Finding, Followed, Outcome, SESSION_PROMPT, SESSION_SCHEMA, Verdict, validate};
 use session::{SESSION, SESSION_PROMPT_VERSION};
@@ -292,7 +292,7 @@ fn judge<T>(
             let cap = cap.map(|cap| format!(" (cap {})", a.usd(cap))).unwrap_or_default();
             eprintln!("{progress}{cap}");
         }
-        let reply = call(a, stage, cap, &retry(input, rejected.as_deref()))?;
+        let reply = a.backend.call(a, stage, cap, &retry(input, rejected.as_deref()))?;
         *spent += reply.cost.unwrap_or_default();
         cost = reply.cost.map(|r| r + cost.unwrap_or_default());
         match reply.answer.map(&check) {
