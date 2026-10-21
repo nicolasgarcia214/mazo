@@ -124,7 +124,11 @@ impl Source {
         };
         let segments: Vec<&str> = segments.into_iter().filter(|s| !s.is_empty()).collect();
         let cut = segments.iter().position(|s| s.ends_with(".git")).map_or(segments.len(), |i| i + 1);
-        let url = format!("{base}{}", segments[..cut].join("/"));
+        let mut url = format!("{base}{}", segments[..cut].join("/"));
+        // One origin per repository; a `file://` path names the directory as it is.
+        if !url.ends_with(".git") && !url.starts_with("file://") {
+            url.push_str(".git");
+        }
         // Only the last segment of the repository's path can end in `.git`.
         let path = segments[..cut].iter().map(|s| s.strip_suffix(".git").unwrap_or(s).to_string()).collect();
         Remote::new(url, path, &segments[cut..]).map(Source::Git).ok_or_else(bad)
@@ -140,10 +144,11 @@ impl Remote {
     }
 
     /// An entry equal to the owner (the first segment) or to owner/repo (the
-    /// first two) trusts the repository, on any host.
+    /// first two), ignoring ASCII case as GitHub does, trusts the repository,
+    /// on any host.
     fn trusted_by(&self, trusted: &[String]) -> bool {
         let repo = format!("{}/{}", self.path[0], self.path[1]);
-        trusted.iter().any(|t| *t == self.path[0] || *t == repo)
+        trusted.iter().any(|t| t.eq_ignore_ascii_case(&self.path[0]) || t.eq_ignore_ascii_case(&repo))
     }
 
     /// The name of the skill at the subpath: its last segment, else the repository's.
@@ -152,14 +157,14 @@ impl Remote {
     }
 
     /// Shallow-clones the repository into `into` and returns the commit.
+    /// Neither git nor ssh may prompt, unless the user's `GIT_SSH_COMMAND` says so.
     fn clone_into(&self, into: &Path) -> Result<String> {
-        let out = std::process::Command::new("git")
-            .args(["clone", "--depth", "1", "--quiet", "--"])
-            .arg(&self.url)
-            .arg(into)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|e| format!("git: {e}"))?;
+        let mut git = std::process::Command::new("git");
+        git.args(["clone", "--depth", "1", "--quiet", "--"]).arg(&self.url).arg(into).env("GIT_TERMINAL_PROMPT", "0");
+        if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+            git.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+        }
+        let out = git.output().map_err(|e| format!("git: {e}"))?;
         if !out.status.success() {
             return Err(format!("git clone {}: {}", self.url, String::from_utf8_lossy(&out.stderr).trim()).into());
         }
@@ -408,12 +413,21 @@ mod tests {
         let r = remote("owner/repo.git/a/b/");
         assert_eq!((r.url.as_str(), r.subpath.to_str()), ("https://github.com/owner/repo.git", Some("a/b")));
         assert_eq!(r.name(), "b");
+        for same in
+            ["https://github.com/owner/repo", "https://github.com/owner/repo/", "https://github.com/owner/repo.git"]
+        {
+            assert_eq!(remote(same).url, remote("owner/repo").url, "{same}");
+        }
     }
 
     #[test]
     fn git_urls_split_the_subpath_after_the_git_segment() {
         for (arg, url, path, sub) in [
-            ("https://github.com/o/r", "https://github.com/o/r", "o/r", ""),
+            ("https://github.com/o/r", "https://github.com/o/r.git", "o/r", ""),
+            ("https://github.com/o/r/", "https://github.com/o/r.git", "o/r", ""),
+            ("ssh://h/o/r", "ssh://h/o/r.git", "o/r", ""),
+            ("git@h:o/r/", "git@h:o/r.git", "o/r", ""),
+            ("file:///srv/git/r", "file:///srv/git/r", "srv/git/r", ""),
             ("https://gitlab.com/o/r.git/skills/x", "https://gitlab.com/o/r.git", "o/r", "skills/x"),
             ("ssh://git@host:22/o/r.git", "ssh://git@host:22/o/r.git", "o/r", ""),
             ("git@host.org:o/r.git/a", "git@host.org:o/r.git", "o/r", "a"),
@@ -456,6 +470,7 @@ mod tests {
             assert!(r.trusted_by(&list(&["x", "owner/repo"])), "{arg}");
             assert!(!r.trusted_by(&list(&["repo", "owner/other", "other/repo", "github.com"])), "{arg}");
             assert!(!r.trusted_by(&[]), "{arg}");
+            assert!(r.trusted_by(&list(&["OWNER"])) && r.trusted_by(&list(&["Owner/Repo"])), "{arg}");
         }
     }
 
