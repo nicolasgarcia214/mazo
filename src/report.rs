@@ -453,11 +453,15 @@ fn unused_of(view: &View, since: Since) -> Unused {
         .iter()
         .filter(|s| !used.contains(s.as_str()))
         .map(|skill| {
-            // Outside a git worktree no skill is new.
-            let is_new = input.inv.history.as_ref().is_some_and(|h| {
-                h.first(skill)
-                    .and_then(|c| c.date.parse::<Timestamp>().ok())
-                    .is_none_or(|t| start.is_some_and(|s| t > s))
+            // A store skill's first date is its install; a source skill's is its
+            // first commit, and outside a git worktree no source skill is new.
+            let first = if input.inv.root(skill) == input.inv.source {
+                input.inv.history.as_ref().map(|h| h.first(skill).map(|c| c.date.as_str()))
+            } else {
+                Some(input.inv.installed.get(skill).map(String::as_str))
+            };
+            let is_new = first.is_some_and(|d| {
+                d.and_then(|d| d.parse::<Timestamp>().ok()).is_none_or(|t| start.is_some_and(|s| t > s))
             });
             let (holders, others): (Vec<String>, Vec<String>) =
                 citers(&graph, skill).into_iter().partition(|a| used.contains(a.as_str()));

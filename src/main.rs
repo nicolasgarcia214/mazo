@@ -207,7 +207,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         return Err(Error::Usage(format!("no config at {}; run mazo init --source <skills dir>", path.display())));
     };
     let data = ledger::data_dir()?;
-    let inv = Inventory::load_roots(&cfg.source, &[&cfg.source, &store::dir(&data)])?;
+    let inv = store::inventory(&cfg.source, &data)?;
     let Some(cmd) = cmd else {
         return scanned(&cfg, &inv, |_, input| {
             tui::run(input).map_err(|e| e.to_string())?;

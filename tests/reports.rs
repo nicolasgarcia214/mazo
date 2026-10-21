@@ -163,6 +163,40 @@ fn a_skill_first_committed_inside_the_window_is_new() {
     assert_eq!(new.len(), 7, "the 2026-01-01 commit is inside a 400-day window: {new:?}");
 }
 
+/// Store skills installed 10 and 90 days ago and one missing from the
+/// lockfile, beside the report fixture's source skills.
+#[test]
+fn a_store_skill_is_new_from_its_install_date() {
+    let repo = report_repo();
+    let data = tempfile::tempdir().unwrap();
+    let mut lock = String::new();
+    for (name, installed) in [("late", Some(ago(10))), ("early", Some(ago(90))), ("unlisted", None)] {
+        write(&data.path().join("store").join(name).join("SKILL.md"), &format!("---\nname: {name}\n---\n"));
+        if let Some(at) = installed {
+            lock += &format!(
+                "[[skill]]\nname = \"{name}\"\norigin = \"/x\"\nsubpath = \".\"\n\
+                 content_hash = \"h\"\ntrusted = true\ninstalled_at = \"{at}\"\n"
+            );
+        }
+    }
+    write(&data.path().join("mazo.lock"), &lock);
+    let mut w = report_world(repo.path());
+    w.inv = mazo::store::inventory(repo.path(), data.path()).unwrap();
+    let v: Value = serde_json::from_str(&report::unused(&w.input(&[]), Since::Days(60), true, false)).unwrap();
+    let status: BTreeMap<&str, &str> = v["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["skill"].as_str().unwrap(), r["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(status["late"], "new");
+    assert_eq!(status["early"], "unused");
+    assert_eq!(status["unlisted"], "new", "an unknown install date is new");
+    // Source skills keep their git dates: committed 2026-01-01, and never.
+    assert_eq!(status["goal-smart"], "unused");
+    assert_eq!(status["fresh"], "new");
+}
+
 // ---------------------------------------------------------------- named by
 
 /// unslop names goal-plan in prose (`x-goal-plan/` is not a word); every
