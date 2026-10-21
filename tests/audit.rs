@@ -247,6 +247,17 @@ struct Fixture {
 /// The `[judge]` table of a Claude judge.
 const CLAUDE: &str = "[judge]\nagent = \"claude\"\n";
 
+/// The `[judge]` table of a command judge running the stub as `judge`.
+const COMMAND: &str = "[judge]\nagent = \"command\"\nargv = [\"judge\", \"--fast\"]\n";
+
+/// The `[judge]` table of `agent`, with the stub's argv for `command`.
+fn table(agent: &str) -> String {
+    match agent {
+        "command" => COMMAND.into(),
+        _ => format!("[judge]\nagent = \"{agent}\"\n"),
+    }
+}
+
 /// A judge answer citing `line` in every finding.
 fn answer(line: impl Into<serde_json::Value>) -> serde_json::Value {
     let line = line.into();
@@ -349,7 +360,7 @@ line=$(grep -o '^L[0-9]*:' "$in" | head -n 1 | tr -d 'L:')
 sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
 "#
         );
-        for agent in ["claude", "codex", "pi"] {
+        for agent in ["claude", "codex", "pi", "judge"] {
             common::write(&root.join("bin").join(agent), &stub);
             Command::new("chmod").arg("+x").arg(root.join("bin").join(agent)).status().unwrap();
         }
@@ -544,9 +555,9 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
     }
     assert!(stderr(&fx.mazo(&["audit", "unslop", "--max-budget-usd", "0.039"])).contains("at least 0.04"));
     assert!(fx.calls().is_empty());
-    // Codex and Pi report no dollar figure: `--limit` is their only cap.
-    for agent in ["codex", "pi"] {
-        let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\n"), three_agents);
+    // Codex, Pi and a command report no dollar figure: `--limit` is their only cap.
+    for agent in ["codex", "pi", "command"] {
+        let fx = Fixture::new(&table(agent), three_agents);
         for args in [
             &["audit", "unslop", "--max-budget-usd", "1"][..],
             &["audit", "unslop", "--max-budget-usd", "5", "--dry-run"],
@@ -560,6 +571,9 @@ fn audit_usage_errors_exit_2_and_start_nothing() {
     let typo = Fixture::new("[judge]\nmodle = \"sonnet\"\n", three_agents).mazo(&["audit", "unslop", "--dry-run"]);
     assert!(stderr(&typo).contains("unknown field `modle`"), "{}", stderr(&typo));
     assert_ne!(typo.status.code(), Some(0));
+    let bare = Fixture::new("[judge]\nagent = \"command\"\n", three_agents).mazo(&["audit", "unslop", "--dry-run"]);
+    assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
+    assert!(stderr(&bare).contains("[judge] agent = \"command\" needs a non-empty argv"), "{}", stderr(&bare));
 }
 
 #[test]
@@ -621,6 +635,82 @@ fn the_judge_runs_tool_less_in_a_fresh_empty_directory_that_is_removed() {
 /// The fake `~/.codex` and `~/.pi` with every file's bytes.
 fn agent_homes(fx: &Fixture) -> Vec<(PathBuf, Vec<u8>)> {
     [".codex", ".pi"].iter().flat_map(|h| snapshot(&fx.root.join("home").join(h))).collect()
+}
+
+/// A command judge whose stub prints bare answers.
+fn command_fixture(events: impl FnOnce(&Path) -> Vec<Event>) -> Fixture {
+    let fx = Fixture::new(COMMAND, events);
+    fx.raw_reply("default", &answer("LINE").to_string());
+    fx.raw_reply("skill", &skill_answer("SESSION").to_string());
+    fx
+}
+
+#[test]
+fn the_command_judge_reads_the_prompt_schema_and_input_on_stdin_and_answers_on_stdout() {
+    let fx = command_fixture(three_agents);
+    let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
+    assert!(dry.starts_with("unslop: 3 sessions to judge with the command judge\n"), "{dry}");
+    assert!(dry.contains("\njudge: judge --fast < <prompt + schema + input>\nbilling: subscription\ninput: "), "{dry}");
+    assert!(fx.calls().is_empty());
+
+    let out = fx.mazo(&["audit", "unslop", "--limit", "1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped\nunslop: skill report over 1 sessions: "));
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 2, "one session call under --limit 1, then the skill report");
+    let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
+    let session_input = audit::input(&fx.root.join("skills"), &candidates[0]).unwrap().1;
+    for (call, prompt, schema) in [
+        (&calls[0], audit::SESSION_PROMPT, &*audit::SESSION_SCHEMA),
+        (&calls[1], audit::SKILL_PROMPT, &*audit::SKILL_SCHEMA),
+    ] {
+        assert_eq!(call.argv, ["--fast"]);
+        assert_eq!(call.ls, "", "the call's directory was not empty");
+        let rest = call.stdin.strip_prefix(prompt).unwrap();
+        let want = format!(
+            "\n<answer-schema>\nAnswer with one JSON object, and nothing else, matching this schema:\n{schema}\n</answer-schema>\n"
+        );
+        assert!(rest.starts_with(&want), "{rest}");
+    }
+    assert_eq!(&calls[0].stdin[calls[0].stdin.len() - session_input.len()..], session_input);
+    assert!(calls[1].stdin.contains("\n<session-records>\n"));
+    let judge = serde_json::json!({"agent": "command", "model": null, "cost_usd": null, "billing": "subscription"});
+    assert_eq!(fx.records().len(), 1);
+    assert_eq!(fx.records()[0]["judge"], judge);
+    assert_eq!(fx.skill_records()[0]["judge"], judge);
+}
+
+#[test]
+fn a_command_judges_invalid_answer_is_retried_once_and_a_valid_retry_is_kept() {
+    let fx = command_fixture(claude_sessions(2));
+    // s00: no JSON, retried as it was. s01: a line outside the session,
+    // retried with why it was rejected.
+    fx.raw_reply("1", "Here is my verdict.\n");
+    fx.raw_reply("3", &answer(999).to_string());
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("unslop: 2 judged, 0 dropped\nunslop: skill report over 2 sessions: "));
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 5, "two calls per session, then the skill report");
+    assert_eq!(calls[1].stdin, calls[0].stdin);
+    let rejected = &calls[3].stdin[calls[2].stdin.len()..];
+    assert!(calls[3].stdin.starts_with(&calls[2].stdin), "{rejected}");
+    assert!(rejected.contains("cites L999, which is not in the session"), "{rejected}");
+    let sessions: Vec<String> = fx.records().iter().map(|r| r["session"].as_str().unwrap().to_string()).collect();
+    assert_eq!(sessions, ["s00", "s01"]);
+}
+
+#[test]
+fn a_command_judges_two_invalid_answers_drop_the_session() {
+    let fx = command_fixture(claude_sessions(1));
+    fx.raw_reply("default", "not json\n");
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "unslop: 0 judged, 1 dropped\n");
+    let err = stderr(&out);
+    assert!(err.contains("warning: s00: judge answer dropped after one retry: stdout is not JSON"), "{err}");
+    assert_eq!(fx.calls().len(), 2);
+    assert!(fx.records().is_empty());
 }
 
 #[test]
@@ -1423,8 +1513,8 @@ const BILLED: [&str; 7] = [
 fn under_subscription_no_judge_call_sees_a_billing_variable_and_under_api_every_one_does() {
     let env: Vec<(&str, &OsStr)> = BILLED.iter().map(|v| (*v, OsStr::new("set"))).collect();
     let has = |listing: &str, var: &str| listing.lines().any(|l| l == format!("{var}=set"));
-    for agent in ["claude", "codex", "pi"] {
-        let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\n"), claude_sessions(1));
+    for agent in ["claude", "codex", "pi", "command"] {
+        let fx = Fixture::new(&table(agent), claude_sessions(1));
         if agent != "claude" {
             fx.raw_reply("default", &answer("LINE").to_string());
             fx.raw_reply("skill", &skill_answer("SESSION").to_string());
@@ -1452,7 +1542,7 @@ fn under_subscription_no_judge_call_sees_a_billing_variable_and_under_api_every_
             other => panic!("{agent}: auth status ran as {other:?}"),
         }
 
-        let fx = Fixture::new(&format!("[judge]\nagent = \"{agent}\"\nbilling = \"api\"\n"), claude_sessions(1));
+        let fx = Fixture::new(&format!("{}billing = \"api\"\n", table(agent)), claude_sessions(1));
         fx.raw_reply("1", &fs::read_to_string(fx.root.join("replies/default")).unwrap());
         fx.mazo_env(&env, &["audit", "unslop", "--limit", "1"]);
         let calls = fx.calls();

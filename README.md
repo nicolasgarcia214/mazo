@@ -57,9 +57,19 @@ path  = "~/.pi/agent"
 links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 
 [judge]                           # the agent mazo audit calls; none without this table
-agent = "claude"                  # claude (default), codex or pi
+agent = "claude"                  # claude (default), codex, pi or command
 model = "sonnet"                  # optional; unset means the agent's own default
 billing = "subscription"          # subscription (default) or api
+```
+
+`agent = "command"` runs any CLI that reads a prompt on stdin and prints its
+answer on stdout. `argv` names the program and its arguments, and only the
+command judge takes one; `command` without a non-empty `argv` is a usage error:
+
+```toml
+[judge]
+agent = "command"
+argv  = ["llm", "-m", "gpt-5"]
 ```
 
 The ledger lives in `${XDG_DATA_HOME:-~/.local/share}/mazo/`. Back it up: once
@@ -110,10 +120,11 @@ and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
 `mazo audit <skill>` sends each session not yet audited to one call of the
 `[judge]` agent: newest first, round-robin across projects, at most `--limit`
 (default 20), or every one with `--all`. Claude and Pi run with tools off,
-Codex in a read-only sandbox with a scratch `CODEX_HOME`; every call runs in
-an empty directory under the data directory, and nothing is written inside the
-source. Each answer that cites real lines and quotes nothing is appended to
-`audits.jsonl`.
+Codex in a read-only sandbox with a scratch `CODEX_HOME`. A command judge gets
+the prompt, the answer schema and the input on stdin, and its stdout must be
+the answer as JSON. Every call runs in an empty directory under the data
+directory, and nothing is written inside the source. Each answer that cites
+real lines and quotes nothing is appended to `audits.jsonl`.
 
 When any session record was written, or with `--resynth`, one more call writes
 the skill report over every session record of the skill: a verdict, patterns,
@@ -122,8 +133,9 @@ ranked improvements and curated examples, with the rates `followed`,
 
 **Budget.** With the Claude judge, the session calls share 75% of
 `--max-budget-usd` (default 1, at least 0.04), the skill report gets the rest,
-and no call starts with less than a cent left. Codex and Pi report no cost, so
-`--limit` is their only cap and `--max-budget-usd` is a usage error.
+and no call starts with less than a cent left. Codex, Pi and a command judge
+report no cost, so `--limit` is their only cap, `--max-budget-usd` is a usage
+error, and their records' `cost_usd` is null.
 
 **Who pays.** `[judge] billing` is `"subscription"`, the default, or `"api"`;
 any other value is a config error. Under `"subscription"` every judge call runs
@@ -138,7 +150,8 @@ home's `auth.json` (else `~/.codex/auth.json`) must hold a ChatGPT login
 (`auth_mode` `chatgpt`). Pi is
 not checked: it picks its provider from its own settings, and a provider that
 logs in, such as OpenRouter, can still bill per token, so check the provider and
-model `--dry-run` prints. A dry run, or a run with nothing to judge, starts no
+model `--dry-run` prints. A command judge is not checked either: mazo only
+removes the variables above from its environment. A dry run, or a run with nothing to judge, starts no
 call and checks nothing. A Claude dollar figure is labelled `API-equivalent`:
 Claude's own estimate, not a charge, which `--max-budget-usd` still caps. A run
 stopped by a judge failure names `billing = "api"` as the way to use an API key
@@ -147,7 +160,8 @@ Each record in `audits.jsonl` names its billing; one written before mazo
 recorded it shows `unknown`.
 
 **Dry run.** `--dry-run` lists the sessions with their agent, project and
-condensed size, the judge command, the billing and, for Pi, the model, an
+condensed size, the judge command (a command judge's `argv`), the billing and,
+for Pi, the model, an
 input-token estimate and, once records exist, a dollar estimate. It starts no
 judge.
 
@@ -238,7 +252,7 @@ marker that yields no event at all.
 
 Each agent is one module in `src/adapters/` implementing `Adapter`, one module
 in `src/audit/judges/` implementing `Backend` with its arm in `judges::backend`,
-plus one `Agent` variant. Adapters only turn transcript records into events,
+plus one `Agent` variant and one `JudgeAgent` variant. Adapters only turn transcript records into events,
 prompts and condensed sessions; identity, actor, root session and authoring are
 computed once, in `classify.rs`.
 
