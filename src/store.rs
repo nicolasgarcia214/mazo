@@ -21,7 +21,10 @@ pub fn dir(data: &Path) -> PathBuf {
 /// The inventory over the source and the store, with each store skill's
 /// install date from the lockfile.
 pub fn inventory(source: &Path, data: &Path) -> Result<Inventory> {
-    let mut inv = Inventory::load_roots(source, &[source, &dir(data)])?;
+    let store = dir(data);
+    // Like the source, canonical: event paths are compared resolved.
+    let store = fs::canonicalize(&store).unwrap_or(store);
+    let mut inv = Inventory::load_roots(source, &[source, &store])?;
     inv.installed = Lock::load(data)?.skills.into_iter().map(|l| (l.name, l.installed_at)).collect();
     Ok(inv)
 }

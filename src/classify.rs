@@ -199,8 +199,7 @@ impl Classifier<'_> {
         };
         let p = Path::new(path);
         // Under any skill root, the store's included, whether reached through a home link or not.
-        let rooted =
-            |r: PathBuf| std::iter::once(&self.inv.source).chain(&self.inv.roots).any(|root| r.starts_with(root));
+        let rooted = |r: PathBuf| self.inv.roots.iter().any(|root| r.starts_with(root));
         if std::fs::canonicalize(p).is_ok_and(rooted) {
             return Origin::Canonical;
         }
@@ -248,15 +247,18 @@ mod tests {
     }
 
     #[test]
-    fn a_load_at_the_store_path_is_canonical() {
+    fn a_load_at_the_store_path_is_canonical_behind_a_symlinked_data_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let tmp = tmp.path().canonicalize().unwrap();
-        let (source, store) = (tmp.join("source"), tmp.join("store"));
+        let (source, data) = (tmp.join("source"), tmp.join("data"));
+        std::fs::create_dir(tmp.join("real")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("real"), &data).unwrap();
+        let store = data.join("store");
         for dir in [source.join("mine"), store.join("theirs"), tmp.join("elsewhere/theirs")] {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("SKILL.md"), "x").unwrap();
         }
-        let inv = Inventory::load_roots(&source, &[&source, &store]).unwrap();
+        let inv = crate::store::inventory(&source, &data).unwrap();
         let home =
             Home { name: "claude".into(), agent: Agent::Claude, path: tmp.join("home"), links: Default::default() };
         let homes = [home.clone()];
