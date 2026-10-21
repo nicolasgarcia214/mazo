@@ -85,9 +85,9 @@ fn targets(
     present: &dyn Fn(&Path) -> bool,
     conflicts: &mut Vec<(String, String)>,
 ) -> Vec<Target> {
-    let (single, shared): (Vec<&String>, Vec<&String>) = inv.skills.iter().partition(|s| inv.origins[*s].len() == 1);
+    let (single, shared): (Vec<_>, Vec<_>) = inv.origins.iter().partition(|(_, roots)| roots.len() == 1);
     let mut common: Vec<(String, PathBuf)> =
-        single.iter().map(|s| (s.to_string(), inv.origins[*s][0].join(s))).collect();
+        single.iter().map(|(name, roots)| (name.to_string(), roots[0].join(name))).collect();
     for loose in &cfg.loose {
         let src = cfg.source.join(loose);
         if src.is_file() {
@@ -97,8 +97,8 @@ fn targets(
     common.sort();
     let mut out = Vec::new();
     for home in homes {
-        for name in &shared {
-            let roots: Vec<String> = inv.origins[*name].iter().map(|r| r.display().to_string()).collect();
+        for (name, roots) in &shared {
+            let roots: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
             let path = home.skills_dir().join(name);
             conflicts.push((
                 home.name.clone(),
@@ -288,7 +288,7 @@ pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
 mod tests {
     use std::path::Path;
 
-    use super::{Action, plan};
+    use super::{Action, State, plan};
     use crate::config::{Config, Home};
     use crate::inventory::Inventory;
     use crate::ledger::Agent;
@@ -319,9 +319,14 @@ mod tests {
     fn each_skill_links_to_its_own_root() {
         let tmp = tempfile::tempdir().unwrap();
         let (cfg, inv) = setup(tmp.path());
+        let skills = tmp.path().join("home/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("store/gone"), skills.join("gone")).unwrap();
         let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
         assert!(p.conflicts.is_empty(), "{:?}", p.conflicts);
-        let skills = tmp.path().join("home/skills");
+        let gone = p.entries.iter().find(|e| e.path == skills.join("gone")).unwrap();
+        assert_eq!(gone.state, State::Dangling, "a link into a non-source root is owned");
+        assert!(p.actions.contains(&Action::Remove(skills.join("gone"))));
         let links: Vec<&Action> = p.actions.iter().filter(|a| matches!(a, Action::Link { .. })).collect();
         assert_eq!(
             links,
