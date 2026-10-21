@@ -79,26 +79,160 @@ impl Lock {
     }
 }
 
-/// `mazo add <path> [--as <name>] [--trust]`: copies the skill directory at
-/// `path` into the store, records it in the lockfile and links it into every
-/// home. A bad skill, a name taken in any root, or an untrusted source is a
-/// usage error, and a sync that would fail with the skill installed is a
-/// refusal; either way the store and the lockfile are left as they were.
+/// Where `mazo add` reads a skill from.
+#[derive(Debug, PartialEq)]
+enum Source {
+    Local(PathBuf),
+    Git(Remote),
+}
+
+#[derive(Debug, PartialEq)]
+struct Remote {
+    /// The clone URL, without the subpath.
+    url: String,
+    /// The URL's path segments, `.git` dropped from the last: owner, repo, ….
+    path: Vec<String>,
+    /// The directory inside the repository; empty for its root.
+    subpath: PathBuf,
+}
+
+impl Source {
+    /// A path that exists or starts with `.`, `/` or `~` is local. Otherwise
+    /// `scheme://…` and `[user@]host:path` are git URLs, and `owner/repo[/sub]`
+    /// is a GitHub repository. In a URL the subpath follows the first
+    /// segment ending in `.git`.
+    fn parse(arg: &str) -> std::result::Result<Source, String> {
+        if arg.starts_with('-') {
+            return Err("a source must not start with -".into());
+        }
+        if arg.starts_with(['.', '/', '~']) || Path::new(arg).exists() {
+            return Ok(Source::Local(arg.into()));
+        }
+        let bad = || format!("not a local path, a git URL or owner/repo[/path]: {arg:?}");
+        let (base, segments): (String, Vec<&str>) = if let Some((scheme, rest)) = arg.split_once("://") {
+            let (host, path) = rest.split_once('/').ok_or_else(bad)?;
+            (format!("{scheme}://{host}/"), path.split('/').collect())
+        } else if let Some((host, path)) = arg.split_once(':').filter(|(host, _)| !host.contains('/')) {
+            (format!("{host}:"), path.split('/').collect())
+        } else {
+            let segments: Vec<&str> = arg.trim_end_matches('/').split('/').collect();
+            let repo = segments.get(1).ok_or_else(bad)?;
+            let repo = repo.strip_suffix(".git").unwrap_or(repo);
+            let path = vec![segments[0].to_string(), repo.to_string()];
+            let url = format!("https://github.com/{}/{repo}.git", segments[0]);
+            return Remote::new(url, path, &segments[2..]).map(Source::Git).ok_or_else(bad);
+        };
+        let segments: Vec<&str> = segments.into_iter().filter(|s| !s.is_empty()).collect();
+        let cut = segments.iter().position(|s| s.ends_with(".git")).map_or(segments.len(), |i| i + 1);
+        let url = format!("{base}{}", segments[..cut].join("/"));
+        // Only the last segment of the repository's path can end in `.git`.
+        let path = segments[..cut].iter().map(|s| s.strip_suffix(".git").unwrap_or(s).to_string()).collect();
+        Remote::new(url, path, &segments[cut..]).map(Source::Git).ok_or_else(bad)
+    }
+}
+
+impl Remote {
+    /// `None` when the path names no repository or a segment is empty, `.` or `..`.
+    fn new(url: String, path: Vec<String>, subpath: &[&str]) -> Option<Remote> {
+        let ok = |s: &str| !s.is_empty() && s != "." && s != "..";
+        let valid = path.len() >= 2 && path.iter().all(|s| ok(s)) && subpath.iter().all(|s| ok(s));
+        valid.then(|| Remote { url, path, subpath: subpath.iter().collect() })
+    }
+
+    /// An entry equal to the owner (the first segment) or to owner/repo (the
+    /// first two) trusts the repository, on any host.
+    fn trusted_by(&self, trusted: &[String]) -> bool {
+        let repo = format!("{}/{}", self.path[0], self.path[1]);
+        trusted.iter().any(|t| *t == self.path[0] || *t == repo)
+    }
+
+    /// The name of the skill at the subpath: its last segment, else the repository's.
+    fn name(&self) -> String {
+        self.subpath.file_name().map_or_else(|| self.path[self.path.len() - 1].clone(), |n| n.to_string_lossy().into())
+    }
+
+    /// Shallow-clones the repository into `into` and returns the commit.
+    fn clone_into(&self, into: &Path) -> Result<String> {
+        let out = std::process::Command::new("git")
+            .args(["clone", "--depth", "1", "--quiet", "--"])
+            .arg(&self.url)
+            .arg(into)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("git clone {}: {}", self.url, String::from_utf8_lossy(&out.stderr).trim()).into());
+        }
+        let head = crate::inventory::git(into, &["rev-parse", "HEAD"]);
+        head.map(|h| h.trim().to_string()).ok_or_else(|| format!("{}: no HEAD commit", self.url).into())
+    }
+}
+
+/// A directory removed when dropped.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// `mazo add <source> [--skill <name>] [--as <name>] [--trust]`: copies the
+/// skill at `source` (a local path, or a repository shallow-cloned into
+/// `<data dir>/.clone-<pid>`) into the store, records it in the lockfile and
+/// links it into every home. A bad skill, a name taken in any root, several
+/// skills and no `--skill`, or an untrusted source is a usage error, and a
+/// sync that would fail with the skill installed is a refusal; either way the
+/// store and the lockfile are left as they were.
 pub fn add(
     cfg: &Config,
     inv: &Inventory,
     data: &Path,
-    path: &Path,
+    arg: &str,
     rename: Option<&str>,
+    pick: Option<&str>,
     trust: bool,
 ) -> Result<ExitCode> {
-    let usage = |e: String| Error::Usage(format!("add {}: {e}", path.display()));
-    let src = fs::canonicalize(path).map_err(|e| usage(e.to_string()))?;
-    let skill_md = fs::read_to_string(src.join("SKILL.md")).map_err(|e| usage(format!("SKILL.md: {e}")))?;
-    let name = match rename {
-        Some(n) => n.to_string(),
-        None => src.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or_else(|| usage("no name".into()))?,
+    let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
+    let source = Source::parse(arg).map_err(usage)?;
+    let trusted = trust || matches!(&source, Source::Git(r) if r.trusted_by(&cfg.trusted));
+    if !trusted {
+        return Err(Error::Usage(format!(
+            "add refused: {arg} is not on the trust list and vetting is not available yet; \
+             pass --trust to install it without vetting"
+        )));
+    }
+    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    let mut scratch = None;
+    let (root, origin, subpath, commit, own) = match &source {
+        Source::Local(path) => {
+            let root = fs::canonicalize(path).map_err(|e| usage(e.to_string()))?;
+            let own =
+                root.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or_else(|| usage("no name".into()))?;
+            (root.clone(), root.to_string_lossy().into_owned(), PathBuf::new(), None, own)
+        }
+        Source::Git(remote) => {
+            fs::create_dir_all(data).map_err(|e| err(data, e))?;
+            let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
+            let _ = fs::remove_dir_all(clone);
+            let commit = remote.clone_into(clone)?;
+            (clone.join(&remote.subpath), remote.url.clone(), remote.subpath.clone(), Some(commit), remote.name())
+        }
     };
+    let (src, child) = skill_in(&root, &own, pick).map_err(usage)?;
+    // A symlink in the repository must not lead the copy outside the clone.
+    let src = fs::canonicalize(&src).map_err(|e| usage(e.to_string()))?;
+    if let Some(Scratch(clone)) = &scratch
+        && !src.starts_with(fs::canonicalize(clone).map_err(|e| err(clone, e))?)
+    {
+        return Err(usage(format!("{} leaves the repository", src.display())));
+    }
+    let subpath = match &child {
+        Some(c) => subpath.join(c),
+        None => subpath,
+    };
+    let skill_md = fs::read_to_string(src.join("SKILL.md")).map_err(|e| usage(format!("SKILL.md: {e}")))?;
+    let name = rename.map(str::to_string).or(child).unwrap_or(own);
     let skill_md = if rename.is_some() { renamed(&skill_md, &name) } else { skill_md };
     yaml::frontmatter(&skill_md).and_then(|meta| policy::always_on(&meta, &name)).map_err(|e| usage(e.to_string()))?;
     let files = tree(&src).map_err(usage)?;
@@ -111,19 +245,11 @@ pub fn add(
             p.display()
         )));
     }
-    if !trust {
-        return Err(Error::Usage(format!(
-            "add refused: {} is not on the trust list and vetting is not available yet; \
-             pass --trust to install it without vetting",
-            src.display()
-        )));
-    }
 
     let installed_at = jiff::Timestamp::now().round(jiff::Unit::Second).map_err(|e| e.to_string())?.to_string();
     let _lock = ledger::lock(data)?;
     // Copied under a hidden name, which no root lists, then renamed into place.
     let staged = store.join(format!(".add-{name}"));
-    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let _ = fs::remove_dir_all(&staged);
     fs::create_dir_all(&staged).map_err(|e| err(&staged, e))?;
     let copied = files.iter().try_for_each(|rel| {
@@ -151,17 +277,8 @@ pub fn add(
     let plan = links::plan(cfg, &with, &homes, None);
     let errors = links::sync_errors(cfg, &with, &homes, &plan);
     let recorded = if errors.is_empty() {
-        let origin = src.to_string_lossy().into_owned();
-        let locked = Locked {
-            name,
-            origin,
-            subpath: ".".into(),
-            commit: None,
-            content_hash,
-            trusted: trust,
-            installed_at,
-            verdict: None,
-        };
+        let subpath = if subpath.as_os_str().is_empty() { ".".into() } else { subpath.to_string_lossy().into() };
+        let locked = Locked { name, origin, subpath, commit, content_hash, trusted, installed_at, verdict: None };
         Lock::load(data).and_then(|mut lock| {
             lock.skills.push(locked);
             lock.save(data)
@@ -181,6 +298,28 @@ pub fn add(
         println!("{line}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// The skill under `root` and the child it is in: `root` itself, named
+/// `own`, when it holds a `SKILL.md`; else its one child skill, or the one
+/// `pick` names.
+fn skill_in(root: &Path, own: &str, pick: Option<&str>) -> std::result::Result<(PathBuf, Option<String>), String> {
+    if root.join("SKILL.md").is_file() {
+        return match pick {
+            Some(p) if p != own => Err(format!("no skill named {p}; the only skill here is {own}")),
+            _ => Ok((root.to_path_buf(), None)),
+        };
+    }
+    let names = crate::inventory::canonical_skills(root).map_err(|e| e.to_string())?;
+    let list = names.iter().map(String::as_str).collect::<Vec<_>>().join(", ");
+    let name = match pick {
+        Some(p) if names.contains(p) => p.to_string(),
+        Some(p) => return Err(format!("no skill named {p}; the skills here are: {list}")),
+        None if names.len() == 1 => list,
+        None if names.is_empty() => return Err("no SKILL.md here or in any child directory".into()),
+        None => return Err(format!("several skills here; pass --skill with one of: {list}")),
+    };
+    Ok((root.join(&name), Some(name)))
 }
 
 /// `text` with the frontmatter's top-level `name:` line set to `name`.
@@ -249,7 +388,76 @@ pub fn content_hash(dir: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{content_hash, renamed};
+    use super::{Remote, Source, content_hash, renamed};
+
+    fn remote(arg: &str) -> Remote {
+        match Source::parse(arg) {
+            Ok(Source::Git(r)) => r,
+            other => panic!("{arg}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shorthand_resolves_to_github_with_a_subpath() {
+        let r = remote("owner/repo");
+        assert_eq!(
+            (r.url.as_str(), r.path.clone(), r.subpath.to_str()),
+            ("https://github.com/owner/repo.git", vec!["owner".into(), "repo".into()], Some(""))
+        );
+        assert_eq!(r.name(), "repo");
+        let r = remote("owner/repo.git/a/b/");
+        assert_eq!((r.url.as_str(), r.subpath.to_str()), ("https://github.com/owner/repo.git", Some("a/b")));
+        assert_eq!(r.name(), "b");
+    }
+
+    #[test]
+    fn git_urls_split_the_subpath_after_the_git_segment() {
+        for (arg, url, path, sub) in [
+            ("https://github.com/o/r", "https://github.com/o/r", "o/r", ""),
+            ("https://gitlab.com/o/r.git/skills/x", "https://gitlab.com/o/r.git", "o/r", "skills/x"),
+            ("ssh://git@host:22/o/r.git", "ssh://git@host:22/o/r.git", "o/r", ""),
+            ("git@host.org:o/r.git/a", "git@host.org:o/r.git", "o/r", "a"),
+            ("file:///srv/git/r.git/a/b", "file:///srv/git/r.git", "srv/git/r", "a/b"),
+        ] {
+            let r = remote(arg);
+            assert_eq!((r.url.as_str(), r.path.join("/"), r.subpath.to_str()), (url, path.into(), Some(sub)), "{arg}");
+        }
+    }
+
+    #[test]
+    fn local_paths_stay_local_and_bad_sources_are_refused() {
+        for arg in ["./x", "/x/y", "~/x", ".", "src"] {
+            assert_eq!(Source::parse(arg), Ok(Source::Local(arg.into())), "{arg}");
+        }
+        for arg in [
+            "-uhttps://x/o/r.git",
+            "--upload-pack=x",
+            "owner",
+            "owner//repo",
+            "o/r/../x",
+            "https://host",
+            "git@host:r.git",
+        ] {
+            assert!(Source::parse(arg).is_err(), "{arg}");
+        }
+    }
+
+    #[test]
+    fn trust_matches_the_owner_or_owner_and_repo_on_any_host() {
+        let list = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for arg in [
+            "owner/repo/a",
+            "https://github.com/owner/repo.git",
+            "git@codeberg.org:owner/repo.git",
+            "ssh://h/owner/repo",
+        ] {
+            let r = remote(arg);
+            assert!(r.trusted_by(&list(&["owner"])), "{arg}");
+            assert!(r.trusted_by(&list(&["x", "owner/repo"])), "{arg}");
+            assert!(!r.trusted_by(&list(&["repo", "owner/other", "other/repo", "github.com"])), "{arg}");
+            assert!(!r.trusted_by(&[]), "{arg}");
+        }
+    }
 
     #[test]
     fn renamed_sets_only_the_frontmatter_name() {

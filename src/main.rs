@@ -145,13 +145,16 @@ enum Cmd {
     },
     /// Judge how a skill performs in real sessions; reports, never edits the source.
     Audit(AuditArgs),
-    /// Install a skill from a local directory into the store and link it into every home.
+    /// Install a skill from a local directory or a git repository into the store and link it into every home.
     Add {
-        /// The skill's directory, holding its SKILL.md.
-        path: std::path::PathBuf,
+        /// A local path, a git URL (https, ssh, `git@host:owner/repo.git`), or GitHub `owner/repo[/path/to/skill]`.
+        source: String,
         /// Install under this name; rewrites the SKILL.md `name:` field.
         #[arg(long = "as", value_name = "NAME")]
         name: Option<String>,
+        /// The skill to install from a source holding several.
+        #[arg(long, value_name = "NAME")]
+        skill: Option<String>,
         /// Install without vetting.
         #[arg(long)]
         trust: bool,
@@ -239,7 +242,9 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         }
         Cmd::Retire { name, force } => mazo::lifecycle::retire(&cfg, &inv, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
-        Cmd::Add { path, name, trust } => store::add(&cfg, &inv, &data, &path, name.as_deref(), trust),
+        Cmd::Add { source, name, skill, trust } => {
+            store::add(&cfg, &inv, &data, &source, name.as_deref(), skill.as_deref(), trust)
+        }
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }

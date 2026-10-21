@@ -16,6 +16,9 @@ pub struct Config {
     /// The physical skills source directory.
     pub source: PathBuf,
     pub loose: Vec<String>,
+    /// Owners (`owner`) and repositories (`owner/repo`) whose skills install
+    /// without vetting.
+    pub trusted: Vec<String>,
     pub homes: Vec<Home>,
     pub policy: Policy,
     /// `None` without a `[judge]` table: no agent is assumed.
@@ -211,7 +214,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
         };
         homes.push(Home { name: h.name, agent: h.agent, path, links: h.links });
     }
-    Ok(Some(Config { source, loose: raw.loose, homes, policy: raw.policy, judge: raw.judge }))
+    Ok(Some(Config { source, loose: raw.loose, trusted: raw.trusted, homes, policy: raw.policy, judge: raw.judge }))
 }
 
 /// `mazo init`: a config at `path` naming `source` absolutely, a

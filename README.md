@@ -92,7 +92,10 @@ api_key_env = "OPENAI_API_KEY"
 
 `trusted` lists the owners (`owner`, every repository of that owner) and
 repositories (`owner/repo`) whose skills `mazo add` installs without vetting.
-An entry with an empty segment or more than two segments is a usage error.
+A git source's owner is the first segment of its URL's path and its repository
+the second, on any host: `git@codeberg.org:me/skills.git` matches `me` and
+`me/skills`. An entry with an empty segment or more than two segments is a
+usage error.
 Skills in `source` are always trusted. A config without `trusted` trusts no
 other source.
 
@@ -107,14 +110,15 @@ links both, and a name in both is a conflict. `mazo.lock` there records one
 ```toml
 [[skill]]
 name = "theirs"
-origin = "/home/me/src/theirs"    # where it came from
-subpath = "."                     # its directory inside origin
+origin = "https://github.com/owner/repo.git" # a git URL, or a local path's physical directory
+subpath = "skills/theirs"         # its directory inside origin; "." for origin itself
+commit = "9fceb02…"               # the commit cloned; local paths have none
 content_hash = "3f2a…"            # SHA-1 of its sorted relative paths and file contents
 trusted = true
 installed_at = "2026-10-21T12:00:00Z"
 ```
 
-`commit` and the vetting `verdict` are optional and not written yet.
+The vetting `verdict` is optional and not written yet.
 
 ## Commands
 
@@ -129,7 +133,7 @@ installed_at = "2026-10-21T12:00:00Z"
 | `mazo sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
 | `mazo init --source <dir>` | Writes the config for a skills directory: one home per existing agent directory, every policy rule off. Refuses to overwrite. |
 | `mazo new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry or a store skill of that name. Does not sync. |
-| `mazo add <path>` | Copies the skill directory at `<path>` into the store, records it in `mazo.lock` and links it into every home. Refuses (exit 2, writing nothing) a name already in `source` or the store; `--as <name>` installs it under another name and rewrites its `SKILL.md` `name:`. A skill containing a symlink is refused. A local path is not on the trust list and vetting is not available yet, so it needs `--trust`. Installs nothing if the resulting sync would fail. |
+| `mazo add <source>` | Copies a skill into the store, records it in `mazo.lock` and links it into every home. `<source>` is a local path (one that exists, or starts with `.`, `/` or `~`); a git URL (`https://…`, `ssh://…`, `git@host:owner/repo.git`, `file://…`), where a path after the segment ending in `.git` is the subpath (`https://host/owner/repo.git/skills/x`); or GitHub shorthand `owner/repo[/path/to/skill]`, cloned from `https://github.com/owner/repo.git`. A repository is shallow-cloned with the system `git` into the data directory and the clone removed afterwards; a failed clone exits 1 with git's error and installs nothing. The source (at its subpath) is the skill when it holds a `SKILL.md`; otherwise its child directories holding one are its skills, and with several `--skill <name>` picks one (without it, exit 2 lists them). Refuses (exit 2, writing nothing) a name already in `source` or the store; `--as <name>` installs it under another name and rewrites its `SKILL.md` `name:`. A skill containing a symlink, or one a symlink leads outside the clone, is refused. A source not on the `trusted` list needs `--trust`, since vetting is not available yet; local paths are never on it. Installs nothing if the resulting sync would fail. |
 | `mazo retire <name>` | Moves a skill of `source` to `.archive/` (`git mv` when tracked) and prunes its links. A store skill is removed instead: its links, its `mazo.lock` entry and its store directory are deleted. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `mazo prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 | `mazo audit <skill>` | Has an agent judge how the skill performs in real sessions and writes a skill report; see [Auditing a skill](#auditing-a-skill). |

@@ -435,6 +435,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     let cfg = Config {
         source: source.clone(),
         loose: vec![],
+        trusted: vec![],
         homes: vec![home(&claude_home)],
         policy: Default::default(),
         judge: Default::default(),
@@ -516,6 +517,7 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
     let cfg = Config {
         source,
         loose: vec![],
+        trusted: vec![],
         homes: vec![home(&claude_home)],
         policy: Default::default(),
         judge: Default::default(),

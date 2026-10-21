@@ -187,8 +187,14 @@ impl ForkMachine {
             history: None,
             ..Default::default()
         };
-        let cfg =
-            Config { source, loose: vec![], homes: vec![home(&codex_home)], policy: Default::default(), judge: None };
+        let cfg = Config {
+            source,
+            loose: vec![],
+            trusted: vec![],
+            homes: vec![home(&codex_home)],
+            policy: Default::default(),
+            judge: None,
+        };
         ForkMachine { tmp, cfg, inv, day, lines }
     }
 
