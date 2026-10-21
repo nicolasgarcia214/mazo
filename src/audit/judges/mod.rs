@@ -310,9 +310,11 @@ mod tests {
         let started = Instant::now();
         assert!(wait(sh("sleep 10 & sleep 10"), None, Duration::from_millis(100)).unwrap().is_none());
         assert!(started.elapsed() < Duration::from_secs(5));
-        // A launcher that forwards SIGTERM takes the process doing the work with it.
+        // A launcher that forwards SIGTERM takes the process doing the work with it. The
+        // launcher reaps the worker so `kill -0` cannot see a zombie no one has reaped.
         let pid = tempfile::NamedTempFile::new().unwrap();
-        let launcher = format!("sleep 10 & echo $! > {}; trap 'kill $!; exit' TERM; wait", pid.path().display());
+        let launcher =
+            format!("trap 'kill $!; wait $!; exit' TERM; sleep 10 & echo $! > {}; wait", pid.path().display());
         assert!(wait(sh(&launcher), None, Duration::from_millis(200)).unwrap().is_none());
         let worker = fs::read_to_string(pid.path()).unwrap();
         std::thread::sleep(Duration::from_millis(100));
