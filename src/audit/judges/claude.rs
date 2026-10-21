@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-use super::{Backend, NoAnswer, Reply, run_dir, scrub, stop, wait};
+use super::{NoAnswer, Reply, Subprocess, run_dir, scrub, stop, wait};
 use crate::audit::{Stage, parse_usd};
 use crate::config::Billing;
 use crate::{Error, Result};
@@ -40,7 +40,7 @@ const BUDGET_FLAG: &str = "--max-budget-usd";
 /// How long `claude auth status` may run before the login check fails.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 
-impl Backend for Claude {
+impl Subprocess for Claude {
     fn argv(&self, stage: &Stage) -> Vec<String> {
         let base = [
             "claude",

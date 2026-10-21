@@ -1,6 +1,6 @@
-//! The judge agents. Each [`Backend`] holds one agent's argv, input, login
-//! check, scratch home and output format, and [`Backend::call`] sends it a
-//! prompt; by default [`spawn`] runs any of them the same way.
+//! The judge agents. Each [`Backend`] sends one agent a prompt; a
+//! [`Subprocess`] holds one agent's argv, input, login check, scratch home and
+//! output format, and [`spawn`] runs any of them the same way.
 
 mod claude;
 mod codex;
@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use serde_json::Value;
 
+use super::session::{SESSION, SESSION_PROMPT, SESSION_SCHEMA};
 use super::{Audit, Stage, cents};
 use crate::Result;
 use crate::config::{Billing, Home, Judge};
@@ -24,20 +25,35 @@ use crate::ledger::Agent;
 
 /// How mazo calls one agent as its judge.
 pub trait Backend {
-    /// One judge call with `stage`'s prompt on `input`, capped at `cap`; by
-    /// default the subprocess [`spawn`] runs.
-    fn call(&self, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
-        spawn(self, a, stage, cap, input)
+    /// One judge call with `stage`'s prompt on `input`, capped at `cap`.
+    fn call(&self, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply>;
+    /// Under `subscription`, the check a run makes once before its first call,
+    /// with `data` for a scratch directory. A failed check is an
+    /// [`crate::Error::Usage`] that says what would be billed.
+    fn login(&self, _data: &Path) -> Result<()> {
+        Ok(())
     }
+    /// The flag that caps a call's dollar cost, for an agent that reports one.
+    fn budget_flag(&self) -> Option<&'static str> {
+        None
+    }
+    /// The judge line `--dry-run` prints, with `data` for a scratch home.
+    fn dry_run(&self, data: &Path) -> String;
+    /// The model `--dry-run` names, where the judge line may not.
+    fn model(&self) -> Option<String> {
+        None
+    }
+}
+
+/// A judge that is a process: [`spawn`] runs it for each call.
+pub trait Subprocess {
     /// The argv of a call with `stage`'s prompt and schema, `[judge] model`, and
     /// [`SCHEMA_FILE`], [`RESULT_FILE`] or [`INPUT_FILE`] standing in for the files
     /// [`spawn`] writes.
     fn argv(&self, stage: &Stage) -> Vec<String>;
     /// What the call reads on stdin; none closes it.
     fn stdin(&self, stage: &Stage, input: &str) -> Option<String>;
-    /// Under `subscription`, the check a run makes once before its first call,
-    /// with `data` for a scratch directory. A failed check is an
-    /// [`crate::Error::Usage`] that says what would be billed.
+    /// As [`Backend::login`].
     fn login(&self, _data: &Path) -> Result<()> {
         Ok(())
     }
@@ -49,15 +65,49 @@ pub trait Backend {
     /// What a finished call returned, from its output and the result file it
     /// wrote; `cap` is the call's dollar cap.
     fn reply(&self, out: &Output, written: Option<Vec<u8>>, cap: Option<u64>) -> Result<Reply>;
-    /// The flag that caps a call's dollar cost, for an agent that reports one.
+    /// As [`Backend::budget_flag`].
     fn budget_flag(&self) -> Option<&'static str> {
         None
     }
     /// The judge line `--dry-run` prints for the quoted argv.
     fn shown(&self, data: &Path, argv: &str) -> String;
-    /// The model `--dry-run` names, where the argv may not.
+    /// As [`Backend::model`].
     fn model(&self) -> Option<String> {
         None
+    }
+}
+
+impl<T: Subprocess> Backend for T {
+    fn call(&self, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+        spawn(self, a, stage, cap, input)
+    }
+
+    fn login(&self, data: &Path) -> Result<()> {
+        Subprocess::login(self, data)
+    }
+
+    fn budget_flag(&self) -> Option<&'static str> {
+        Subprocess::budget_flag(self)
+    }
+
+    /// The stage-1 argv, with its prompt, schema and empty arguments quoted
+    /// for a shell.
+    fn dry_run(&self, data: &Path) -> String {
+        let quoted: Vec<String> = self
+            .argv(&SESSION)
+            .iter()
+            .map(|arg| match arg.as_str() {
+                SESSION_PROMPT => "\"$(cat <prompt>)\"".into(),
+                s if s == *SESSION_SCHEMA => "<schema>".into(),
+                "" => "\"\"".into(),
+                s => s.into(),
+            })
+            .collect();
+        self.shown(data, &quoted.join(" "))
+    }
+
+    fn model(&self) -> Option<String> {
+        Subprocess::model(self)
     }
 }
 
@@ -174,10 +224,10 @@ fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
 /// One subprocess judge call: `backend`'s argv run in a fresh empty directory under
 /// `<data>/audit-runs/`, with the files it names in a fresh temporary
 /// directory, both removed after, and its scratch home made afresh before and
-/// after. A capped call of an agent with a [`Backend::budget_flag`] gets that
+/// after. A capped call of an agent with a [`Subprocess::budget_flag`] gets that
 /// flag, and is counted at its cap when killed past its time, the most it
 /// could have spent.
-fn spawn<B: Backend + ?Sized>(backend: &B, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+fn spawn(backend: &impl Subprocess, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
     let argv = backend.argv(stage);
     let (unique, dir) = run_dir(a.data)?;
     let scratch = backend.scratch(a.data)?;
@@ -310,17 +360,8 @@ mod tests {
         fn call(&self, _: &Audit, _: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
             Ok(Reply { cost: cap, answer: Ok(Value::from(input)) })
         }
-        fn argv(&self, _: &Stage) -> Vec<String> {
-            unreachable!("a canned judge spawns nothing")
-        }
-        fn stdin(&self, _: &Stage, _: &str) -> Option<String> {
-            None
-        }
-        fn reply(&self, _: &Output, _: Option<Vec<u8>>, _: Option<u64>) -> Result<Reply> {
-            unreachable!("a canned judge spawns nothing")
-        }
-        fn shown(&self, _: &Path, _: &str) -> String {
-            String::new()
+        fn dry_run(&self, _: &Path) -> String {
+            "canned".into()
         }
     }
 
@@ -339,7 +380,7 @@ mod tests {
             evals: &evals,
             usage: &Value::Null,
         };
-        let reply = a.backend.call(&a, &super::super::session::SESSION, Some(7), "in").unwrap();
+        let reply = a.backend.call(&a, &SESSION, Some(7), "in").unwrap();
         assert_eq!((reply.cost, reply.answer.ok()), (Some(7), Some(Value::from("in"))));
         assert!(!data.path().join("audit-runs").exists());
     }

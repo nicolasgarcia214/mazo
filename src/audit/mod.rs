@@ -497,18 +497,7 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
         ("chars", Align::Right),
         ("session", Align::Left),
     ];
-    let quoted: Vec<String> = a
-        .backend
-        .argv(&SESSION)
-        .iter()
-        .map(|arg| match arg.as_str() {
-            SESSION_PROMPT => "\"$(cat <prompt>)\"".into(),
-            s if s == *SESSION_SCHEMA => "<schema>".into(),
-            "" => "\"\"".into(),
-            s => s.into(),
-        })
-        .collect();
-    let judge = a.backend.shown(a.data, &quoted.join(" "));
+    let judge = a.backend.dry_run(a.data);
     let total: usize = candidates.iter().map(chars).sum();
     let n = candidates.len();
     let model = a.backend.model().map(|m| format!("model: {m}\n")).unwrap_or_default();

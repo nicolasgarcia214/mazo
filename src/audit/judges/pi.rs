@@ -9,7 +9,7 @@ use std::process::Output;
 
 use serde_json::Value;
 
-use super::{Backend, INPUT_FILE, Reply, exited};
+use super::{INPUT_FILE, Reply, Subprocess, exited};
 use crate::Result;
 use crate::audit::Stage;
 
@@ -19,7 +19,7 @@ pub struct Pi {
     pub settings: PathBuf,
 }
 
-impl Backend for Pi {
+impl Subprocess for Pi {
     fn argv(&self, stage: &Stage) -> Vec<String> {
         let base = [
             "pi",

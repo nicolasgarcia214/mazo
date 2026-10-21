@@ -9,7 +9,7 @@ use std::process::Output;
 
 use serde_json::Value;
 
-use super::{Backend, RESULT_FILE, Reply, SCHEMA_FILE, exited};
+use super::{RESULT_FILE, Reply, SCHEMA_FILE, Subprocess, exited};
 use crate::audit::Stage;
 use crate::{Error, Result};
 
@@ -24,7 +24,7 @@ fn home(data: &Path) -> PathBuf {
     data.join("codex-judge-home")
 }
 
-impl Backend for Codex {
+impl Subprocess for Codex {
     fn argv(&self, _stage: &Stage) -> Vec<String> {
         let base = [
             "codex",
