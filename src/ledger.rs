@@ -9,9 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, clap::ValueEnum)]
+#[derive(
+    Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, clap::ValueEnum,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
+    #[default]
     Claude,
     Codex,
     Pi,
@@ -220,7 +223,7 @@ pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
         }
     }
     f.write_all(out.as_bytes()).map_err(err)?;
-    f.sync_data().map_err(err)
+    f.sync_data().map_err(|e| err(e).into())
 }
 
 pub fn load_coverage(dir: &Path) -> Result<BTreeMap<String, Coverage>> {
@@ -233,9 +236,9 @@ pub fn save_coverage(dir: &Path, coverage: &BTreeMap<String, Coverage>) -> Resul
 
 pub(crate) fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Result<T> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display())),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()).into()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
-        Err(e) => Err(format!("{}: {e}", path.display())),
+        Err(e) => Err(format!("{}: {e}", path.display()).into()),
     }
 }
 
@@ -257,7 +260,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = File::create(&tmp).map_err(|e| err(&tmp, e))?;
     f.write_all(bytes).map_err(|e| err(&tmp, e))?;
     f.sync_all().map_err(|e| err(&tmp, e))?;
-    fs::rename(&tmp, path).map_err(|e| err(path, e))
+    fs::rename(&tmp, path).map_err(|e| err(path, e).into())
 }
 
 /// Each non-blank line of the JSONL file at `path`, numbered from 1, parsed as
@@ -268,7 +271,7 @@ pub fn jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<(usize, 
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Err(e) => return Err(format!("{}: {e}", path.display()).into()),
     };
     let mut lines = Vec::new();
     for (n, line) in BufReader::new(file).split(b'\n').enumerate() {

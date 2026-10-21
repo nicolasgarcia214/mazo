@@ -10,7 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
 use crate::audit::SkillRecord;
-use crate::config::{Billing, Config};
+use crate::config::Config;
 use crate::evals::{self, Eval, Evals, Grade};
 use crate::examples::{self, Examples};
 use crate::history::Commit;
@@ -405,14 +405,12 @@ pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
         out.push(format!("{skill} has a strong event in the last {days} days"));
     }
     let graph = inventory::fan_in(&input.inv.source, &input.inv.skills);
-    let holders: Vec<String> = citers(&graph, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
-    if !holders.is_empty() {
-        out.push(format!("{skill} is held by {}", holders.join(", ")));
-    }
     let named = inventory::mentions(&input.inv.source, &input.inv.skills, &graph);
-    let namers: Vec<String> = citers(&named, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
-    if !namers.is_empty() {
-        out.push(format!("{skill} is named by {}", namers.join(", ")));
+    for (citing, verb) in [(&graph, "held"), (&named, "named")] {
+        let who: Vec<String> = citers(citing, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
+        if !who.is_empty() {
+            out.push(format!("{skill} is {verb} by {}", who.join(", ")));
+        }
     }
     out
 }
@@ -656,7 +654,7 @@ pub fn links(ls: &[Link], skill: impl Fn(&str) -> String) -> String {
 
 /// A name `show` accepts: any known name (canonical names are known).
 pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
-    if inv.known.contains(skill) { Ok(()) } else { Err(format!("unknown skill: {skill}")) }
+    if inv.known.contains(skill) { Ok(()) } else { Err(crate::Error::Usage(format!("unknown skill: {skill}"))) }
 }
 
 /// `skill`'s card over the events `args` keeps; `graph` is the inventory's
@@ -832,14 +830,7 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
             vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })
         .collect();
-    let ev_header = [
-        ("ts", Align::Left),
-        ("agent", Align::Left),
-        ("channel", Align::Left),
-        ("actor", Align::Left),
-        ("cwd", Align::Left),
-        ("src", Align::Left),
-    ];
+    let ev_header = ["ts", "agent", "channel", "actor", "cwd", "src"].map(|h| (h, Align::Left));
     out.push_str(&render::table(&ev_header, &ev_rows, tty));
 
     out.push('\n');
@@ -910,7 +901,7 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
         None => out.push_str("audit: none\n"),
         Some(a) => {
             let date = a.audited_at.parse::<Timestamp>().map_or(a.audited_at.clone(), |t| day(input, t).to_string());
-            let billing = a.judge.billing.map_or("unknown", Billing::name);
+            let billing = a.judge.billing.map_or("unknown".into(), name);
             out.push_str(&format!(
                 "audit: {date}, {} sessions, {billing} billing: {}\n",
                 a.sessions.len(),

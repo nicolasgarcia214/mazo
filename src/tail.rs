@@ -40,10 +40,6 @@ impl Prefilter {
             Self::MARKERS.iter().copied().chain(extra).filter(|s| !s.is_empty()).map(regex::escape).collect();
         Prefilter(Regex::new(&alts.join("|")).expect("escaped literals form a valid regex"))
     }
-
-    pub fn matches(&self, line: &[u8]) -> bool {
-        self.0.is_match(line)
-    }
 }
 
 /// What one read of a file produced.
@@ -78,7 +74,7 @@ pub fn read(path: &Path, stored: Option<&Cursor>, filter: &Prefilter) -> io::Res
         cursor.offset += n as u64;
         cursor.line += 1;
         buf.pop();
-        if filter.matches(&buf) {
+        if filter.0.is_match(&buf) {
             lines.push((cursor.line, buf.clone()));
         }
     }
@@ -87,15 +83,9 @@ pub fn read(path: &Path, stored: Option<&Cursor>, filter: &Prefilter) -> io::Res
 
 /// Line 1 of a file, which carries the Codex and Pi session header.
 pub fn first_line(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    let mut reader = BufReader::new(File::open(path)?);
     let mut buf = Vec::new();
-    reader.read_until(b'\n', &mut buf)?;
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
-        Ok(Some(buf))
-    } else {
-        Ok(None)
-    }
+    BufReader::new(File::open(path)?).read_until(b'\n', &mut buf)?;
+    Ok((buf.pop() == Some(b'\n')).then_some(buf))
 }
 
 #[cfg(test)]

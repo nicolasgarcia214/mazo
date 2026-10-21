@@ -116,7 +116,7 @@ fn an_unknown_key_anywhere_is_an_error_naming_it() {
         fs::write(t.source.join("skima.toml"), config).unwrap();
         for cmd in ["sync", "status"] {
             let o = t.skima(&[cmd]);
-            assert_eq!(o.status.code(), Some(1), "{key}");
+            assert_eq!(o.status.code(), Some(2), "{key}");
             assert!(stderr(&o).contains(&format!("unknown field `{key}`")), "{key}: {}", stderr(&o));
         }
     }
@@ -328,6 +328,6 @@ fn two_homes_with_one_name_are_an_error() {
     let home = "[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n";
     common::write(&config, &format!("source = \".\"\n{home}{home}"));
     let o = f.skima(&[("SKIMA_CONFIG", config.as_os_str())], &["status"]);
-    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(o.status.code(), Some(2));
     assert!(stderr(&o).contains("two homes are named \"codex\""), "{}", stderr(&o));
 }

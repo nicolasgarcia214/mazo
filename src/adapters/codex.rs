@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Session, SkillRoots};
+use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Records, Session, SkillRoots};
 use crate::config;
 use crate::ledger::Channel;
 use crate::tail::Chunk;
@@ -23,9 +23,7 @@ impl Adapter for Codex {
             return out;
         }
         for (line, bytes) in &chunk.lines {
-            let Ok(rec) = serde_json::from_slice::<Value>(bytes) else {
-                continue;
-            };
+            let Ok(rec) = serde_json::from_slice::<Value>(bytes) else { continue };
             // Only the model-facing record counts: `event_msg` duplicates,
             // `compacted` history and the session_meta copies in forks do not.
             if rec["type"] != "response_item" {
@@ -78,12 +76,8 @@ impl Adapter for Codex {
         out
     }
 
-    fn prompt_at(&self, src: &str) -> Option<String> {
-        super::prompt_back(src, user_turn)
-    }
-
-    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
-        super::condense(self, src, max_chars, user_turn, render)
+    fn records(&self) -> Records {
+        Records { authored: user_turn, render }
     }
 }
 

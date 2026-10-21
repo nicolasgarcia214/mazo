@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Session, SkillRoots, ToolNames};
+use super::{ActorInputs, Adapter, Key, Parent, Parsed, Raw, Records, Session, SkillRoots, ToolNames};
 use crate::ledger::Channel;
 use crate::tail::Chunk;
 
@@ -26,15 +26,11 @@ impl Adapter for Pi {
         };
         let mut out = Parsed::default();
         for (line, bytes) in &chunk.lines {
-            let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
-                continue;
-            };
+            let Ok(v) = serde_json::from_slice::<Value>(bytes) else { continue };
             if v["type"] != "message" {
                 continue;
             }
-            let (Some(id), Some(ts)) = (v["id"].as_str(), v["timestamp"].as_str()) else {
-                continue;
-            };
+            let (Some(id), Some(ts)) = (v["id"].as_str(), v["timestamp"].as_str()) else { continue };
             let entry = Entry { roots, session: &session, id, ts, line: *line };
             let msg = &v["message"];
             match msg["role"].as_str() {
@@ -46,12 +42,8 @@ impl Adapter for Pi {
         out
     }
 
-    fn prompt_at(&self, src: &str) -> Option<String> {
-        super::prompt_back(src, user_turn)
-    }
-
-    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
-        super::condense(self, src, max_chars, user_turn, render)
+    fn records(&self) -> Records {
+        Records { authored: user_turn, render }
     }
 }
 

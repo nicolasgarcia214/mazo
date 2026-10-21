@@ -1,5 +1,5 @@
 //! Golden files: every report rendered from the report fixture at NOW in
-//! UTC, compared byte for byte with `tests/golden/`. `UPDATE_GOLDEN=1`
+//! UTC, and the judge's answer schemas, compared byte for byte with `tests/golden/`. `UPDATE_GOLDEN=1`
 //! rewrites the files instead, so a renderer change shows up as their diff.
 
 mod common;
@@ -8,8 +8,8 @@ use std::fs;
 use std::path::Path;
 
 use common::golden::Golden;
-use skima::html;
 use skima::report::{self, Since, UsageArgs};
+use skima::{audit, html};
 
 /// `out` with the fixture's path, and its `~` form, replaced by `placeholder`.
 fn scrub(out: String, source: &Path, placeholder: &str) -> String {
@@ -38,6 +38,9 @@ fn reports_match_their_golden_files() {
         }
     }
     outputs.push(("report.html".into(), html::render(&report::report(&input, Since::Days(30)))));
+    // The judge's answer schemas, so a change to them is deliberate.
+    outputs.push(("session-schema.json".into(), audit::SESSION_SCHEMA.clone()));
+    outputs.push(("skill-schema.json".into(), audit::SKILL_SCHEMA.clone()));
 
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let update = std::env::var_os("UPDATE_GOLDEN").is_some_and(|v| v == "1");

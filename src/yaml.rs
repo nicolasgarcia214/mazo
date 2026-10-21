@@ -19,7 +19,7 @@ pub fn load(text: &str) -> crate::Result<Yaml> {
     loader.early_parse(false);
     Parser::new_from_str(text).load(&mut loader, true).map_err(|e| e.to_string())?;
     if let Some(e) = loader.error() {
-        return Err(e.to_string());
+        return Err(e.to_string().into());
     }
     Ok(loader.into_documents().pop().unwrap_or(Yaml::Value(ScalarOwned::Null)))
 }
@@ -42,9 +42,7 @@ pub fn text(node: &Yaml) -> Option<&str> {
 
 /// A scalar the core schema resolves to a string.
 pub fn string(node: &Yaml) -> Option<&str> {
-    let Yaml::Representation(s, style, tag) = node else {
-        return None;
-    };
+    let Yaml::Representation(s, style, tag) = node else { return None };
     let tag = tag.as_ref().map(Cow::Borrowed);
     let value = ScalarOwned::parse_from_cow_and_metadata(s.as_str().into(), *style, tag.as_ref());
     matches!(value, Some(ScalarOwned::String(_))).then_some(s)

@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots, ToolNames};
+use super::{ActorInputs, Adapter, Key, Parsed, Raw, Records, Session, SkillRoots, ToolNames};
 use crate::config::Home;
 use crate::ledger::Channel;
 use crate::tail::Chunk;
@@ -40,12 +40,8 @@ impl Adapter for Claude {
         out
     }
 
-    fn prompt_at(&self, src: &str) -> Option<String> {
-        super::prompt_back(src, authored)
-    }
-
-    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
-        super::condense(self, src, max_chars, authored, render)
+    fn records(&self) -> Records {
+        Records { authored, render }
     }
 }
 

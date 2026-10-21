@@ -6,17 +6,17 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use crate::Result;
 use crate::config::{Config, Home};
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent, Ledger};
+use crate::{Error, Result};
 use crate::{links, policy, report, scan, yaml};
 
 /// `skima new <name> --description <text>`: writes
 /// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
 /// then prints the `name-only` line for each Claude home under `claude_name_only`.
-/// Exit 2 for a name or description the always-on rules reject, 1 for an
-/// existing entry. It never runs `sync`.
+/// A name or description the always-on rules reject is a usage error; an
+/// existing entry is a refusal. It never runs `sync`.
 pub fn new(cfg: &Config, name: &str, description: &str) -> Result<ExitCode> {
     let skill_md = format!("---\nname: {name}\ndescription: {}\n---\n\n# {name}\n", quoted(description));
     // Parsed back through the rules `sync` runs, so what is written passes them.
@@ -27,14 +27,11 @@ pub fn new(cfg: &Config, name: &str, description: &str) -> Result<ExitCode> {
             _ => Err("the description does not survive as a YAML string".into()),
         }
     });
-    if let Err(e) = checked {
-        return usage(&format!("new {name}: {e}"));
-    }
+    checked.map_err(|e| Error::Usage(format!("new {name}: {e}")))?;
     let dir = cfg.source.join(name);
     match std::fs::create_dir(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            eprintln!("ERROR: new refused: {} already exists", dir.display());
-            return Ok(ExitCode::from(1));
+            return Err(format!("new refused: {} already exists", dir.display()).into());
         }
         r => r.map_err(|e| format!("{}: {e}", dir.display()))?,
     }
@@ -80,17 +77,17 @@ fn quoted(s: &str) -> String {
 }
 
 /// `skima prune [<name>] [--yes] [--force]`: permanently deletes
-/// `<source>/.archive/<name>`, or every archived entry. Exit 2 for a usage error,
-/// 1 for a refusal; a refusal or a declined confirmation deletes nothing.
+/// `<source>/.archive/<name>`, or every archived entry. A refusal or a
+/// declined confirmation deletes nothing and exits 1.
 pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: bool) -> Result<ExitCode> {
     let archive = source.join(".archive");
     let names = match name {
         Some(n) if is_entry(&archive, n) => vec![n.to_string()],
-        Some(n) => return usage(&format!("{n} is not in {}", archive.display())),
+        Some(n) => return Err(Error::Usage(format!("{n} is not in {}", archive.display()))),
         None => entries(&archive),
     };
     if !yes && !tty {
-        return usage("prune deletes permanently; pass --yes when stdin is not a terminal");
+        return Err(Error::Usage("prune deletes permanently; pass --yes when stdin is not a terminal".into()));
     }
     if names.is_empty() {
         println!("nothing to prune in {}", archive.display());
@@ -102,8 +99,7 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
             for f in &unsaved {
                 eprintln!("{f}: content is in no HEAD path");
             }
-            eprintln!("ERROR: prune refused: that work exists nowhere else; commit it or pass --force");
-            return Ok(ExitCode::from(1));
+            return Err("prune refused: that work exists nowhere else; commit it or pass --force".into());
         }
     }
     for n in &names {
@@ -122,11 +118,6 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
         std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn usage(msg: &str) -> Result<ExitCode> {
-    eprintln!("ERROR: {msg}");
-    Ok(ExitCode::from(2))
 }
 
 /// A single plain component naming a directory in the archive.
@@ -247,15 +238,14 @@ const RETIRE_DAYS: u32 = 30;
 /// and applies that plan. Never commits.
 pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<ExitCode> {
     if !inv.skills.contains(name) {
-        return usage(&format!("{name} is not a canonical skill in {}", cfg.source.display()));
+        return Err(Error::Usage(format!("{name} is not a canonical skill in {}", cfg.source.display())));
     }
     let to = cfg.source.join(".archive").join(name);
     if to.symlink_metadata().is_ok() {
-        eprintln!("ERROR: retire refused: {} already exists", to.display());
-        return Ok(ExitCode::from(1));
+        return Err(format!("retire refused: {} already exists", to.display()).into());
     }
     let data = ledger::data_dir()?;
-    scan::scan(cfg, inv, &data, false)?.warn_io_errors();
+    scan::scan(cfg, inv, &data, false)?.warn();
     if !force {
         let ledger = Ledger::load(&data)?;
         let coverage = ledger::load_coverage(&data)?;
@@ -268,8 +258,7 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
             for b in &blockers {
                 eprintln!("{b}");
             }
-            eprintln!("ERROR: retire refused; pass --force to retire it anyway");
-            return Ok(ExitCode::from(1));
+            return Err("retire refused; pass --force to retire it anyway".into());
         }
     }
     let from = cfg.source.join(name);

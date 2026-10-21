@@ -25,12 +25,12 @@ skima usage                        # see which skills your agents load
 ## Configuration
 
 skima reads `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml`
-(`~/.config/skima/config.toml` when `XDG_CONFIG_HOME` is unset). Without one,
-every command but `init` exits 2. `skima init --source <skills dir>` writes it:
-a home for each of `~/.claude`, `~/.codex` and `~/.pi/agent` that exists, and
-every policy rule off. It never overwrites an existing file. A config can be a
-symlink; `source` and a relative home `path` are resolved against the
-directory of the file it points to.
+(`~/.config/skima/config.toml` when `XDG_CONFIG_HOME` is unset). Without one, or
+with one that does not parse, every command but `init` exits 2.
+`skima init --source <skills dir>` writes it: a home for each of `~/.claude`,
+`~/.codex` and `~/.pi/agent` that exists, and every policy rule off. It never overwrites an
+existing file. A config can be a symlink; `source` and a relative home `path`
+are resolved against the directory of the file it points to.
 
 ```toml
 source = "."                      # the skills directory, relative to this file
@@ -53,38 +53,6 @@ model = "sonnet"                  # optional; unset means the agent's own defaul
 billing = "subscription"          # subscription (default) or api
 ```
 
-### Who pays for `skima audit`
-
-`[judge] billing` decides who pays for the judge's calls. Any value other than
-`"subscription"` or `"api"` is a config error.
-
-With `"subscription"`, the default, an API key left in the shell cannot bill
-the run. Every judge call runs without `ANTHROPIC_API_KEY`,
-`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
-`CLAUDE_CODE_USE_FOUNDRY`, `OPENAI_API_KEY` and `CODEX_API_KEY`, whatever the
-judge agent. Before its first judge call, a run checks the login once, with
-the same variables removed, and exits 2 when the check fails:
-
-- Claude: `claude auth status` must report a claude.ai login or an OAuth
-  token. Anything else fails, including `api_key_helper` from an
-  `apiKeyHelper` setting, which no environment change removes.
-- Codex: the configured Codex home's `auth.json` (else `~/.codex/auth.json`)
-  must hold a ChatGPT login (`auth_mode` `chatgpt`).
-- Pi: not checked. Pi picks its provider from its own settings, and a provider
-  that logs in, such as OpenRouter, can still bill per token. `--dry-run`
-  prints the provider and model Pi will use, so check them there.
-
-`--dry-run` and a run with nothing to judge start no call and check nothing.
-Under `"subscription"`, every dollar figure for a Claude judge is labelled
-`API-equivalent`: it is Claude's client-side estimate, not a charge, and
-`--max-budget-usd` still caps it. A run stopped by a judge failure names
-`billing = "api"` as the way to use an API key instead.
-
-With `"api"`, the judge's environment passes unchanged and nothing is checked.
-
-Records in `audits.jsonl` carry the billing under `judge`; records written
-before it was recorded show it as unknown.
-
 The ledger lives in `${XDG_DATA_HOME:-~/.local/share}/skima/`. Back it up: once
 Claude deletes a session log, the ledger holds the only record of its loads.
 
@@ -103,7 +71,21 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 | `skima new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry. Does not sync. |
 | `skima retire <name>` | Moves a skill to `.archive/` (`git mv` when tracked) and prunes its links. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `skima prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
-| `skima audit <skill>` | Judges how a skill performs in real sessions: each session not yet audited (newest first, round-robin across projects, at most `--limit`, default 20, or `--all`) goes to one call of the `[judge]` agent (Claude or Pi with tools off, Codex in a read-only sandbox with a scratch `CODEX_HOME`), run in an empty directory under the data directory, and each answer that cites real lines and quotes nothing is appended to `audits.jsonl`. With the Claude judge, calls share 75% of `--max-budget-usd` (default 1, at least 0.04) and none starts with less than a cent left; the output names sessions left for the next run. Codex and Pi report no cost, so `--limit` is their only cap and `--max-budget-usd` is a usage error. Never writes inside the source. `--dry-run` lists the sessions with their agent, project and condensed size, the judge command, the billing and, for Pi, the model, an input-token estimate and, once records exist, a dollar estimate, and starts no judge. When any session record was written, or with `--resynth`, one more call writes the skill report over every session record of the skill: a verdict, patterns, ranked improvements and curated examples, with the rates `followed`, `achieved` and `abandoned or redone` computed by skima as `n of N`. With the Claude judge it gets the rest of the budget, and under a cent left skips it and exits 1. A run that drops every session it judged, or drops the skill report, also exits 1. A judge that fails without an answer (a login, key or network failure, or a signal skima did not send) stops the run at once with exit 1, keeps the records already written, and names the sessions not judged as left for the next run. `--json` prints the new skill record, the session records written and dropped, the spend (null for Codex and Pi) and the sessions left. |
+| `skima audit <skill>` | Has an agent judge how the skill performs in real sessions and writes a skill report; see [Auditing a skill](#auditing-a-skill). |
+
+Bare `skima` at a terminal opens a read-only TUI over the same report model: the
+usage table, the unused list and a skill's card. Arrows or `hjkl` move, `Enter`
+opens a card and `Esc` goes back, `Tab` switches between usage and unused, `/`
+filters by name, `w` cycles the window (30 days, 60 days, all), `a` and `c`
+cycle the agent and channel filters and `A` toggles authoring reads (not on the
+unused list), and `q` quits. It scans first and writes nothing else. Off a
+terminal, bare `skima` prints the help.
+
+Exit codes: 0 on success; 1 when the command failed or found a problem
+(a `status` error, a refused `sync`, `retire` or `prune`, a failed audit run);
+2 for a usage error: a bad argument, a config that does not parse or names a
+missing source, an invalid Pi agent directory, or a failed judge login check. A usage error writes nothing,
+except that `audit` checks the login after its scan.
 
 `usage`, `unused`, `show`, `report`, `audit` and `retire` scan first, so their numbers are current. Every
 report prints how far back each home's logs go: "unused since 2026-09-10" is not
@@ -113,6 +95,58 @@ On a terminal, `usage`, `unused` and `status` colour their status tokens:
 `unused` and `ERROR:` in red; `held`, `new`, the `named by` note, `warning:`
 and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
 `NO_COLOR` set to a non-empty value, carries no colour.
+
+## Auditing a skill
+
+`skima audit <skill>` sends each session not yet audited to one call of the
+`[judge]` agent: newest first, round-robin across projects, at most `--limit`
+(default 20), or every one with `--all`. Claude and Pi run with tools off,
+Codex in a read-only sandbox with a scratch `CODEX_HOME`; every call runs in
+an empty directory under the data directory, and nothing is written inside the
+source. Each answer that cites real lines and quotes nothing is appended to
+`audits.jsonl`.
+
+When any session record was written, or with `--resynth`, one more call writes
+the skill report over every session record of the skill: a verdict, patterns,
+ranked improvements and curated examples, with the rates `followed`,
+`achieved` and `abandoned or redone` computed by skima as `n of N`.
+
+**Budget.** With the Claude judge, the session calls share 75% of
+`--max-budget-usd` (default 1, at least 0.04), the skill report gets the rest,
+and no call starts with less than a cent left. Codex and Pi report no cost, so
+`--limit` is their only cap and `--max-budget-usd` is a usage error.
+
+**Who pays.** `[judge] billing` is `"subscription"`, the default, or `"api"`.
+Under `"subscription"` every judge call runs without `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
+`CLAUDE_CODE_USE_FOUNDRY`, `OPENAI_API_KEY` and `CODEX_API_KEY`, and before its
+first call the run checks the login once and exits 2 when the check fails:
+`claude auth status` must report a claude.ai login or an OAuth token (an
+`apiKeyHelper` fails, since no environment change removes it), and the Codex
+home's `auth.json` (else `~/.codex/auth.json`) must hold a ChatGPT login. Pi is
+not checked: it picks its provider from its own settings, and a provider that
+logs in, such as OpenRouter, can still bill per token, so check the provider and
+model `--dry-run` prints. A dry run, or a run with nothing to judge, starts no
+call and checks nothing. A Claude dollar figure is labelled `API-equivalent`:
+Claude's own estimate, not a charge, which `--max-budget-usd` still caps. A run
+stopped by a judge failure names `billing = "api"` as the way to use an API key
+instead. Under `"api"` the environment passes unchanged and nothing is checked.
+Each record in `audits.jsonl` names its billing; one written before skima
+recorded it shows `unknown`.
+
+**Dry run.** `--dry-run` lists the sessions with their agent, project and
+condensed size, the judge command, the billing and, for Pi, the model, an
+input-token estimate and, once records exist, a dollar estimate. It starts no
+judge.
+
+**Exit codes.** A run exits 1 when it drops every session it judged, drops or
+skips the skill report, or meets a judge that fails without an answer (a
+login, key or network failure, or a signal skima did not send). That last one
+stops the run at once, keeps the records already written, and names the
+sessions left for the next run, as a used-up budget does.
+
+**Output.** `--json` prints the new skill record, the session records written
+and dropped, the spend (null for Codex and Pi) and the sessions left.
 
 ## Glossary
 
@@ -180,12 +214,21 @@ Measured on 2026-10-13 against this machine's logs:
 Reads with commands skima's grammar does not parse (`awk`, globs, heredocs) are
 missed; `skima scan --report` counts them and prints samples.
 
+A transcript line that mentions a skill but is not JSON yields no event; a line
+that mentions none is never parsed, so it cannot hide a load. The scan that
+first reads one warns with the count per home, which `scan --json` reports as
+`malformed` and `scan --report` prints; the next scan does not repeat it, since
+the line is behind the cursor, but `scan --reparse` reads it again. The
+parser canary in `scan --report` covers the other failure, a file with a skill
+marker that yields no event at all.
+
 ## Adding an agent
 
-Each agent is one module in `src/adapters/` implementing `Adapter`, plus one
-`Agent` variant. Adapters only turn transcript records into events, prompts and
-condensed sessions; identity, actor, root session and authoring are computed
-once, in `classify.rs`.
+Each agent is one module in `src/adapters/` implementing `Adapter`, one module
+in `src/audit/judges/` implementing `Backend` with its arm in `judges::backend`,
+plus one `Agent` variant. Adapters only turn transcript records into events,
+prompts and condensed sessions; identity, actor, root session and authoring are
+computed once, in `classify.rs`.
 
 ```rust
 pub trait Adapter {
@@ -207,6 +250,34 @@ pub trait Adapter {
   return `None` when it is gone. Both share the walk in `adapters/mod.rs`; an
   adapter supplies which records are user-authored and what the judge keeps
   of each record.
+
+A judge backend holds what differs between agents when skima calls one:
+
+```rust
+pub trait Backend {
+    /// The argv of a call, with stand-ins for the files the call writes.
+    fn argv(&self, stage: &Stage) -> Vec<String>;
+    /// What the call reads on stdin; none closes it.
+    fn stdin(&self, stage: &Stage, input: &str) -> Option<String>;
+    /// Under `subscription`, the login check made once before the first call.
+    fn login(&self, data: &Path) -> Result<()>;
+    /// A variable naming a scratch home, made afresh before and after each call.
+    fn scratch(&self, data: &Path) -> Result<Option<(&'static str, PathBuf)>>;
+    /// What a finished call returned: its cost and its answer, or why there is none.
+    fn reply(&self, out: &Output, written: Option<Vec<u8>>, cap: Option<u64>) -> Result<Reply>;
+    /// The flag that caps a call's dollar cost, for an agent that reports one.
+    fn budget_flag(&self) -> Option<&'static str>;
+    /// The judge line and model `--dry-run` prints.
+    fn shown(&self, data: &Path, argv: &str) -> String;
+    fn model(&self) -> Option<String>;
+}
+```
+
+`login`, `scratch`, `budget_flag` and `model` have defaults: no check, no
+scratch home, no dollar cap (so `--limit` is the only one), and the model
+named in the argv. Running the call, its timeout, the billing scrub and the
+cleanup are shared, in `src/audit/judges/mod.rs`; a judge that bills an API
+key through its own environment variable adds it to `BILLED` there.
 
 ## Tests
 

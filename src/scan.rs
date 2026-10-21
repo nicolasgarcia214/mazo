@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use serde::de::IgnoredAny;
 
 use crate::Result;
 use crate::adapters::{self, Adapter, Raw, SkillRoots};
@@ -26,6 +27,10 @@ pub struct HomeReport {
     pub unparsed_samples: Vec<String>,
     /// Files with a skill marker that yielded no event: the parser canary.
     pub canary: Vec<String>,
+    /// Lines this scan read that passed the prefilter, so might hold a load,
+    /// but are not JSON: no event came from them, even in a file that yielded
+    /// others.
+    pub malformed: usize,
 }
 
 #[derive(Debug, Default)]
@@ -34,10 +39,18 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    pub fn warn_io_errors(&self) {
+    /// Prints the read errors and the malformed lines of each home. A line is
+    /// read once, so its warning comes once, or again on `--reparse`.
+    pub fn warn(&self) {
         for (home, h) in &self.homes {
             for e in &h.io_errors {
                 eprintln!("warning: {home}: {e}");
+            }
+            if h.malformed > 0 {
+                eprintln!(
+                    "warning: {home}: transcript lines that are not JSON: {}; a load in one is not counted",
+                    h.malformed
+                );
             }
         }
     }
@@ -144,6 +157,10 @@ pub fn scan_with<'a>(
             }
             let header = tail::first_line(&path).ok().flatten();
             let parsed = adapter.parse(&roots, &path, header.as_deref(), &chunk);
+            if !parsed.skipped {
+                hr.malformed +=
+                    chunk.lines.iter().filter(|(_, l)| serde_json::from_slice::<IgnoredAny>(l).is_err()).count();
+            }
             hr.unparsed += parsed.unparsed.len();
             for s in parsed.unparsed {
                 if hr.unparsed_samples.len() < 5 {

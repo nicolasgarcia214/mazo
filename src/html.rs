@@ -10,10 +10,9 @@ use std::process::Command;
 use jiff::tz::TimeZone;
 
 use crate::audit::SkillRecord;
-use crate::config::Billing;
 use crate::examples::Examples;
 use crate::ledger::name;
-use crate::render::{self, DAY, MINUTE};
+use crate::render::{self, Align, DAY, MINUTE};
 use crate::report::{self, AUDIT_IMPROVEMENTS, Card, Day, GradeOut, Link, Report, tilde};
 
 const CSS: &str = "
@@ -50,18 +49,7 @@ const LEGEND: &str = "agents C Claude, X Codex, P Pi · the 30d chart has one ba
 
 /// Escapes text for an element body or a quoted attribute.
 fn esc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            c => out.push(c),
-        }
-    }
-    out
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 /// A timestamp in the report's zone, as `show` prints it; `-` for none.
@@ -174,18 +162,14 @@ fn usage(model: &Report) -> String {
             )
         })
         .collect();
-    let head: String =
-        ["skill", "sess", "slash", "tool", "typed", "read", "ref", "agents", "last", "30d", "grade", "audit"]
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                if (1..=6).contains(&i) || i == 10 {
-                    format!("<th class=\"n\">{h}</th>")
-                } else {
-                    format!("<th>{h}</th>")
-                }
-            })
-            .collect();
+    let head: String = report::USAGE_HEADER
+        .iter()
+        .chain(&[("audit", Align::Left)])
+        .map(|(h, a)| match a {
+            Align::Right => format!("<th class=\"n\">{h}</th>"),
+            Align::Left => format!("<th>{h}</th>"),
+        })
+        .collect();
     format!("<h2>Usage</h2><div class=\"wrap\"><table><tr>{head}</tr>{rows}</table></div>")
 }
 
@@ -273,7 +257,7 @@ fn audit(a: Option<&SkillRecord>, tz: &TimeZone) -> String {
         "<dt>audit</dt><dd><span class=\"muted\">{}, {} sessions, {} billing</span> {}<br>{}<ol>{improvements}</ol></dd>",
         local(Some(&a.audited_at), tz, DAY),
         a.sessions.len(),
-        esc(a.judge.billing.map_or("unknown", Billing::name)),
+        esc(&a.judge.billing.map_or("unknown".into(), name)),
         esc(&a.result.verdict),
         rates.join(", "),
     )
@@ -364,7 +348,7 @@ pub fn write(path: &Path, html: &str) -> crate::Result<()> {
     let mut f = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).map_err(err)?;
     // `mode` applies only on create; an older file keeps its own until this.
     f.set_permissions(Permissions::from_mode(0o600)).map_err(err)?;
-    f.write_all(html.as_bytes()).map_err(err)
+    f.write_all(html.as_bytes()).map_err(|e| err(e).into())
 }
 
 /// Whether the directory holding `path` is inside a git worktree.
@@ -377,5 +361,5 @@ pub fn in_worktree(path: &Path) -> bool {
 pub fn open(path: &Path) -> crate::Result<()> {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     let status = Command::new(opener).arg(path).status().map_err(|e| format!("{opener}: {e}"))?;
-    if status.success() { Ok(()) } else { Err(format!("{opener} {}: {status}", path.display())) }
+    if status.success() { Ok(()) } else { Err(format!("{opener} {}: {status}", path.display()).into()) }
 }

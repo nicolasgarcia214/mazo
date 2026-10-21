@@ -8,8 +8,8 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::Result;
 use crate::ledger::Agent;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -22,7 +22,7 @@ pub struct Config {
 }
 
 /// The optional `[judge]` table.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Judge {
     pub agent: Agent,
@@ -31,29 +31,15 @@ pub struct Judge {
     pub billing: Billing,
 }
 
-impl Default for Judge {
-    fn default() -> Judge {
-        Judge { agent: Agent::Claude, model: None, billing: Billing::Subscription }
-    }
-}
-
 /// Who pays for the judge's calls. Under `Subscription` every call runs
 /// without the variables that would bill an API key or a cloud account, after
 /// a login check; under `Api` the environment passes unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Billing {
+    #[default]
     Subscription,
     Api,
-}
-
-impl Billing {
-    pub fn name(self) -> &'static str {
-        match self {
-            Billing::Subscription => "subscription",
-            Billing::Api => "api",
-        }
-    }
 }
 
 /// The `[policy]` table: every rule off and no authoring skill by default.
@@ -142,20 +128,20 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     let path = match fs::canonicalize(path) {
         Ok(p) => p,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Err(e) => return Err(format!("{}: {e}", path.display()).into()),
     };
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let raw: RawConfig = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let raw: RawConfig = toml::from_str(&text).map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
     let base = path.parent().unwrap_or(Path::new("/"));
     // `source` is relative to the config file and resolved physically, as
     // install.sh's `pwd -P` did (test_install.py:130).
     let joined = base.join(&raw.source);
-    let source = fs::canonicalize(&joined).map_err(|e| format!("{}: {e}", joined.display()))?;
+    let source = fs::canonicalize(&joined).map_err(|e| Error::Usage(format!("{}: {e}", joined.display())))?;
     let home = home_dir()?;
     let mut homes: Vec<Home> = Vec::new();
     for h in raw.homes {
         if homes.iter().any(|o| o.name == h.name) {
-            return Err(format!("{}: two homes are named {:?}", path.display(), h.name));
+            return Err(Error::Usage(format!("{}: two homes are named {:?}", path.display(), h.name)));
         }
         // A relative `path` is relative to this file, like `source`; Pi
         // resolves its own variable against the cwd, so skima does too.
@@ -199,11 +185,11 @@ pub fn init(path: &Path, source: &Path) -> Result<()> {
         ErrorKind::AlreadyExists => format!("{} exists; not overwriting it", path.display()),
         _ => format!("{}: {e}", path.display()),
     })?;
-    file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+    file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()).into())
 }
 
 pub(crate) fn home_dir() -> Result<String> {
-    std::env::var("HOME").ok().filter(|h| !h.is_empty()).ok_or_else(|| "HOME is not set".to_string())
+    std::env::var("HOME").ok().filter(|h| !h.is_empty()).ok_or_else(|| "HOME is not set".into())
 }
 
 /// `~` alone is `$HOME`; `~/x` is the string `$HOME/x`. No other form expands.
@@ -237,7 +223,7 @@ pub fn resolve(base: &Path, p: &str) -> PathBuf {
 /// The Pi agent directory from a `PI_CODING_AGENT_DIR`-style value.
 /// The skills directory is `<result>/skills`.
 fn pi_agent_dir(value: &str, home: &str, cwd: &Path) -> Result<PathBuf> {
-    let invalid = |reason: &str| format!("invalid PI_CODING_AGENT_DIR: {reason}");
+    let invalid = |reason: &str| Error::Usage(format!("invalid PI_CODING_AGENT_DIR: {reason}"));
     let mut value = expand_tilde(value, home);
     if value.starts_with("file://") {
         value = file_url_to_path(&value).map_err(|r| invalid(&r))?;

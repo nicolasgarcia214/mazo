@@ -1,0 +1,147 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "examples": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "asked": {
+            "maxLength": 300,
+            "type": "string"
+          },
+          "happened": {
+            "maxLength": 300,
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "situation": {
+            "maxLength": 300,
+            "type": "string"
+          },
+          "tip": {
+            "maxLength": 300,
+            "type": "string"
+          }
+        },
+        "required": [
+          "situation",
+          "asked",
+          "happened",
+          "tip",
+          "session"
+        ],
+        "type": "object"
+      },
+      "maxItems": 3,
+      "type": "array"
+    },
+    "failures": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "sessions": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "text": {
+            "maxLength": 300,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
+    "improvements": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "maxLength": 300,
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 300,
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "change",
+          "reason",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
+    "patterns": {
+      "items": {
+        "maxLength": 300,
+        "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
+    "verdict": {
+      "maxLength": 400,
+      "type": "string"
+    },
+    "versus_grades": {
+      "maxLength": 400,
+      "type": "string"
+    },
+    "works": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "sessions": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "text": {
+            "maxLength": 300,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+    }
+  },
+  "required": [
+    "verdict",
+    "patterns",
+    "works",
+    "failures",
+    "improvements",
+    "versus_grades",
+    "examples"
+  ],
+  "type": "object"
+}
