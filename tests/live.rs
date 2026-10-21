@@ -1,12 +1,12 @@
 //! Live end-to-end tests: one cheap model turn per agent proves that a real
 //! Claude, Codex and Pi load lands in the ledger as the right event. They run
-//! only with `SKIMA_LIVE=1`; otherwise every test returns before spawning an
+//! only with `MAZO_LIVE=1`; otherwise every test returns before spawning an
 //! agent, so `cargo test` makes no network call.
 //!
 //! The three gating tests share one run of all three agents and each asserts
 //! the whole of it. The two recorded tests depend on a model choosing to act:
 //! each tries up to three times and reports `skipped` when the model never
-//! acted, but fails when it acted and skima recorded no event or the wrong one.
+//! acted, but fails when it acted and mazo recorded no event or the wrong one.
 
 mod common;
 
@@ -24,9 +24,9 @@ use serde_json::{Value, json};
 const TIMEOUT: Duration = Duration::from_secs(300);
 
 fn live() -> bool {
-    let on = std::env::var_os("SKIMA_LIVE").is_some_and(|v| v == "1");
+    let on = std::env::var_os("MAZO_LIVE").is_some_and(|v| v == "1");
     if !on {
-        eprintln!("skipped: set SKIMA_LIVE=1 to run the live tests");
+        eprintln!("skipped: set MAZO_LIVE=1 to run the live tests");
     }
     on
 }

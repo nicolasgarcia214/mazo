@@ -1,5 +1,5 @@
 //! The 18 cases of `dotfiles/skills/tests/test_install.py`, ported to drive
-//! `skima sync`. Line numbers cite test_install.py.
+//! `mazo sync`. Line numbers cite test_install.py.
 
 mod common;
 
@@ -25,7 +25,7 @@ fn pi_discovers_all_skills_and_is_idempotent() {
     fs::write(&settings, "{\"theme\":\"existing\",\"enableSkillCommands\":false}\n").unwrap();
     let before = fs::read(&settings).unwrap();
     let homes_before = snapshot(&[&fx.home]);
-    fx.skima(&["sync", "--agent", "pi"]).assert_ok();
+    fx.mazo(&["sync", "--agent", "pi"]).assert_ok();
     assert_eq!(names(&fx.target), expected);
     for name in &expected {
         assert_eq!(fs::read_link(fx.target.join(name)).unwrap(), fx.source.join(name));
@@ -34,7 +34,7 @@ fn pi_discovers_all_skills_and_is_idempotent() {
     // :81-82: the Claude and Codex homes are unchanged (a snapshot).
     assert_eq!(snapshot(&[&fx.home]), homes_before);
     let inodes: Vec<u64> = expected.iter().map(|n| ino(&fx.target.join(n))).collect();
-    let second = fx.skima(&["sync", "--agent", "pi"]);
+    let second = fx.mazo(&["sync", "--agent", "pi"]);
     second.assert_ok();
     assert_eq!(second.stdout(), format!("in sync: 1 homes, {} skills\n", fx.skills.len() + 1));
     assert_eq!(inodes, expected.iter().map(|n| ino(&fx.target.join(n))).collect::<Vec<_>>());
@@ -65,7 +65,7 @@ fn claude_profiles_must_list_explicit_skills_as_name_only() {
     let fx = Fixture::new();
     let assert_rejected = |needle: &str| {
         let before = fx.snapshot();
-        let r = fx.skima(&["sync"]);
+        let r = fx.mazo(&["sync"]);
         assert_ne!(r.code(), 0, "{}", r.stdout());
         assert!(r.stderr().contains(needle), "needle {needle:?} not in:\n{}", r.stderr());
         // :107 (a snapshot instead of an empty $HOME).
@@ -94,7 +94,7 @@ fn claude_profiles_must_list_explicit_skills_as_name_only() {
     fx.write_settings(&fx.home);
     fs::remove_file(&main).unwrap();
     assert_rejected("no Claude settings profile");
-    fx.skima(&["sync", "--agent", "pi"]).assert_ok();
+    fx.mazo(&["sync", "--agent", "pi"]).assert_ok();
 }
 
 /// :130
@@ -103,10 +103,10 @@ fn installing_through_a_directory_alias_still_links_canonical_source() {
     let mut fx = Fixture::new();
     let alias = fx.root.join("repo-alias");
     symlink(&fx.source, &alias).unwrap();
-    fx.set_env("SKIMA_CONFIG", Some(&alias.join("skima.toml")));
+    fx.set_env("MAZO_CONFIG", Some(&alias.join("mazo.toml")));
     let elsewhere = fx.root.join("elsewhere");
     fs::create_dir(&elsewhere).unwrap();
-    fx.skima_in(&elsewhere, &["sync", "--agent", "pi"]).assert_ok();
+    fx.mazo_in(&elsewhere, &["sync", "--agent", "pi"]).assert_ok();
     for name in &fx.skills {
         assert_eq!(fs::read_link(fx.target.join(name)).unwrap(), fx.source.join(name));
     }
@@ -185,7 +185,7 @@ fn conflicts_preserve_foreign_entries_and_prevent_partial_install() {
             }
         }
         let inode = ino(&conflict);
-        let r = fx.skima(&["sync", "--agent", "pi"]);
+        let r = fx.mazo(&["sync", "--agent", "pi"]);
         assert_ne!(r.code(), 0, "{kind}");
         assert!(r.stderr().contains("preserved"), "{kind}: {}", r.stderr());
         assert_eq!(names(&fx.target), vec!["goal-smart".to_string()], "{kind}");
@@ -219,7 +219,7 @@ fn prunes_only_managed_dangling_links() {
         symlink(destination, fx.target.join(name)).unwrap();
     }
     fs::create_dir(fx.target.join("user-skill")).unwrap();
-    fx.skima(&["sync", "--agent", "pi"]).assert_ok();
+    fx.mazo(&["sync", "--agent", "pi"]).assert_ok();
     assert!(!exists(&fx.target.join("removed-goal")));
     assert!(!exists(&fx.agent.join("extensions/removed.ts")));
     for (name, destination) in &foreign {
@@ -241,7 +241,7 @@ fn missing_pi_extension_fails_before_writes() {
 fn target_obstruction_is_preserved() {
     let fx = Fixture::new();
     fs::write(&fx.agent, "keep").unwrap();
-    let r = fx.skima(&["sync", "--agent", "pi"]);
+    let r = fx.mazo(&["sync", "--agent", "pi"]);
     assert_ne!(r.code(), 0);
     assert!(r.stderr().contains("not a directory"), "{}", r.stderr());
     assert_eq!(fs::read_to_string(&fx.agent).unwrap(), "keep");
@@ -255,7 +255,7 @@ fn every_mode_preflights_new_skill_policy_before_any_write() {
     fs::remove_file(extra.join("agents/openai.yaml")).unwrap();
     for args in [&["sync"][..], &["sync", "--agent", "pi"]] {
         let before = fx.snapshot();
-        let r = fx.skima(args);
+        let r = fx.mazo(args);
         assert_ne!(r.code(), 0);
         assert!(r.stderr().contains("agents/openai.yaml"), "{args:?}: {}", r.stderr());
         assert!(!exists(&fx.agent));
@@ -272,7 +272,7 @@ fn all_harnesses_share_the_same_files_and_preserve_foreign_entries() {
     for t in &targets {
         fs::create_dir_all(t.join("foreign-skill")).unwrap();
     }
-    fx.skima(&["sync"]).assert_ok();
+    fx.mazo(&["sync"]).assert_ok();
     for name in &fx.skills {
         let source = fs::canonicalize(fx.source.join(name).join("SKILL.md")).unwrap();
         for t in &targets {
@@ -285,7 +285,7 @@ fn all_harnesses_share_the_same_files_and_preserve_foreign_entries() {
         targets.iter().map(|t| fx.skills.iter().map(|n| ino(&t.join(n))).collect()).collect()
     };
     let before = inodes(&fx);
-    let second = fx.skima(&["sync"]);
+    let second = fx.mazo(&["sync"]);
     second.assert_ok();
     assert_eq!(second.stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
     assert_eq!(inodes(&fx), before);
@@ -312,7 +312,7 @@ fn conflict_in_any_harness_aborts_all_destinations() {
         fx.set_env("HOME", Some(&home));
         fx.set_env("PI_CODING_AGENT_DIR", Some(&home.join("pi")));
         let before = snapshot(&[&home]);
-        let r = fx.skima(&["sync"]);
+        let r = fx.mazo(&["sync"]);
         assert_ne!(r.code(), 0, "{relative}");
         assert!(r.stderr().contains("conflicts with a canonical entry"), "{relative}: {}", r.stderr());
         assert_eq!(fs::read_to_string(&conflict).unwrap(), "preserve");
@@ -326,7 +326,7 @@ fn conflict_in_any_harness_aborts_all_destinations() {
 fn invalid_cli_arguments_make_no_directories() {
     let fx = Fixture::new();
     for args in [&["sync", "--unknown"][..], &["sync", "--agent", "pi", "extra"]] {
-        let r = fx.skima(args);
+        let r = fx.mazo(args);
         assert_ne!(r.code(), 0, "{args:?}");
         assert_eq!(r.code(), 2, "{args:?}: usage errors exit 2");
         assert!(r.stderr().contains("Usage:"), "{args:?}: {}", r.stderr());
@@ -335,7 +335,7 @@ fn invalid_cli_arguments_make_no_directories() {
 }
 
 fn assert_pi_synced(fx: &Fixture, value: &str) {
-    let r = fx.skima(&["sync", "--agent", "pi"]);
+    let r = fx.mazo(&["sync", "--agent", "pi"]);
     assert_eq!(r.code(), 0, "{value:?}: {}", r.stderr());
     assert_eq!(names(&fx.target), fx.skills, "{value:?}");
 }
@@ -374,7 +374,7 @@ fn invalid_file_urls_are_rejected_before_writes() {
         format!("file://localhost:80{}", s(&fx.agent)),
     ] {
         fx.set_env("PI_CODING_AGENT_DIR", Some(Path::new(&value)));
-        let r = fx.skima(&["sync", "--agent", "pi"]);
+        let r = fx.mazo(&["sync", "--agent", "pi"]);
         assert_ne!(r.code(), 0, "{value:?}");
         assert!(r.stderr().contains("ERROR: invalid PI_CODING_AGENT_DIR"), "{value:?}: {}", r.stderr());
         assert!(!exists(&fx.agent), "{value:?}");
@@ -415,7 +415,7 @@ fn option_like_paths_and_url_empty_segments_use_exact_fresh_targets() {
     for (value, expected) in cases {
         assert!(!exists(&expected), "{value:?}");
         fx.set_env("PI_CODING_AGENT_DIR", Some(Path::new(&value)));
-        let r = fx.skima(&["sync", "--agent", "pi"]);
+        let r = fx.mazo(&["sync", "--agent", "pi"]);
         assert_eq!(r.code(), 0, "{value:?}: {}", r.stderr());
         assert_eq!(names(&expected.join("skills")), fx.skills, "{value:?}");
         for name in &fx.skills {

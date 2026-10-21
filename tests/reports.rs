@@ -7,11 +7,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use common::{CLAUDE_FIRST, CODEX_FIRST, NOW, ago, copy_tree, event, git, report_repo, report_world, write};
+use mazo::inventory::{self, Inventory};
+use mazo::ledger::{Actor, Agent, Channel, Event, Origin};
+use mazo::report::{self, Since, UsageArgs};
+use mazo::{evals, render};
 use serde_json::Value;
-use skima::inventory::{self, Inventory};
-use skima::ledger::{Actor, Agent, Channel, Event, Origin};
-use skima::report::{self, Since, UsageArgs};
-use skima::{evals, render};
 
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
                       +N commits since the grade; +wip uncommitted changes since the grade";
@@ -61,11 +61,11 @@ fn fan_in_on_the_fixture_tree_matches_each_rule() {
     );
 }
 
-/// Only with `SKIMA_TEST_SKILLS`: invariants that hold on any skills repository.
+/// Only with `MAZO_TEST_SKILLS`: invariants that hold on any skills repository.
 #[test]
 fn fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
     let Some(src) = common::test_skills_env() else {
-        eprintln!("fan_in real repo: SKIPPED (SKIMA_TEST_SKILLS unset)");
+        eprintln!("fan_in real repo: SKIPPED (MAZO_TEST_SKILLS unset)");
         return;
     };
     let skills = inventory::canonical_skills(&src).unwrap();

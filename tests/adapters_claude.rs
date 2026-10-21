@@ -7,13 +7,13 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use skima::adapters::claude::{self, Claude};
-use skima::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
-use skima::classify::{Classifier, Roots};
-use skima::config::{Config, Home};
-use skima::inventory::Inventory;
-use skima::ledger::{Actor, Agent, Channel, Ledger, Origin};
-use skima::tail::Cursor;
+use mazo::adapters::claude::{self, Claude};
+use mazo::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
+use mazo::classify::{Classifier, Roots};
+use mazo::config::{Config, Home};
+use mazo::inventory::Inventory;
+use mazo::ledger::{Actor, Agent, Channel, Ledger, Origin};
+use mazo::tail::Cursor;
 
 const HOME_SKILLS: &str = "/home/nicolas/.claude/skills";
 
@@ -246,7 +246,7 @@ fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
     let mut ledger = Ledger::load(dir.path()).unwrap();
     let stored = ledger.admit(event(first.raws[0].clone())).unwrap();
     let upgrade = ledger.admit(event(second.raws[0].clone())).unwrap();
-    assert_eq!(upgrade, skima::ledger::Event { path: unslop_pair().path, ..stored });
+    assert_eq!(upgrade, mazo::ledger::Event { path: unslop_pair().path, ..stored });
 
     // A fresh scan of the whole file stores the same event.
     let (fresh, _) = parse_from(&p, None);
@@ -328,7 +328,7 @@ fn bench_and_probe_entrypoints_pass_through_to_a_probe_actor() {
     assert_eq!(probe.len(), 1);
     assert_eq!(probe[0].session.actor.entrypoint.as_deref(), Some("probe"));
     for r in [b, &probe[0]] {
-        assert_eq!(skima::classify::actor(Agent::Claude, &r.session.actor), Actor::Probe);
+        assert_eq!(mazo::classify::actor(Agent::Claude, &r.session.actor), Actor::Probe);
     }
 }
 
@@ -447,7 +447,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
         worktree: None,
         history: None,
     };
-    let first = skima::scan::scan(&cfg, &inv, &data, false).unwrap();
+    let first = mazo::scan::scan(&cfg, &inv, &data, false).unwrap();
     // No transcript exists here, so line 1 counts too.
     assert_eq!(first.homes["claude"].new_events.len(), 3);
     let ledger = Ledger::load(&data).unwrap();
@@ -464,7 +464,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
 
     let mut h = std::fs::OpenOptions::new().append(true).open(claude_home.join("history.jsonl")).unwrap();
     writeln!(h, r#"{{"display":"/grade","pastedContents":{{}},"timestamp":1791921825029,"project":"/x","sessionId":"00000000-0000-0000-0000-000000000000"}}"#).unwrap();
-    let second = skima::scan::scan(&cfg, &inv, &data, false).unwrap();
+    let second = mazo::scan::scan(&cfg, &inv, &data, false).unwrap();
     assert_eq!(second.homes["claude"].new_events.len(), 0);
 }
 
@@ -520,7 +520,7 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
         judge: Default::default(),
     };
     let data = root.join("data");
-    skima::scan::scan(&cfg, &inv, &data, false).unwrap();
+    mazo::scan::scan(&cfg, &inv, &data, false).unwrap();
     let got: Vec<(String, Channel, Option<String>, bool)> = Ledger::load(&data)
         .unwrap()
         .events()

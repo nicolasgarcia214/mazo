@@ -1,4 +1,4 @@
-//! skima: skill usage from agent transcripts, and sync of skill links.
+//! mazo: skill usage from agent transcripts, and sync of skill links.
 //!
 //! Four paths: write `tail → adapters → classify → ledger`, read
 //! `ledger + inventory + evals → report`, sync `config + inventory + policy → links`,

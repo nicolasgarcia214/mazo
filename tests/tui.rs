@@ -1,4 +1,4 @@
-//! The TUI of bare `skima`: its views rendered into ratatui's `TestBackend`
+//! The TUI of bare `mazo`: its views rendered into ratatui's `TestBackend`
 //! from the golden fixture, and the binary opening and quitting it on a
 //! pseudo-terminal.
 
@@ -10,10 +10,10 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 
 use common::golden::Golden;
-use skima::ledger::{Agent, Channel};
-use skima::render::{self, Colour};
-use skima::report::{self, Input, Since, UsageArgs};
-use skima::tui::{App, Screen};
+use mazo::ledger::{Agent, Channel};
+use mazo::render::{self, Colour};
+use mazo::report::{self, Input, Since, UsageArgs};
+use mazo::tui::{App, Screen};
 
 /// The screen of `app` at `width`×`height`: each row's text and the
 /// foreground colour of each of its cells.
@@ -241,29 +241,29 @@ fn q_and_ctrl_c_quit() {
 }
 
 /// A source with one skill and one Claude home never scanned.
-fn binary() -> (tempfile::TempDir, common::Skima) {
+fn binary() -> (tempfile::TempDir, common::Mazo) {
     let temp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(temp.path()).unwrap();
     let (home, source) = (root.join("home"), root.join("skills"));
     common::write(&source.join("idle/SKILL.md"), "---\nname: idle\ndescription: Idle.\n---\n");
     common::write(
-        &source.join("skima.toml"),
+        &source.join("mazo.toml"),
         "source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\n",
     );
     common::write(&home.join(".claude/settings.json"), "{}\n");
-    let skima = common::Skima::new(&home, &home, &source.join("skima.toml"), &home.join("data"));
-    (temp, skima)
+    let mazo = common::Mazo::new(&home, &home, &source.join("mazo.toml"), &home.join("data"));
+    (temp, mazo)
 }
 
 #[test]
-fn bare_skima_off_a_terminal_prints_help_and_exits_2() {
-    let (_temp, skima) = binary();
-    let out = skima.output(&[]);
+fn bare_mazo_off_a_terminal_prints_help_and_exits_2() {
+    let (_temp, mazo) = binary();
+    let out = mazo.output(&[]);
     assert_eq!(out.status.code(), Some(2));
-    assert!(common::stderr(&out).contains("Usage: skima <COMMAND>"), "{}", common::stderr(&out));
+    assert!(common::stderr(&out).contains("Usage: mazo <COMMAND>"), "{}", common::stderr(&out));
 }
 
-/// Bare `skima` under `script` on an 80×24 pseudo-terminal: once the screen
+/// Bare `mazo` under `script` on an 80×24 pseudo-terminal: once the screen
 /// opens, `byte` is written to it. The exit code and everything it printed.
 #[cfg(target_os = "linux")]
 fn on_a_pty(byte: u8) -> Option<(Option<i32>, Vec<u8>)> {
@@ -276,10 +276,10 @@ fn on_a_pty(byte: u8) -> Option<(Option<i32>, Vec<u8>)> {
         eprintln!("skipped: no `script`");
         return None;
     }
-    let (_temp, mut skima) = binary();
-    skima.set("SHELL", Some("/bin/sh".as_ref()));
-    let command = format!("stty rows 24 cols 80 && exec '{}'", env!("CARGO_BIN_EXE_skima"));
-    let mut child = skima
+    let (_temp, mut mazo) = binary();
+    mazo.set("SHELL", Some("/bin/sh".as_ref()));
+    let command = format!("stty rows 24 cols 80 && exec '{}'", env!("CARGO_BIN_EXE_mazo"));
+    let mut child = mazo
         .wrap("script")
         .args(["-qec", &command, "/dev/null"])
         .stdin(Stdio::piped())
@@ -319,7 +319,7 @@ fn on_a_pty(byte: u8) -> Option<(Option<i32>, Vec<u8>)> {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn bare_skima_on_a_terminal_quits_on_q_and_ctrl_c_and_restores_the_terminal() {
+fn bare_mazo_on_a_terminal_quits_on_q_and_ctrl_c_and_restores_the_terminal() {
     for byte in [b'q', 0x03] {
         let Some((code, out)) = on_a_pty(byte) else { return };
         assert_eq!(code, Some(0), "{byte:#x}: {}", String::from_utf8_lossy(&out));

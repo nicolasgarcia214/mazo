@@ -1,4 +1,4 @@
-//! The config with its `[policy]` table: discovery, `skima init`, and path expansion,
+//! The config with its `[policy]` table: discovery, `mazo init`, and path expansion,
 //! including the Pi directory normalisation that `install.sh` did in Node.
 
 use std::collections::BTreeMap;
@@ -108,17 +108,17 @@ struct RawHome {
     links: BTreeMap<String, String>,
 }
 
-/// `$SKIMA_CONFIG`, else `$XDG_CONFIG_HOME/skima/config.toml` with
+/// `$MAZO_CONFIG`, else `$XDG_CONFIG_HOME/mazo/config.toml` with
 /// `XDG_CONFIG_HOME` defaulting to `~/.config`. Nothing else.
 pub fn path() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("SKIMA_CONFIG").filter(|v| !v.is_empty()) {
+    if let Some(p) = std::env::var_os("MAZO_CONFIG").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(p));
     }
     let dir = match std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         Some(d) => PathBuf::from(d),
         None => PathBuf::from(home_dir()?).join(".config"),
     };
-    Ok(dir.join("skima/config.toml"))
+    Ok(dir.join("mazo/config.toml"))
 }
 
 /// The config at `path`, or `None` when no file is there.
@@ -144,7 +144,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
             return Err(Error::Usage(format!("{}: two homes are named {:?}", path.display(), h.name)));
         }
         // A relative `path` is relative to this file, like `source`; Pi
-        // resolves its own variable against the cwd, so skima does too.
+        // resolves its own variable against the cwd, so mazo does too.
         let path = match (h.agent, std::env::var("PI_CODING_AGENT_DIR").ok().filter(|v| !v.is_empty())) {
             (Agent::Pi, Some(env)) => {
                 let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
@@ -158,7 +158,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     Ok(Some(Config { source, loose: raw.loose, homes, policy: raw.policy, judge: raw.judge }))
 }
 
-/// `skima init`: a config at `path` naming `source` absolutely, a
+/// `mazo init`: a config at `path` naming `source` absolutely, a
 /// home for each agent directory under `~` that exists, and every rule off.
 /// Refuses to overwrite.
 pub fn init(path: &Path, source: &Path) -> Result<()> {

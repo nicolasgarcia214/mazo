@@ -8,13 +8,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{NOW, Skima, World, ago, copy_tree, event, git, skill_record, stderr, stdout, write};
+use common::{Mazo, NOW, World, ago, copy_tree, event, git, skill_record, stderr, stdout, write};
 use jiff::tz::TimeZone;
+use mazo::html;
+use mazo::ledger::{Actor, Agent, Channel, Event, Origin};
+use mazo::report::{self, Since, UsageArgs};
 use regex::Regex;
 use serde_json::Value;
-use skima::html;
-use skima::ledger::{Actor, Agent, Channel, Event, Origin};
-use skima::report::{self, Since, UsageArgs};
 
 /// The report fixture skills, committed, with a current grade for unslop and
 /// a grade for goal-plan that a later commit made stale.
@@ -222,7 +222,7 @@ impl Bin {
         let temp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(temp.path()).unwrap();
         write(
-            &root.join("skills/skima.toml"),
+            &root.join("skills/mazo.toml"),
             "source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\n",
         );
         write(&root.join("skills/unslop/SKILL.md"), "---\nname: unslop\ndescription: U.\n---\n");
@@ -231,12 +231,12 @@ impl Bin {
         Bin { _temp: temp, root }
     }
 
-    fn run(&self) -> Skima {
+    fn run(&self) -> Mazo {
         let root = &self.root;
-        Skima::new(root, &root.join("home"), &root.join("skills/skima.toml"), &root.join("data"))
+        Mazo::new(root, &root.join("home"), &root.join("skills/mazo.toml"), &root.join("data"))
     }
 
-    fn skima(&self, args: &[&str]) -> Output {
+    fn mazo(&self, args: &[&str]) -> Output {
         self.run().output(args)
     }
 }
@@ -250,11 +250,11 @@ fn mode(path: &Path) -> u32 {
 #[test]
 fn report_writes_the_data_dir_file_with_mode_0600() {
     let b = Bin::new();
-    let file = b.root.join("data/skima/report.html");
+    let file = b.root.join("data/mazo/report.html");
     write(&file, "old report\n");
     fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
 
-    let out = b.skima(&["report"]);
+    let out = b.mazo(&["report"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), format!("wrote {}\n", file.display()));
     assert_eq!(mode(&file), 0o600);
@@ -271,7 +271,7 @@ fn out_warns_in_a_worktree_and_open_runs_the_opener() {
     let b = Bin::new();
     git(&b.root.join("skills"), &["init", "-q"], NOW);
     let inside = b.root.join("skills/out/report.html");
-    let out = b.skima(&["report", "--out", inside.to_str().unwrap()]);
+    let out = b.mazo(&["report", "--out", inside.to_str().unwrap()]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stderr(&out).contains("is inside a git worktree"));
     assert_eq!(mode(&inside), 0o600);
@@ -282,9 +282,9 @@ fn out_warns_in_a_worktree_and_open_runs_the_opener() {
         write(&stub, &format!("#!/bin/sh\necho \"{opener} $@\" > '{}'\n", log.display()));
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    // Relative to skima's cwd; the opener gets the absolute path.
+    // Relative to mazo's cwd; the opener gets the absolute path.
     let outside = b.root.join("elsewhere/report.html");
-    let out = b.skima(&["report", "--out", "elsewhere/report.html", "--open"]);
+    let out = b.mazo(&["report", "--out", "elsewhere/report.html", "--open"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!stderr(&out).contains("git worktree"));
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -303,11 +303,11 @@ fn times_are_local_under_a_fixed_zone() {
     let local = ts.to_zoned(jst).date();
     let mut e = event("t1", "unslop", Channel::Slash, "s-t1", &ago(0));
     e.ts = ts.to_string();
-    write(&b.root.join("data/skima/events.jsonl"), &format!("{}\n", serde_json::to_string(&e).unwrap()));
+    write(&b.root.join("data/mazo/events.jsonl"), &format!("{}\n", serde_json::to_string(&e).unwrap()));
 
     let out = b.run().command(&[("TZ", "JST-9".as_ref())], &["report"]).output().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    let page = fs::read_to_string(b.root.join("data/skima/report.html")).unwrap();
+    let page = fs::read_to_string(b.root.join("data/mazo/report.html")).unwrap();
     assert!(page.contains(&format!("<td>{local} 05:30</td>")), "event time: {page}");
     assert!(!page.contains(&format!("{utc_day} 20:30")), "no UTC time");
     assert!(page.contains(&format!("<td>{local}</td>")), "usage last");
@@ -331,7 +331,7 @@ fn the_latest_audit_is_in_the_usage_table_and_the_card() {
         + &skill_record("Good on <short> texts & \"notes\"", latest);
     write(&data.path().join("audits.jsonl"), &audits);
     let mut w = world(repo.path());
-    w.audits = skima::audit::latest(data.path()).unwrap();
+    w.audits = mazo::audit::latest(data.path()).unwrap();
     let page = page(&w, &events());
 
     let verdict = "Good on &lt;short&gt; texts &amp; &quot;notes&quot;";

@@ -8,13 +8,13 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use skima::adapters::codex::{self, Codex};
-use skima::adapters::{Adapter, Key, Parent, Parsed, Raw, SkillRoots};
-use skima::classify::Roots;
-use skima::config::{Config, Home};
-use skima::inventory::Inventory;
-use skima::ledger::{Actor, Agent, Channel, Event, Ledger};
-use skima::tail;
+use mazo::adapters::codex::{self, Codex};
+use mazo::adapters::{Adapter, Key, Parent, Parsed, Raw, SkillRoots};
+use mazo::classify::Roots;
+use mazo::config::{Config, Home};
+use mazo::inventory::Inventory;
+use mazo::ledger::{Actor, Agent, Channel, Event, Ledger};
+use mazo::tail;
 
 const SOURCE: &str = "/home/nicolas/dotfiles/skills";
 const CODEX_SKILLS: &str = "/home/nicolas/.codex/skills";
@@ -200,7 +200,7 @@ impl ForkMachine {
     }
 
     fn scan(&self, data: &Path) -> Vec<Event> {
-        skima::scan::scan(&self.cfg, &self.inv, data, false).unwrap();
+        mazo::scan::scan(&self.cfg, &self.inv, data, false).unwrap();
         Ledger::load(data).unwrap().events().to_vec()
     }
 }
@@ -297,7 +297,7 @@ fn unreadable_skill_commands_are_counted_unparsed() {
     assert!(p.unparsed[0].contains("$HOME") && p.unparsed[1].contains("${p}"));
 }
 
-/// The golden id. The hash was computed once, outside skima, with
+/// The golden id. The hash was computed once, outside mazo, with
 /// `hashlib.sha1(json.dumps(payload, sort_keys=True, separators=(",", ":"),
 /// ensure_ascii=False).encode()).hexdigest()` in Python 3; the serialisations
 /// agree on this payload (shortest round-trip floats, integers above 2^53

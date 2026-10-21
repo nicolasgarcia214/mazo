@@ -1,5 +1,5 @@
 [package]
-name = "skima"
+name = "mazo"
 version = "0.1.0"
 edition = "2024"
 description = "Personal skill manager: usage from agent transcripts, sync of skill links"
@@ -10,7 +10,7 @@ publish = false
 path = "src/lib.rs"
 
 [[bin]]
-name = "skima"
+name = "mazo"
 path = "src/main.rs"
 
 [dependencies]

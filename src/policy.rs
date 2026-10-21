@@ -138,7 +138,7 @@ pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff:
         if stale {
             let when = last.map_or("never".to_string(), |t| t.strftime("%Y-%m-%d").to_string());
             out.push(format!(
-                "warning: {}: last scanned {when}; Claude deletes transcripts after {days} days. Run `skima scan`.",
+                "warning: {}: last scanned {when}; Claude deletes transcripts after {days} days. Run `mazo scan`.",
                 home.name
             ));
         }

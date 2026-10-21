@@ -75,7 +75,7 @@ impl Backend for Claude {
     /// A call that ran but reported no cost is counted at its cap, the most it
     /// could have spent short of one turn's overshoot, so the budget still
     /// binds. An `api_error` or output that is no JSON stops the run at the
-    /// reported cost or $0, and a signal skima did not send stops it at the cap.
+    /// reported cost or $0, and a signal mazo did not send stops it at the cap.
     fn reply(&self, out: &Output, _written: Option<Vec<u8>>, cap: Option<u64>) -> Result<Reply> {
         let cap = cap.unwrap_or_default();
         if out.status.signal().is_some() {

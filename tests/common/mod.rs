@@ -15,13 +15,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use skima::adapters::{Adapter, Parsed, SkillRoots};
-use skima::audit::SkillRecord;
-use skima::config::{Config, Home};
-use skima::inventory::Inventory;
-use skima::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
-use skima::report::Input;
-use skima::tail::{self, Chunk, Cursor, Prefilter};
+use mazo::adapters::{Adapter, Parsed, SkillRoots};
+use mazo::audit::SkillRecord;
+use mazo::config::{Config, Home};
+use mazo::inventory::Inventory;
+use mazo::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
+use mazo::report::Input;
+use mazo::tail::{self, Chunk, Cursor, Prefilter};
 
 /// The fixed "now" of report tests.
 pub const NOW: &str = "2026-10-13T12:00:00Z";
@@ -145,39 +145,39 @@ pub fn skill_record(verdict: &str, at: &str) -> String {
     format!("{record}\n")
 }
 
-/// The `skima` binary run in `cwd` with a private `HOME`, `SKIMA_CONFIG` and
+/// The `mazo` binary run in `cwd` with a private `HOME`, `MAZO_CONFIG` and
 /// `XDG_DATA_HOME`, and `<cwd>/bin` ahead of `PATH` for the stub agents, git
 /// and openers a test writes there. `env` maps each variable to its value;
 /// `None` removes it.
-pub struct Skima {
+pub struct Mazo {
     pub cwd: PathBuf,
     pub env: BTreeMap<String, Option<OsString>>,
 }
 
-impl Skima {
-    pub fn new(cwd: &Path, home: &Path, config: &Path, data: &Path) -> Skima {
+impl Mazo {
+    pub fn new(cwd: &Path, home: &Path, config: &Path, data: &Path) -> Mazo {
         let inherited = std::env::var_os("PATH").unwrap_or_default();
         let path =
             std::env::join_paths(std::iter::once(cwd.join("bin")).chain(std::env::split_paths(&inherited))).unwrap();
         let vars: [(&str, OsString); 4] =
-            [("HOME", home.into()), ("SKIMA_CONFIG", config.into()), ("XDG_DATA_HOME", data.into()), ("PATH", path)];
-        Skima { cwd: cwd.into(), env: vars.into_iter().map(|(k, v)| (k.into(), Some(v))).collect() }
+            [("HOME", home.into()), ("MAZO_CONFIG", config.into()), ("XDG_DATA_HOME", data.into()), ("PATH", path)];
+        Mazo { cwd: cwd.into(), env: vars.into_iter().map(|(k, v)| (k.into(), Some(v))).collect() }
     }
 
     /// Sets `key` for every later run, or removes it when `value` is `None`.
-    pub fn set(&mut self, key: &str, value: Option<&OsStr>) -> &mut Skima {
+    pub fn set(&mut self, key: &str, value: Option<&OsStr>) -> &mut Mazo {
         self.env.insert(key.into(), value.map(OsString::from));
         self
     }
 
-    /// `skima args…` with `env` set on top of [`Skima::env`] for this run only.
+    /// `mazo args…` with `env` set on top of [`Mazo::env`] for this run only.
     pub fn command(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Command {
-        let mut cmd = self.wrap(env!("CARGO_BIN_EXE_skima"));
+        let mut cmd = self.wrap(env!("CARGO_BIN_EXE_mazo"));
         cmd.args(args).envs(env.iter().copied());
         cmd
     }
 
-    /// `program` run as the binary is: in [`Skima::cwd`] with [`Skima::env`].
+    /// `program` run as the binary is: in [`Mazo::cwd`] with [`Mazo::env`].
     pub fn wrap(&self, program: impl AsRef<OsStr>) -> Command {
         let mut cmd = Command::new(program);
         cmd.current_dir(&self.cwd);
@@ -208,12 +208,12 @@ pub fn fixture(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(rel)
 }
 
-/// A real skills repository, named by `SKIMA_TEST_SKILLS`.
+/// A real skills repository, named by `MAZO_TEST_SKILLS`.
 pub fn test_skills_env() -> Option<PathBuf> {
-    std::env::var_os("SKIMA_TEST_SKILLS").filter(|v| !v.is_empty()).map(PathBuf::from)
+    std::env::var_os("MAZO_TEST_SKILLS").filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-/// The skills directory under test: `SKIMA_TEST_SKILLS`, or the synthetic
+/// The skills directory under test: `MAZO_TEST_SKILLS`, or the synthetic
 /// `tests/fixtures/skills` tree.
 pub fn real_skills() -> PathBuf {
     test_skills_env().unwrap_or_else(|| fixture("skills"))
@@ -345,8 +345,8 @@ impl Chain {
 
     /// Scans, or reparses, and returns the ledger.
     pub fn scan(&self, reparse: bool) -> Vec<Event> {
-        skima::scan::scan(&self.world.cfg, &self.world.inv, &self.data, reparse).unwrap();
-        skima::ledger::Ledger::load(&self.data).unwrap().events().to_vec()
+        mazo::scan::scan(&self.world.cfg, &self.world.inv, &self.data, reparse).unwrap();
+        mazo::ledger::Ledger::load(&self.data).unwrap().events().to_vec()
     }
 
     /// The `(id, session)` of every event read from the child's transcript.

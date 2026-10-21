@@ -1,5 +1,5 @@
 //! Shared fixture for `tests/sync_port.rs`, `tests/sync.rs` and `tests/lifecycle.rs`:
-//! a temporary skills source with a `skima.toml` turning every `[policy]` rule on
+//! a temporary skills source with a `mazo.toml` turning every `[policy]` rule on
 //! and listing four `~`-relative homes, a temporary `HOME`, a Pi directory, and
 //! a private `XDG_DATA_HOME`.
 
@@ -9,11 +9,11 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use super::{Skima, real_skills};
+use super::{Mazo, real_skills};
 
 pub const PI_EXTENSION: &str = "pi-explicit-skills.ts";
 
-const SKIMA_TOML: &str = r#"source = "."
+const MAZO_TOML: &str = r#"source = "."
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
 
 [policy]
@@ -68,7 +68,7 @@ pub struct Fixture {
     pub data: PathBuf,
     pub skills: Vec<String>,
     overrides: Vec<String>,
-    run: Skima,
+    run: Mazo,
 }
 
 impl Fixture {
@@ -78,13 +78,13 @@ impl Fixture {
         let root = fs::canonicalize(temp.path()).unwrap();
         let source = root.join("repo with spaces").join("skills");
         fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("skima.toml"), SKIMA_TOML).unwrap();
+        fs::write(source.join("mazo.toml"), MAZO_TOML).unwrap();
         fs::copy(real_skills().join(PI_EXTENSION), source.join(PI_EXTENSION)).unwrap();
         let agent = root.join("pi agent");
         let home = root.join("home");
         fs::create_dir(&home).unwrap();
         let data = root.join("xdg data");
-        let mut run = Skima::new(&root, &home, &source.join("skima.toml"), &data);
+        let mut run = Mazo::new(&root, &home, &source.join("mazo.toml"), &data);
         run.set("PI_CODING_AGENT_DIR", Some(agent.as_os_str())).set("PI_CODING_AGENT_SESSION_DIR", None);
         let mut fx = Fixture {
             target: agent.join("skills"),
@@ -141,18 +141,18 @@ impl Fixture {
         self.run.set(key, value.map(Path::as_os_str));
     }
 
-    pub fn skima(&self, args: &[&str]) -> Run {
-        self.skima_in(&self.root, args)
+    pub fn mazo(&self, args: &[&str]) -> Run {
+        self.mazo_in(&self.root, args)
     }
 
-    pub fn skima_in(&self, cwd: &Path, args: &[&str]) -> Run {
+    pub fn mazo_in(&self, cwd: &Path, args: &[&str]) -> Run {
         Run(self.run.command(&[], args).current_dir(cwd).output().unwrap())
     }
 
-    /// `skima sync --agent pi` must fail with an `ERROR:` before creating the
+    /// `mazo sync --agent pi` must fail with an `ERROR:` before creating the
     /// Pi directory (test_install.py:59-63).
     pub fn assert_rejected_before_writes(&self) {
-        let r = self.skima(&["sync", "--agent", "pi"]);
+        let r = self.mazo(&["sync", "--agent", "pi"]);
         assert_ne!(r.code(), 0, "{}", r.stdout());
         assert!(r.stderr().contains("ERROR:"), "{}", r.stderr());
         assert!(!exists(&self.agent), "{}", r.stdout());
