@@ -252,7 +252,7 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 /// Write to `<path>.new`, fsync it, then rename over `path`, so a crash
 /// leaves either the old or the new file, never a truncated one.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".new");
     let tmp = PathBuf::from(tmp);

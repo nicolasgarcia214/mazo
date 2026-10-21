@@ -1727,3 +1727,17 @@ fn a_judge_failure_under_subscription_names_api_billing() {
         assert_eq!(err.matches("hint:").count(), usize::from(billing == "subscription"), "{err}");
     }
 }
+
+#[test]
+fn a_store_skill_is_judged_from_the_store() {
+    let fx = Fixture::new(CLAUDE, three_agents);
+    let store = fx.data().join("store/unslop");
+    fs::create_dir_all(store.parent().unwrap()).unwrap();
+    fs::rename(fx.root.join("skills/unslop"), &store).unwrap();
+    fs::write(store.join("SKILL.md"), "---\nname: unslop\ndescription: From the store.\n---\n").unwrap();
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let calls = fx.calls();
+    assert_eq!(calls.len(), 4, "three sessions, then the skill report");
+    assert!(calls.iter().all(|c| c.stdin.contains("From the store.")), "every stage reads the store's SKILL.md");
+}

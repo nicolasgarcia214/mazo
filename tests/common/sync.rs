@@ -113,9 +113,14 @@ impl Fixture {
         )
         .unwrap();
         fs::write(skill.join("agents/openai.yaml"), "policy:\n  allow_implicit_invocation: false\n").unwrap();
+        self.allow(name);
+        skill
+    }
+
+    /// Sets `name` to `"name-only"` in both Claude homes' settings.
+    pub fn allow(&mut self, name: &str) {
         self.overrides.push(name.to_string());
         self.write_settings(&self.home.clone());
-        skill
     }
 
     /// The valid settings text: every added skill is `"name-only"`.

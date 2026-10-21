@@ -11,7 +11,7 @@ use crate::history::History;
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
     pub source: PathBuf,
-    /// The directories skills are read from; today only the source.
+    /// The directories skills are read from: the source, then the store.
     pub roots: Vec<PathBuf>,
     /// Non-hidden child directories of a root that contain `SKILL.md`.
     pub skills: BTreeSet<String>,
@@ -34,6 +34,10 @@ impl Inventory {
     pub fn load_roots(source: &Path, roots: &[&Path]) -> Result<Inventory> {
         let mut origins: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
         for root in roots {
+            // The store does not exist before the first `add`.
+            if *root != source && !root.exists() {
+                continue;
+            }
             for name in canonical_skills(root)? {
                 origins.entry(name).or_default().push(root.to_path_buf());
             }
@@ -45,6 +49,11 @@ impl Inventory {
         known.extend(history.iter().flat_map(History::skill_names));
         let roots = roots.iter().map(|r| r.to_path_buf()).collect();
         Ok(Inventory { source: source.to_path_buf(), roots, skills, origins, known, worktree, history })
+    }
+
+    /// The root a skill is read from; the source for a name in no root.
+    pub fn root(&self, name: &str) -> &Path {
+        self.origins.get(name).and_then(|r| r.first()).unwrap_or(&self.source)
     }
 }
 

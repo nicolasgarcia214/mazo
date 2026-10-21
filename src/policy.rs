@@ -18,7 +18,7 @@ pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
     inv.skills
         .iter()
         .filter_map(|name| {
-            let dir = cfg.source.join(name);
+            let dir = inv.root(name).join(name);
             check_skill(&cfg.policy, &dir, name).err().map(|e| format!("ERROR: {}: {e}", dir.display()))
         })
         .collect()

@@ -689,7 +689,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         })
         .collect();
 
-    let path = inv.source.join(skill);
+    let path = inv.root(skill).join(skill);
     let description = std::fs::read_to_string(path.join("SKILL.md"))
         .ok()
         .and_then(|text| yaml::frontmatter(&text).ok())
