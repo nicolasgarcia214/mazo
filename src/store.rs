@@ -1,5 +1,6 @@
 //! The store of installed third-party skills, `<data dir>/store/`, and its
-//! lockfile `<data dir>/mazo.lock`: `mazo add`.
+//! lockfile `<data dir>/mazo.lock`: `mazo add`, and the entry `mazo retire`
+//! drops.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,13 @@ impl Lock {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Lock::default()),
             Err(e) => Err(format!("{}: {e}", path.display()).into()),
         }
+    }
+
+    /// Drops `name`'s entry from the lockfile under `data`, if it has one.
+    pub fn remove(data: &Path, name: &str) -> Result<()> {
+        let mut lock = Lock::load(data)?;
+        lock.skills.retain(|s| s.name != name);
+        lock.save(data)
     }
 
     fn save(&self, data: &Path) -> Result<()> {

@@ -10,7 +10,7 @@ use crate::config::{Config, Home};
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent, Ledger};
 use crate::{Error, Result};
-use crate::{links, policy, report, scan, yaml};
+use crate::{links, policy, report, scan, store, yaml};
 
 /// `mazo new <name> --description <text>`: writes
 /// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
@@ -236,16 +236,18 @@ const RETIRE_DAYS: u32 = 30;
 
 /// `mazo retire <name> [--force]`: scans first, refuses a held, named or
 /// recently used skill unless `force`, and refuses any conflict or policy error
-/// in the sync plan as if the skill were archived, all before any write. Then
-/// moves `<source>/<name>` to `<source>/.archive/<name>` (`git mv` when tracked)
-/// and applies that plan. Never commits.
+/// in the sync plan as if the skill were gone, all before any write. Then
+/// moves a source skill `<source>/<name>` to `<source>/.archive/<name>` (`git
+/// mv` when tracked) and applies that plan; or, for a store skill, applies
+/// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never commits.
 pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<ExitCode> {
-    // A store skill is not the source's to archive.
-    if !inv.skills.contains(name) || inv.root(name) != cfg.source {
-        return Err(Error::Usage(format!("{name} is not a canonical skill in {}", cfg.source.display())));
+    if !inv.skills.contains(name) {
+        return Err(Error::Usage(format!("{name} is not a canonical skill")));
     }
+    let from = inv.root(name).join(name);
+    let in_source = inv.root(name) == cfg.source;
     let to = cfg.source.join(".archive").join(name);
-    if to.symlink_metadata().is_ok() {
+    if in_source && to.symlink_metadata().is_ok() {
         return Err(format!("retire refused: {} already exists", to.display()).into());
     }
     let data = ledger::data_dir()?;
@@ -265,7 +267,8 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
             return Err("retire refused; pass --force to retire it anyway".into());
         }
     }
-    let from = cfg.source.join(name);
+    // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
+    let _lock = if in_source { None } else { Some(ledger::lock(&data)?) };
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
@@ -279,16 +282,29 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
         return Ok(ExitCode::from(1));
     }
 
-    let archive = cfg.source.join(".archive");
-    std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
-    if git(&cfg.source, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
-        git(&cfg.source, &["mv", "--", name, &format!(".archive/{name}")]).ok_or(format!("git mv {name} failed"))?;
+    if in_source {
+        let archive = cfg.source.join(".archive");
+        std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+        if git(&cfg.source, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
+            git(&cfg.source, &["mv", "--", name, &format!(".archive/{name}")])
+                .ok_or(format!("git mv {name} failed"))?;
+        } else {
+            std::fs::rename(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+        }
+        println!("archived  {} -> {}", from.display(), to.display());
+        for line in links::apply(&plan)? {
+            println!("{line}");
+        }
     } else {
-        std::fs::rename(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
-    }
-    println!("archived  {} -> {}", from.display(), to.display());
-    for line in links::apply(&plan)? {
-        println!("{line}");
+        // Links first, then the lock entry, then the directory: a failure
+        // leaves at worst an unrecorded store skill, never an entry for a
+        // missing one.
+        for line in links::apply(&plan)? {
+            println!("{line}");
+        }
+        store::Lock::remove(&data, name)?;
+        std::fs::remove_dir_all(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+        println!("removed   {}", from.display());
     }
     if cfg.policy.claude_name_only {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
