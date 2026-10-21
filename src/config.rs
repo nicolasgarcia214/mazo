@@ -43,7 +43,8 @@ pub struct Judge {
 
 impl Judge {
     /// Why the table is invalid: `command` without an `argv`, `http` without
-    /// a `url` or a `model`, or another agent's fields.
+    /// a `url` or a `model` or with a blank `api_key_env`, or another agent's
+    /// fields.
     fn check(&self) -> std::result::Result<(), &'static str> {
         let (command, http) = (self.agent == JudgeAgent::Command, self.agent == JudgeAgent::Http);
         let blank = |v: &Option<String>| v.as_deref().is_none_or(str::is_empty);
@@ -53,6 +54,8 @@ impl Judge {
             Err("[judge] argv is for agent = \"command\" only")
         } else if http && (blank(&self.url) || blank(&self.model)) {
             Err("[judge] agent = \"http\" needs a url and a model")
+        } else if http && self.api_key_env.as_deref() == Some("") {
+            Err("[judge] api_key_env must name a variable")
         } else if !http && (self.url.is_some() || self.api_key_env.is_some()) {
             Err("[judge] url and api_key_env are for agent = \"http\" only")
         } else {
@@ -464,6 +467,8 @@ mod tests {
         ] {
             assert!(usage(table).ends_with("[judge] agent = \"http\" needs a url and a model"), "{table:?}");
         }
+        let blank = usage("[judge]\nagent = \"http\"\nurl = \"u\"\nmodel = \"m\"\napi_key_env = \"\"\n");
+        assert!(blank.ends_with("[judge] api_key_env must name a variable"), "{blank}");
         for table in [
             "[judge]\nurl = \"u\"\n",
             "[judge]\nagent = \"codex\"\napi_key_env = \"K\"\n",

@@ -247,6 +247,9 @@ struct Fixture {
     root: PathBuf,
 }
 
+/// The proxy variables ureq reads, each also read in lowercase.
+const PROXIES: [&str; 4] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
+
 /// The `[judge]` table of a Claude judge.
 const CLAUDE: &str = "[judge]\nagent = \"claude\"\n";
 
@@ -408,10 +411,15 @@ sed 's/\\\{{0,1\}}"LINE\\\{{0,1\}}"/'"$line"'/g' {r}/replies/default > "$out"
         self.mazo_env(&[], args)
     }
 
-    /// `mazo args…` with `env` set for this run.
+    /// `mazo args…` with `env` set for this run, and no proxy variable, so an
+    /// http judge reaches its stub server directly.
     fn mazo_env(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
         let root = &self.root;
-        let mazo = Mazo::new(root, &root.join("home"), &root.join("skills/mazo.toml"), &root.join("data"));
+        let mut mazo = Mazo::new(root, &root.join("home"), &root.join("skills/mazo.toml"), &root.join("data"));
+        for var in PROXIES {
+            mazo.set(var, None);
+            mazo.set(&var.to_lowercase(), None);
+        }
         mazo.command(env, args).output().unwrap()
     }
 
@@ -867,7 +875,8 @@ fn the_http_judge_posts_the_prompt_schema_and_input_to_chat_completions_with_a_b
 #[test]
 fn an_http_judge_without_api_key_env_sends_no_authorization_header() {
     let server = Server::valid();
-    let fx = Fixture::new(&http_table(&server.url, None), claude_sessions(1));
+    // A trailing slash on the url adds none to the endpoint.
+    let fx = Fixture::new(&http_table(&format!("{}/", server.url), None), claude_sessions(1));
     let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
     assert!(dry.contains(&format!("\njudge: POST {}/chat/completions with no Authorization header\n", server.url)));
     let out = fx.mazo_env(&[(KEY_ENV, OsStr::new(KEY))], &["audit", "unslop"]);
@@ -875,6 +884,7 @@ fn an_http_judge_without_api_key_env_sends_no_authorization_header() {
     let requests = server.requests();
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|r| r.header("authorization").is_none()));
+    assert!(requests.iter().all(|r| r.head.starts_with("POST /v1/chat/completions HTTP/1.1\r\n")));
 }
 
 #[test]

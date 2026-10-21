@@ -21,13 +21,11 @@ pub struct Http {
 }
 
 impl Http {
-    /// The judge of `judge`'s `url` and `model`, with the key `api_key_env`
-    /// names; a set `api_key_env` naming an unset or empty variable is a
-    /// usage error.
+    /// The judge of `judge`'s `url` and `model`, which the config's check
+    /// requires, with the key `api_key_env` names; a set `api_key_env` naming
+    /// an unset or empty variable is a usage error.
     pub fn new(judge: &Judge) -> Result<Http> {
-        let (Some(url), Some(model)) = (&judge.url, &judge.model) else {
-            return Err(Error::Usage("[judge] agent = \"http\" needs a url and a model".into()));
-        };
+        let (url, model) = judge.url.as_ref().zip(judge.model.as_ref()).expect("an http judge has a url and a model");
         let key = match &judge.api_key_env {
             None => None,
             Some(var) => match std::env::var(var) {
