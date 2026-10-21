@@ -203,14 +203,63 @@ pub trait Adapter {
     }
     /// Parses the prefiltered lines of one file. `header` is line 1 of the file.
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
+    /// How [`Adapter::prompt_at`] and [`Adapter::condense`] read a record.
+    fn records(&self) -> Records;
     /// The user-authored text behind the load at `src` (`<file>:<line>`), read
-    /// at display time and never stored. `None` when the file is
-    /// gone or holds no user turn up to that line.
-    fn prompt_at(&self, src: &str) -> Option<String>;
+    /// at display time and never stored: the first text `authored` reads
+    /// walking back from that record, itself included, since a `/skill:`
+    /// message holds its own prompt. `None` when the file is gone or holds no
+    /// user turn up to that line.
+    fn prompt_at(&self, src: &str) -> Option<String> {
+        let t = transcript(src)?;
+        authored_back(&t.chunk.lines[..t.line], &self.records().authored).map(|(_, text)| text)
+    }
     /// The judge's view of the session window around the strong load at `src`,
-    /// at most `max_chars` characters plus a cut marker. `None`
-    /// when the file is gone or `src` is not a strong load.
-    fn condense(&self, src: &str, max_chars: usize) -> Option<String>;
+    /// at most `max_chars` characters plus a cut marker. `None` when the file
+    /// is gone or `src` is not a strong load. The window runs from the prompt
+    /// behind the load (the load itself when no prompt precedes it) up to, not
+    /// including, the first strong load of a different skill after `src`, the
+    /// 40th `authored` record after the start, or the end of the file; each
+    /// record's `render` parts are prefixed `L<line>: `.
+    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
+        let Records { authored, render } = self.records();
+        let t = transcript(src)?;
+        let lines = &t.chunk.lines;
+        let header = lines.first().map(|(_, l)| l.as_slice());
+        // Strong loads come from the harness's own markers, so no skill roots are needed.
+        let strong: Vec<Raw> = self
+            .parse(&SkillRoots::default(), &t.path, header, &t.chunk)
+            .raws
+            .into_iter()
+            .filter(|r| r.channel.strong())
+            .collect();
+        let load = t.line as u64;
+        let skill = &strong.iter().find(|r| r.line == load)?.skill;
+        let start = authored_back(&lines[..t.line], &authored).map_or(load, |(n, _)| n);
+        let other = strong.iter().filter(|r| r.line > load && r.skill != *skill).map(|r| r.line).min();
+        let value = |l: &[u8]| serde_json::from_slice::<Value>(l).ok();
+        let limit = lines
+            .iter()
+            .filter(|(n, l)| *n > start && value(l).and_then(|v| authored(&v)).is_some())
+            .nth(WINDOW_MESSAGES - 1)
+            .map(|(n, _)| *n);
+        let end = other.into_iter().chain(limit).min().unwrap_or(u64::MAX);
+        let text = lines
+            .iter()
+            .filter(|(n, _)| (start..end).contains(n))
+            .filter_map(|(n, l)| Some((n, render(&value(l)?))))
+            .flat_map(|(n, parts)| parts.into_iter().map(move |p| format!("L{n}: {p}")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(cap(text, max_chars))
+    }
+}
+
+/// A transcript's record readers: the user-authored text of a record, if it
+/// is one, and what the judge keeps of it.
+pub struct Records {
+    pub authored: fn(&Value) -> Option<String>,
+    pub render: fn(&Value) -> Vec<String>,
 }
 
 pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
@@ -219,14 +268,6 @@ pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
         Agent::Codex => &codex::Codex,
         Agent::Pi => &pi::Pi,
     }
-}
-
-/// The first text `authored` reads walking back from the record at `src`
-/// (`<file>:<line>`), that record included: a `/skill:` message holds its own
-/// prompt, a Claude meta record or Codex injection does not.
-fn prompt_back(src: &str, authored: impl Fn(&Value) -> Option<String>) -> Option<String> {
-    let t = transcript(src)?;
-    authored_back(&t.chunk.lines[..t.line], &authored).map(|(_, text)| text)
 }
 
 /// The transcript `src` (`<file>:<line>`) names, read whole, and that line.
@@ -260,49 +301,6 @@ const WINDOW_MESSAGES: usize = 40;
 const TOOL_INPUT_CHARS: usize = 200;
 const TOOL_RESULT_CHARS: usize = 500;
 const CUT: &str = "\n[… cut …]\n";
-
-/// Condensing for the audit judge, shared by every adapter. The window runs from the
-/// prompt behind the strong load at `src` (the load itself when no prompt
-/// precedes it) up to, not including, the first strong load of a different
-/// skill after `src`, the 40th `authored` record after the start, or the end
-/// of the file. `render` gives a record's kept parts, each prefixed `L<line>: `.
-fn condense(
-    adapter: &dyn Adapter,
-    src: &str,
-    max_chars: usize,
-    authored: impl Fn(&Value) -> Option<String>,
-    render: impl Fn(&Value) -> Vec<String>,
-) -> Option<String> {
-    let t = transcript(src)?;
-    let lines = &t.chunk.lines;
-    let header = lines.first().map(|(_, l)| l.as_slice());
-    // Strong loads come from the harness's own markers, so no skill roots are needed.
-    let strong: Vec<Raw> = adapter
-        .parse(&SkillRoots::default(), &t.path, header, &t.chunk)
-        .raws
-        .into_iter()
-        .filter(|r| r.channel.strong())
-        .collect();
-    let load = t.line as u64;
-    let skill = &strong.iter().find(|r| r.line == load)?.skill;
-    let start = authored_back(&lines[..t.line], &authored).map_or(load, |(n, _)| n);
-    let other = strong.iter().filter(|r| r.line > load && r.skill != *skill).map(|r| r.line).min();
-    let value = |l: &[u8]| serde_json::from_slice::<Value>(l).ok();
-    let limit = lines
-        .iter()
-        .filter(|(n, l)| *n > start && value(l).and_then(|v| authored(&v)).is_some())
-        .nth(WINDOW_MESSAGES - 1)
-        .map(|(n, _)| *n);
-    let end = other.into_iter().chain(limit).min().unwrap_or(u64::MAX);
-    let text = lines
-        .iter()
-        .filter(|(n, _)| (start..end).contains(n))
-        .filter_map(|(n, l)| Some((n, render(&value(l)?))))
-        .flat_map(|(n, parts)| parts.into_iter().map(move |p| format!("L{n}: {p}")))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Some(cap(text, max_chars))
-}
 
 /// `text` cut to the first two thirds and the last third of `max_chars`
 /// characters, with [`CUT`] between, when it is longer.

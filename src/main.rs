@@ -8,10 +8,15 @@ use skima::config::{self, Config, Home};
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Ledger};
 use skima::report::{self, Since, UsageArgs};
-use skima::{audit, html, links, policy, render, scan, tui};
+use skima::{Error, audit, html, links, policy, render, scan, tui};
 
 #[derive(Parser)]
-#[command(name = "skima", version, about = "Skill usage from agent transcripts, and sync of skill links")]
+#[command(
+    name = "skima",
+    version,
+    about = "Skill usage from agent transcripts, and sync of skill links",
+    after_help = "Bare `skima` at a terminal opens a read-only TUI: usage, unused and skill cards.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -174,7 +179,7 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("ERROR: {e}");
-            ExitCode::from(1)
+            ExitCode::from(e.exit_code())
         }
     }
 }
@@ -188,8 +193,7 @@ fn run(cmd: Option<Cmd>) -> skima::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     let Some(cfg) = config::load(&path)? else {
-        eprintln!("ERROR: no config at {}; run skima init --source <skills dir>", path.display());
-        return Ok(ExitCode::from(2));
+        return Err(Error::Usage(format!("no config at {}; run skima init --source <skills dir>", path.display())));
     };
     let inv = Inventory::load(&cfg.source)?;
     let Some(cmd) = cmd else {
@@ -208,11 +212,8 @@ fn run(cmd: Option<Cmd>) -> skima::Result<ExitCode> {
         }
         Cmd::Unused { since, json } => with_scanned(&cfg, &inv, |input| Ok(report::unused(input, since, json, tty))),
         Cmd::Show { skill, since, limit, json } => {
-            // A usage error (exit 2), caught before paying for a scan.
-            if let Err(e) = report::check_skill(&inv, &skill) {
-                eprintln!("ERROR: {e}");
-                return Ok(ExitCode::from(2));
-            }
+            // Before paying for a scan.
+            report::check_skill(&inv, &skill)?;
             with_scanned(&cfg, &inv, |input| report::show(input, &skill, since, limit, json, tty))
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
@@ -237,7 +238,7 @@ fn scanned<T>(
     f: impl FnOnce(&std::path::Path, &report::Input) -> skima::Result<T>,
 ) -> skima::Result<T> {
     let data = ledger::data_dir()?;
-    scan::scan(cfg, inv, &data, false)?.warn_io_errors();
+    scan::scan(cfg, inv, &data, false)?.warn();
     let ledger = Ledger::load(&data)?;
     let coverage = ledger::load_coverage(&data)?;
     let audits = audit::latest(&data)?;
@@ -261,32 +262,28 @@ fn with_scanned(
     })
 }
 
-/// `skima audit`: usage errors exit 2 before the scan.
+/// `skima audit`: usage errors are caught before the scan, and a failed
+/// login check before any judge call.
 fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skima::Result<ExitCode> {
     let (skill, budget) = (args.skill.as_str(), args.max_budget_usd);
-    let usage = |msg: String| {
-        eprintln!("ERROR: {msg}");
-        Ok(ExitCode::from(2))
-    };
     if !inv.skills.contains(skill) {
-        return usage(format!("not a skill in the source: {skill}"));
+        return Err(Error::Usage(format!("not a skill in the source: {skill}")));
     }
-    // Codex and Pi report no dollar figure, so `--limit` is their only cap.
-    let budget = match (cfg.judge.agent, budget) {
-        (Agent::Claude, budget) => Some(budget.unwrap_or(1_000_000)),
-        (agent, Some(_)) => {
-            return usage(format!(
-                "--max-budget-usd needs the claude judge; the {} judge is capped by --limit",
-                ledger::name(agent)
-            ));
+    // A judge that reports no dollar figure has `--limit` as its only cap.
+    let backend = audit::backend(&cfg.judge, &cfg.homes)?;
+    let budget = match (backend.budget_flag(), budget) {
+        (Some(_), budget) => Some(budget.unwrap_or(1_000_000)),
+        (None, Some(_)) => {
+            return Err(Error::Usage(format!(
+                "--max-budget-usd needs a judge that reports its cost; the {} judge is capped by --limit",
+                ledger::name(cfg.judge.agent)
+            )));
         }
-        (_, None) => None,
+        (None, None) => None,
     };
     if budget.is_some_and(|b| b < 4 * audit::CENT) {
-        return usage("--max-budget-usd must be at least 0.04".into());
+        return Err(Error::Usage("--max-budget-usd must be at least 0.04".into()));
     }
-    let codex_auth = audit::codex_auth(&cfg.homes)?;
-    let pi_settings = audit::pi_settings(&cfg.homes)?;
     scanned(cfg, inv, |data, input| {
         let limit = (!args.all).then_some(args.limit);
         let candidates = audit::select(input.events, skill, &audit::audited(data, skill)?, limit);
@@ -295,9 +292,8 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
             source: &cfg.source,
             data,
             judge: &cfg.judge,
+            backend: backend.as_ref(),
             budget,
-            codex_auth: &codex_auth,
-            pi_settings: &pi_settings,
             evals: &skima::evals::load(inv, skill),
             usage: &report::usage_section(input, skill),
         };
@@ -306,10 +302,8 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> skim
             return Ok(ExitCode::SUCCESS);
         }
         // A failed login check is a usage error: no judge was started.
-        if audit::calls(&a, &candidates, args.resynth)?
-            && let Err(e) = audit::login(&a)
-        {
-            return usage(e);
+        if audit::calls(&a, &candidates, args.resynth)? {
+            audit::login(&a)?;
         }
         let run = audit::run(&a, &candidates, args.resynth)?;
         print!("{}", if args.json { run.json(&a) } else { run.text(&a) });
@@ -350,6 +344,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     let was = if reparse { Some(home_counts(&Ledger::load(&data)?)) } else { None };
     let r = scan::scan(cfg, inv, &data, reparse)?;
     if json {
+        r.warn();
         // Through a `Value`, so the keys print sorted.
         println!("{}", serde_json::to_value(&r.homes).map_err(|e| e.to_string())?);
         return Ok(ExitCode::SUCCESS);
@@ -365,7 +360,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
         let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events.len())).collect();
         println!("scan: {}", summary.join(" · "));
     }
-    r.warn_io_errors();
+    r.warn();
     if detail {
         let ledger = Ledger::load(&data)?;
         for (name, h) in &r.homes {
@@ -376,6 +371,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
             let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{}={n}", ledger::name(c))).collect();
             println!("{name}: {} files; ledger {}", h.files, counts.join(" "));
             println!("  unparsed skill commands in this scan: {}", h.unparsed);
+            println!("  lines that are not JSON in this scan: {}", h.malformed);
             for s in &h.unparsed_samples {
                 println!("    {s}");
             }

@@ -51,13 +51,19 @@ pub fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
     }
     let description = match yaml::get(meta, "description").and_then(yaml::string) {
         Some(d) if !d.trim_matches(python_space).is_empty() => d,
-        _ => return Err("SKILL.md must declare its skill name and a nonempty description".into()),
+        _ => return Err("SKILL.md must declare a nonempty description".into()),
     };
-    if yaml::get(meta, "name").and_then(yaml::string) != Some(name) {
-        return Err("SKILL.md must declare its skill name and a nonempty description".into());
+    if name.chars().count() > 64 {
+        return Err(format!("skill name {name:?} is over 64 characters").into());
     }
-    if name.chars().count() > 64 || !valid_name(name) || description.chars().count() > 1024 {
-        return Err("skill name or description exceeds the Agent Skills format limits".into());
+    if !valid_name(name) {
+        return Err(format!("skill name {name:?} must be lowercase letters and digits joined by single hyphens").into());
+    }
+    if yaml::get(meta, "name").and_then(yaml::string) != Some(name) {
+        return Err(format!("SKILL.md must declare name: {name}").into());
+    }
+    if description.chars().count() > 1024 {
+        return Err("SKILL.md description is over 1024 characters".into());
     }
     Ok(())
 }
@@ -110,12 +116,7 @@ pub fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
 /// A Claude home's parsed `settings.json`.
 pub fn settings(home: &Home) -> crate::Result<serde_json::Value> {
     let bytes = std::fs::read(home.settings()).map_err(|e| e.to_string())?;
-    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
-}
-
-/// Retention in days for a Claude home: `cleanupPeriodDays`, or 30 when unset.
-fn retention_days(home: &Home) -> i64 {
-    settings(home).ok().and_then(|v| v["cleanupPeriodDays"].as_i64()).unwrap_or(30)
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string().into())
 }
 
 /// Scan-freshness warnings: a Claude home never scanned, or last
@@ -123,7 +124,8 @@ fn retention_days(home: &Home) -> i64 {
 pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff::Timestamp) -> Vec<String> {
     let mut out = Vec::new();
     for home in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
-        let days = retention_days(home);
+        // Claude's `cleanupPeriodDays`, or 30 when unset.
+        let days = settings(home).ok().and_then(|v| v["cleanupPeriodDays"].as_i64()).unwrap_or(30);
         let limit = (days - 7).max(0) * 86_400;
         let last = coverage
             .get(&home.name)

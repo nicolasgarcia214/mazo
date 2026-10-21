@@ -1,0 +1,86 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "asked": {
+      "maxLength": 240,
+      "type": "string"
+    },
+    "followed": {
+      "enum": [
+        "yes",
+        "partly",
+        "no"
+      ]
+    },
+    "frictions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "line": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "text": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "text"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+    },
+    "notes": {
+      "maxLength": 400,
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "achieved",
+        "partial",
+        "failed",
+        "abandoned",
+        "unclear"
+      ]
+    },
+    "redone": {
+      "type": "boolean"
+    },
+    "strengths": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "line": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "text": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "text"
+        ],
+        "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+    }
+  },
+  "required": [
+    "asked",
+    "followed",
+    "outcome",
+    "redone",
+    "strengths",
+    "frictions",
+    "notes"
+  ],
+  "type": "object"
+}

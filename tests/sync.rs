@@ -236,6 +236,16 @@ fn a_description_of_only_python_whitespace_is_rejected() {
 }
 
 #[test]
+fn a_name_other_than_the_directory_is_rejected_by_name() {
+    let fx = fixture();
+    let name = &fx.skills[0];
+    fs::write(fx.source.join(name).join("SKILL.md"), "---\nname: other\ndescription: D.\n---\n").unwrap();
+    let r = fx.skima(&["sync", "--agent", "pi"]);
+    assert_eq!(r.code(), 1);
+    assert!(r.stderr().contains(&format!("SKILL.md must declare name: {name}")), "{}", r.stderr());
+}
+
+#[test]
 fn hidden_dangling_links_are_not_pruned() {
     let fx = fixture();
     fx.skima(&["sync"]).assert_ok();

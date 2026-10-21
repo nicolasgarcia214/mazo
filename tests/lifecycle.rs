@@ -346,14 +346,25 @@ fn a_description_with_yaml_syntax_round_trips() {
 fn new_rejects_a_missing_description_a_bad_name_and_an_existing_entry() {
     let hs = Homes::new(ALL_RULES);
     assert_code(&hs.skima(&["new", "ok"]), 2);
-    let long = "a".repeat(65);
-    for name in ["Bad", "a--b", "-a", "a_b", "../escape", "a/b", "", long.as_str()] {
-        assert_code(&hs.skima(&["new", name, "--description", "D."]), 2);
+    // Each rejection names the rule it broke.
+    let rejected = |args: &[&str], why: &str| {
+        let out = hs.skima(args);
+        assert_code(&out, 2);
+        assert!(stderr(&out).contains(why), "{args:?}: {}", stderr(&out));
+    };
+    // clap takes `-a` for a flag.
+    assert_code(&hs.skima(&["new", "-a", "--description", "D."]), 2);
+    for name in ["Bad", "a--b", "a_b", "../escape", "a/b", ""] {
+        rejected(
+            &["new", name, "--description", "D."],
+            "must be lowercase letters and digits joined by single hyphens",
+        );
     }
-    let too_long = "d".repeat(1025);
-    for description in ["", " \t ", too_long.as_str()] {
-        assert_code(&hs.skima(&["new", "ok", "--description", description]), 2);
+    rejected(&["new", &"a".repeat(65), "--description", "D."], "is over 64 characters");
+    for description in ["", " \t "] {
+        rejected(&["new", "ok", "--description", description], "must declare a nonempty description");
     }
+    rejected(&["new", "ok", "--description", &"d".repeat(1025)], "description is over 1024 characters");
     let entries: Vec<_> = fs::read_dir(&hs.source).unwrap().flatten().map(|e| e.file_name()).collect();
     assert_eq!(entries, ["skima.toml"]);
     assert_code(&hs.skima(&["new", "ok", "--description", &"d".repeat(1024)]), 0);

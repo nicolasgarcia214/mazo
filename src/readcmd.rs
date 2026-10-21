@@ -70,14 +70,10 @@ pub fn reads(cmd: &str) -> Reads {
         }
     }
     // A reader mixed with non-readers matches neither rule: unparsed, not silent.
-    if not_load && !files.is_empty() {
-        Reads::Unknown
-    } else if not_load {
-        Reads::NotLoad
-    } else if files.is_empty() {
-        Reads::Unknown
-    } else {
-        Reads::Load(files)
+    match (not_load, files.is_empty()) {
+        (true, false) | (false, true) => Reads::Unknown,
+        (true, true) => Reads::NotLoad,
+        (false, false) => Reads::Load(files),
     }
 }
 

@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use common::{Skima, stderr};
 use serde_json::Value;
 use skima::adapters::claude::Claude;
-use skima::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
+use skima::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Records, Session, SkillRoots};
 use skima::config::Config;
 use skima::inventory::Inventory;
 use skima::ledger::{self, Agent, Channel, Event, Ledger};
@@ -253,6 +253,23 @@ fn half_written_line_yields_exactly_one_event_once_finished() {
 }
 
 #[test]
+fn a_line_that_is_not_json_is_counted_once_and_its_neighbours_still_count() {
+    let env = Env::new(&[], &[]);
+    env.scan(); // the history backfill
+    let lines = fixture_lines("slash.jsonl");
+    env.put("slash.jsonl", format!("{}\n{{\"name\":\"Skill\" torn\n{}\n", lines[0], lines[1]).as_bytes());
+    let r = env.scan();
+    assert_eq!(new_events(&r), 1);
+    assert_eq!(r.homes["claude"].malformed, 1);
+    assert_eq!(env.scan().homes["claude"].malformed, 0, "a line is read once");
+    // A fresh data directory reads it again, and the CLI says so.
+    let out = env.cli(&env.tmp.path().join("xdg")).arg("scan").output().unwrap();
+    assert!(out.status.success());
+    let warning = "warning: claude: transcript lines that are not JSON: 1; a load in one is not counted";
+    assert!(stderr(&out).contains(warning), "{}", stderr(&out));
+}
+
+#[test]
 fn replaced_file_with_a_new_inode_adds_no_duplicates() {
     let env = Env::new(&TRANSCRIPTS, &[]);
     env.scan();
@@ -315,11 +332,8 @@ impl<F: Fn(&Path, &Chunk, &mut Parsed)> Adapter for Rule<F> {
         (self.0)(path, chunk, &mut parsed);
         parsed
     }
-    fn prompt_at(&self, _src: &str) -> Option<String> {
-        None
-    }
-    fn condense(&self, _src: &str, _max_chars: usize) -> Option<String> {
-        None
+    fn records(&self) -> Records {
+        Claude.records()
     }
 }
 
@@ -482,7 +496,7 @@ fn scan_json_keeps_every_home_field() {
     let homes: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(homes.keys().collect::<Vec<_>>(), ["claude", "empty"]);
     for (name, h) in &homes {
-        for key in ["new_events", "files", "io_errors", "unparsed", "unparsed_samples", "canary"] {
+        for key in ["new_events", "files", "io_errors", "unparsed", "unparsed_samples", "canary", "malformed"] {
             assert!(h.get(key).is_some(), "{name} has no {key}: {h}");
         }
     }
