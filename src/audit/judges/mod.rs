@@ -4,6 +4,7 @@
 
 mod claude;
 mod codex;
+mod command;
 mod pi;
 
 use std::fs::{self, DirBuilder};
@@ -20,7 +21,7 @@ use serde_json::Value;
 use super::session::{SESSION, SESSION_PROMPT, SESSION_SCHEMA};
 use super::{Audit, Stage, cents};
 use crate::Result;
-use crate::config::{Billing, Home, Judge};
+use crate::config::{Billing, Home, Judge, JudgeAgent};
 use crate::ledger::Agent;
 
 /// How mazo calls one agent as its judge.
@@ -112,17 +113,19 @@ impl<T: Subprocess> Backend for T {
 }
 
 /// The backend of `judge`; Codex links the configured Codex home's
-/// `auth.json`, and Pi reads its `settings.json` for the default model.
+/// `auth.json`, Pi reads its `settings.json` for the default model, and
+/// the command judge runs `[judge] argv`.
 pub fn backend(judge: &Judge, homes: &[Home]) -> Result<Box<dyn Backend>> {
     let model = judge.model.clone();
     Ok(match judge.agent {
-        Agent::Claude => Box::new(claude::Claude { model }),
-        Agent::Codex => {
+        JudgeAgent::Claude => Box::new(claude::Claude { model }),
+        JudgeAgent::Codex => {
             Box::new(codex::Codex { model, auth: agent_home(homes, Agent::Codex, ".codex")?.join("auth.json") })
         }
-        Agent::Pi => {
+        JudgeAgent::Pi => {
             Box::new(pi::Pi { model, settings: agent_home(homes, Agent::Pi, ".pi/agent")?.join("settings.json") })
         }
+        JudgeAgent::Command => Box::new(command::Command { argv: judge.argv.clone() }),
     })
 }
 
@@ -368,7 +371,7 @@ mod tests {
     #[test]
     fn a_backend_that_owns_its_call_is_called_without_a_subprocess() {
         let data = tempfile::tempdir().unwrap();
-        let judge = Judge { agent: Agent::Claude, model: None, billing: Billing::Subscription };
+        let judge = Judge { agent: JudgeAgent::Claude, model: None, billing: Billing::Subscription, argv: vec![] };
         let evals = crate::evals::Evals { grades: vec![], retros: vec![] };
         let a = Audit {
             skill: "s",

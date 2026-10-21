@@ -26,10 +26,37 @@ pub struct Config {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Judge {
-    pub agent: Agent,
+    pub agent: JudgeAgent,
     /// Passed as `--model` (`-m` for Codex); unset means the agent's own default.
     pub model: Option<String>,
     pub billing: Billing,
+    /// The `command` judge's program and arguments; no other judge takes one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+}
+
+impl Judge {
+    /// Why the table is invalid: `command` without an `argv`, or an `argv`
+    /// for another agent.
+    fn check(&self) -> std::result::Result<(), &'static str> {
+        match (self.agent, self.argv.is_empty()) {
+            (JudgeAgent::Command, true) => Err("[judge] agent = \"command\" needs a non-empty argv"),
+            (JudgeAgent::Command, false) | (_, true) => Ok(()),
+            (_, false) => Err("[judge] argv is for agent = \"command\" only"),
+        }
+    }
+}
+
+/// The agent mazo audit calls: one of the homes' agents, or any CLI that
+/// reads a prompt on stdin and prints its answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JudgeAgent {
+    #[default]
+    Claude,
+    Codex,
+    Pi,
+    Command,
 }
 
 /// Who pays for the judge's calls. Under `Subscription` every call runs
@@ -132,6 +159,9 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     };
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let raw: RawConfig = toml::from_str(&text).map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
+    if let Some(judge) = &raw.judge {
+        judge.check().map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
+    }
     let base = path.parent().unwrap_or(Path::new("/"));
     // `source` is relative to the config file and resolved physically, as
     // install.sh's `pwd -P` did (test_install.py:130).
@@ -306,15 +336,15 @@ mod tests {
     fn judge_table_takes_agent_model_and_billing_only() {
         let judge = |table: &str| judge(table).map(|j| j.expect("a [judge] table is a judge"));
         let j = judge("[judge]\n").unwrap();
-        assert_eq!((j.agent, j.model, j.billing), (Agent::Claude, None, Billing::Subscription));
+        assert_eq!((j.agent, j.model, j.billing), (JudgeAgent::Claude, None, Billing::Subscription));
         assert_eq!(judge("[judge]\nbilling = \"subscription\"\n").unwrap().billing, Billing::Subscription);
         assert_eq!(judge("[judge]\nbilling = \"api\"\n").unwrap().billing, Billing::Api);
         for bad in ["\"API\"", "\"apikey\"", "\"\"", "true"] {
             assert!(judge(&format!("[judge]\nbilling = {bad}\n")).is_err(), "{bad}");
         }
         let j = judge("[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\n").unwrap();
-        assert_eq!((j.agent, j.model.as_deref()), (Agent::Codex, Some("gpt-5")));
-        assert_eq!(judge("[judge]\nagent = \"pi\"\n").unwrap().agent, Agent::Pi);
+        assert_eq!((j.agent, j.model.as_deref()), (JudgeAgent::Codex, Some("gpt-5")));
+        assert_eq!(judge("[judge]\nagent = \"pi\"\n").unwrap().agent, JudgeAgent::Pi);
         let err = judge("[judge]\nmodel = \"sonnet\"\ntemperature = 1\n").unwrap_err();
         assert!(err.contains("unknown field `temperature`"), "{err}");
         assert!(judge("[judge]\nagent = \"gemini\"\n").is_err());
@@ -325,6 +355,7 @@ mod tests {
         let tables = [
             "[judge]\nagent = \"claude\"\nbilling = \"subscription\"\n",
             "[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\nbilling = \"api\"\n",
+            "[judge]\nagent = \"command\"\nbilling = \"subscription\"\nargv = [\"llm\", \"-m\", \"x\"]\n",
         ];
         for table in tables {
             let raw: RawConfig = toml::from_str(&format!("source = \".\"\n{table}")).unwrap();
@@ -333,5 +364,29 @@ mod tests {
             let again: RawConfig = toml::from_str(&text).unwrap();
             assert_eq!(toml::to_string(&again).unwrap(), text);
         }
+    }
+
+    #[test]
+    fn a_command_judge_takes_an_argv_and_no_other_judge_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let load_judge = |table: &str| {
+            let path = dir.path().join("config.toml");
+            fs::write(&path, format!("source = \".\"\n{table}")).unwrap();
+            load(&path).map(|c| c.unwrap().judge.unwrap())
+        };
+        let j = load_judge("[judge]\nagent = \"command\"\nargv = [\"llm\", \"-m\", \"x\"]\n").unwrap();
+        assert_eq!((j.agent, j.argv), (JudgeAgent::Command, vec!["llm".into(), "-m".into(), "x".into()]));
+        assert!(load_judge("[judge]\nagent = \"claude\"\n").unwrap().argv.is_empty());
+        let usage = |table: &str| match load_judge(table) {
+            Err(Error::Usage(e)) => e,
+            other => panic!("{table:?}: {other:?}"),
+        };
+        for table in ["[judge]\nagent = \"command\"\n", "[judge]\nagent = \"command\"\nargv = []\n"] {
+            assert!(usage(table).ends_with("[judge] agent = \"command\" needs a non-empty argv"), "{table:?}");
+        }
+        for table in ["[judge]\nargv = [\"llm\"]\n", "[judge]\nagent = \"pi\"\nargv = [\"llm\"]\n"] {
+            assert!(usage(table).ends_with("[judge] argv is for agent = \"command\" only"), "{table:?}");
+        }
+        assert!(usage("[judge]\nagent = \"command\"\nargv = \"llm\"\n").contains("invalid type"));
     }
 }
