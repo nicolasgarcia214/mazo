@@ -85,7 +85,9 @@ fn targets(
     present: &dyn Fn(&Path) -> bool,
     conflicts: &mut Vec<(String, String)>,
 ) -> Vec<Target> {
-    let mut common: Vec<(String, PathBuf)> = inv.skills.iter().map(|s| (s.clone(), cfg.source.join(s))).collect();
+    let (single, shared): (Vec<_>, Vec<_>) = inv.origins.iter().partition(|(_, roots)| roots.len() == 1);
+    let mut common: Vec<(String, PathBuf)> =
+        single.iter().map(|(name, roots)| (name.to_string(), roots[0].join(name))).collect();
     for loose in &cfg.loose {
         let src = cfg.source.join(loose);
         if src.is_file() {
@@ -95,6 +97,14 @@ fn targets(
     common.sort();
     let mut out = Vec::new();
     for home in homes {
+        for (name, roots) in &shared {
+            let roots: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
+            let path = home.skills_dir().join(name);
+            conflicts.push((
+                home.name.clone(),
+                format!("ERROR: {} is claimed by several roots: {}", path.display(), roots.join(", ")),
+            ));
+        }
         out.push(Target { home: home.name.clone(), dir: home.skills_dir(), entries: common.clone() });
         for (key, value) in &home.links {
             let path = home.path.join(key);
@@ -192,8 +202,9 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
             .collect();
         others.sort();
         for path in others {
-            let owned_dangling = fs::read_link(&path)
-                .is_ok_and(|text| path.file_name().is_some_and(|n| text == cfg.source.join(n)) && !present(&text));
+            let owned_dangling = fs::read_link(&path).is_ok_and(|text| {
+                path.file_name().is_some_and(|n| inv.roots.iter().any(|r| text == r.join(n))) && !present(&text)
+            });
             let state = if owned_dangling { State::Dangling } else { State::Foreign };
             if owned_dangling {
                 plan.actions.push(Action::Remove(path.clone()));
@@ -271,4 +282,70 @@ pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{Action, State, plan};
+    use crate::config::{Config, Home};
+    use crate::inventory::Inventory;
+    use crate::ledger::Agent;
+
+    fn skill(root: &Path, name: &str) {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+        std::fs::write(root.join(name).join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+    }
+
+    fn setup(tmp: &Path) -> (Config, Inventory) {
+        let (source, store) = (tmp.join("source"), tmp.join("store"));
+        skill(&source, "mine");
+        skill(&store, "theirs");
+        let home =
+            Home { name: "claude".into(), agent: Agent::Claude, path: tmp.join("home"), links: Default::default() };
+        let cfg = Config {
+            source: source.clone(),
+            loose: vec![],
+            homes: vec![home],
+            policy: Default::default(),
+            judge: None,
+        };
+        let inv = Inventory::load_roots(&source, &[&source, &store]).unwrap();
+        (cfg, inv)
+    }
+
+    #[test]
+    fn each_skill_links_to_its_own_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (cfg, inv) = setup(tmp.path());
+        let skills = tmp.path().join("home/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("store/gone"), skills.join("gone")).unwrap();
+        let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
+        assert!(p.conflicts.is_empty(), "{:?}", p.conflicts);
+        let gone = p.entries.iter().find(|e| e.path == skills.join("gone")).unwrap();
+        assert_eq!(gone.state, State::Dangling, "a link into a non-source root is owned");
+        assert!(p.actions.contains(&Action::Remove(skills.join("gone"))));
+        let links: Vec<&Action> = p.actions.iter().filter(|a| matches!(a, Action::Link { .. })).collect();
+        assert_eq!(
+            links,
+            [
+                &Action::Link { source: tmp.path().join("source/mine"), path: skills.join("mine") },
+                &Action::Link { source: tmp.path().join("store/theirs"), path: skills.join("theirs") },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_in_two_roots_is_a_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        skill(&tmp.path().join("store"), "mine");
+        let (cfg, inv) = setup(tmp.path());
+        let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
+        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with("ERROR: ") && errors[0].contains("mine"), "{}", errors[0]);
+        assert!(!p.actions.iter().any(|a| matches!(a, Action::Link { path, .. } if path.ends_with("mine"))));
+    }
 }

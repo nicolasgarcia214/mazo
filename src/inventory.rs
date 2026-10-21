@@ -11,8 +11,12 @@ use crate::history::History;
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
     pub source: PathBuf,
-    /// Non-hidden child directories of the source that contain `SKILL.md`.
+    /// The directories skills are read from; today only the source.
+    pub roots: Vec<PathBuf>,
+    /// Non-hidden child directories of a root that contain `SKILL.md`.
     pub skills: BTreeSet<String>,
+    /// Each skill's roots, in root order: more than one is a conflict.
+    pub origins: BTreeMap<String, Vec<PathBuf>>,
     /// Canonical skills plus every directory that ever held a `SKILL.md` in git.
     pub known: BTreeSet<String>,
     /// The git worktree containing the source, for the authoring rule.
@@ -23,16 +27,28 @@ pub struct Inventory {
 
 impl Inventory {
     pub fn load(source: &Path) -> Result<Inventory> {
-        let skills = canonical_skills(source)?;
+        Inventory::load_roots(source, &[source])
+    }
+
+    /// The inventory over every root; `source` keeps the history and reports.
+    pub fn load_roots(source: &Path, roots: &[&Path]) -> Result<Inventory> {
+        let mut origins: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+        for root in roots {
+            for name in canonical_skills(root)? {
+                origins.entry(name).or_default().push(root.to_path_buf());
+            }
+        }
+        let skills: BTreeSet<String> = origins.keys().cloned().collect();
         let worktree = git(source, &["rev-parse", "--show-toplevel"]).map(|s| PathBuf::from(s.trim()));
         let history = worktree.as_deref().and_then(|w| History::load(source, w));
         let mut known = skills.clone();
         known.extend(history.iter().flat_map(History::skill_names));
-        Ok(Inventory { source: source.to_path_buf(), skills, known, worktree, history })
+        let roots = roots.iter().map(|r| r.to_path_buf()).collect();
+        Ok(Inventory { source: source.to_path_buf(), roots, skills, origins, known, worktree, history })
     }
 }
 
-/// Any non-hidden child directory of the source that contains `SKILL.md`.
+/// Any non-hidden child directory of the root that contains `SKILL.md`.
 pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
     let entries = std::fs::read_dir(source).map_err(|e| format!("{}: {e}", source.display()))?;
     let mut out = BTreeSet::new();
