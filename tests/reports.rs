@@ -398,7 +398,8 @@ fn usage_collapses_and_applies_default_filters() {
 }
 
 /// The quality column is the latest audit's verdict labelled `audit`, else
-/// the lockfile's vet verdict labelled `vet`, else `not judged`; `--json`
+/// the lockfile's vet verdict labelled `vet`, led by any security finding,
+/// else `not judged`; `--json`
 /// carries the verdict and its source apart. The text cell is cut to 40
 /// characters with `…`, between chars.
 #[test]
@@ -430,6 +431,18 @@ fn usage_quality_is_the_latest_audit_else_the_vet_else_not_judged() {
     assert!(line("unslop").ends_with(&format!(" {cut}")), "{text}");
     assert!(line("vetted").ends_with(" vet: quality weak, value low value"), "{text}");
     assert!(line("goal-plan").ends_with(" not judged"), "{text}");
+
+    // A security finding leads the vet verdict, so the cut cell shows it.
+    let lock = data.path().join("mazo.lock");
+    let text = std::fs::read_to_string(&lock).unwrap();
+    write(&lock, &text.replace("[skill.verdict]\n", "[skill.verdict]\nsecurity = \"Sends files to a remote host.\"\n"));
+    w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
+    let finding = "security: Sends files to a remote host.; quality weak, value low value";
+    let input = w.input(&[]);
+    assert_eq!(row(&report::usage(&input, &args(), true, false), "vetted")["verdict"], finding);
+    let text = report::usage(&input, &args(), false, false);
+    let cut: String = format!("vet: {finding}").chars().take(39).chain(['…']).collect();
+    assert!(text.lines().any(|l| l.starts_with("vetted ") && l.ends_with(&format!(" {cut}"))), "{text}");
 
     // An audit wins over the vet.
     write(

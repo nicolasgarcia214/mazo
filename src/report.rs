@@ -306,9 +306,15 @@ fn vet_of<'i>(inv: &'i Inventory, skill: &str) -> Option<&'i Locked> {
 /// `result.verdict` of the latest audit, the last `skill` record of `skill`
 /// in `audits.jsonl` ([`crate::audit::latest`]), as `show` prints it; else
 /// the vet verdict of its lockfile entry ([`vet_of`]) as
-/// [`crate::audit::VetVerdict::summary`] words it; else none.
+/// [`crate::audit::VetVerdict::summary`] words it, led by `security:
+/// <finding>; ` when the judge found one, so a cut cell still shows it; else
+/// none.
 fn verdict_of(input: &Input, skill: &str) -> Option<(VerdictSource, String)> {
-    let vet = || vet_of(input.inv, skill)?.verdict.as_ref().map(|v| (VerdictSource::Vet, v.summary()));
+    let vet = || {
+        let v = vet_of(input.inv, skill)?.verdict.as_ref()?;
+        let text = v.security.as_ref().map_or(v.summary(), |f| format!("security: {f}; {}", v.summary()));
+        Some((VerdictSource::Vet, text))
+    };
     input.audits.get(skill).map(|a| (VerdictSource::Audit, a.result.verdict.clone())).or_else(vet)
 }
 
