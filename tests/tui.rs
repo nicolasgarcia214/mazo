@@ -347,7 +347,7 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
     let screen = text(&mut app, 60, 30);
     let keys = screen.iter().rev().take_while(|l| !body(l).starts_with("coverage:")).flat_map(|l| l.split(" · "));
     assert_eq!(keys.count(), 16, "every key shows: {screen:#?}");
-    // Only the skill names are cut, with `…`; via shows slash/tool.
+    // The skill names are cut with `…`, then the audit cell; via shows slash/tool.
     let expected: Vec<(String, Vec<String>)> = report::usage_table(&input, &UsageArgs::new(Since::Days(30)))
         .rows
         .iter()
@@ -362,7 +362,9 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
     assert!(shown.iter().any(|w| w[0].ends_with('…')), "{screen:#?}");
     for ((skill, rest), words) in expected.iter().zip(&shown) {
         assert!(words[0] == *skill || skill.starts_with(words[0].trim_end_matches('…')), "{screen:#?}");
-        assert_eq!(words[1..], rest[..], "{screen:#?}");
+        let (shown, full) = (words[1..].join(" "), rest.join(" "));
+        let cut = shown.strip_suffix('…').is_some_and(|kept| full.starts_with(kept));
+        assert!(shown == full || cut, "{screen:#?}");
     }
 }
 

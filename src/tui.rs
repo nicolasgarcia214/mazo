@@ -353,6 +353,7 @@ const NARROWING: &[Narrow] = &[
     Narrow::Drop("agents"),
     Narrow::Cut("notes"),
     Narrow::Cut("skill"),
+    Narrow::Cut("audit"),
 ];
 
 /// `cols` narrowed by [`NARROWING`] until they fit in `room` columns, one
