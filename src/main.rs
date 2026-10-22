@@ -112,7 +112,7 @@ enum Cmd {
     },
     /// Write a config, with every rule off.
     Init {
-        /// Your own skills directory, one subdirectory per skill; needed only by `new`, `prune` and retiring its skills.
+        /// Your own skills directory, one subdirectory per skill; needed only by `new`, `prune`, retiring its skills, `loose` and home `links`.
         #[arg(long)]
         source: Option<std::path::PathBuf>,
     },
@@ -207,7 +207,10 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     let Some(cfg) = config::load(&path)? else {
-        return Err(Error::Usage(format!("no config at {}; run mazo init --source <skills dir>", path.display())));
+        return Err(Error::Usage(format!(
+            "no config at {}; run mazo init (--source <skills dir> for your own skills)",
+            path.display()
+        )));
     };
     let data = ledger::data_dir()?;
     let inv = store::inventory(cfg.source.as_deref(), &data)?;

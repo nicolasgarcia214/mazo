@@ -99,8 +99,8 @@ pub type Graph = BTreeMap<String, BTreeSet<String>>;
 pub fn fan_in(inv: &Inventory) -> Graph {
     let skills = &inv.skills;
     let mut graph = Graph::new();
-    for a in skills {
-        let text = inv.root(a).map(|r| citing_text(&r.join(a))).unwrap_or_default();
+    for (a, roots) in &inv.origins {
+        let text = citing_text(&roots[0].join(a));
         let cited = skills.iter().filter(|b| *b != a).filter(|b| {
             text.contains(&format!("the {b} skill"))
                 || text.match_indices(&format!("owned by {b}")).any(|(i, m)| !text[i + m.len()..].starts_with(word))
@@ -117,8 +117,8 @@ pub fn fan_in(inv: &Inventory) -> Graph {
 pub fn mentions(inv: &Inventory, edges: &Graph) -> Graph {
     let skills = &inv.skills;
     let mut graph = Graph::new();
-    for a in skills {
-        let text = inv.root(a).map(|r| citing_text(&r.join(a))).unwrap_or_default();
+    for (a, roots) in &inv.origins {
+        let text = citing_text(&roots[0].join(a));
         let named = skills
             .iter()
             .filter(|b| *b != a && !edges.get(a).is_some_and(|e| e.contains(*b)))
