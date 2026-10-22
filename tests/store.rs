@@ -155,7 +155,7 @@ fn as_installs_under_another_name_and_rewrites_the_name() {
 /// The no-judge refusal names the two judges any setup can configure and
 /// links a prefilled issue asking for one of the user's harness.
 fn assert_names_the_judges(stderr: &str) {
-    for judge in ["[judge] agent = \"command\" argv = [", "[judge] agent = \"http\" url = "] {
+    for judge in ["[judge]\nagent = \"command\"\nargv = [", "[judge]\nagent = \"http\"\nurl = "] {
         assert!(stderr.contains(judge), "{judge}: {stderr}");
     }
     let issue = "https://github.com/nicolasgarcia214/mazo/issues/new?title=Support+%3Charness%3E+as+a+judge&body=";
@@ -689,6 +689,21 @@ fn with_no_judge_an_untrusted_skill_is_refused_until_its_source_is_trusted() {
     r.assert_ok();
     assert!(r.stdout().contains("updated"), "{}", r.stdout());
     assert!(exists(&store(&fx).join("theirs/references/new.md")));
+}
+
+#[test]
+fn with_no_judge_each_untrusted_skill_is_refused_and_the_judges_are_named_once() {
+    let (fx, one, two) = two_installed();
+    let path = fx.data.join("mazo/mazo.lock");
+    fs::write(&path, lock_text(&fx).replace("trusted = true", "trusted = false")).unwrap();
+    let r = fx.mazo(&["update"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    for (name, url) in [("one", &one), ("two", &two)] {
+        let refused = format!("ERROR: update {name}: update refused: {url} is not trusted");
+        assert!(r.stderr().contains(&refused), "{}", r.stderr());
+    }
+    assert_names_the_judges(&r.stderr());
+    assert_eq!(r.stderr().matches("add one of these judges to the config").count(), 1, "{}", r.stderr());
 }
 
 #[test]

@@ -284,10 +284,11 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     let backend = match &cfg.judge {
         _ if trusted => None,
         None => {
-            return Err(Error::Usage(no_judge(&format!(
+            return Err(Error::Usage(format!(
                 "add refused: {arg} is not on the trust list and vetting it needs a [judge], which the config lacks; \
-                 pass --trust to install it without vetting"
-            ))));
+                 pass --trust to install it without vetting\n{}",
+                no_judge()
+            )));
         }
         Some(judge) => Some((judge, audit::backend(judge, &cfg.homes)?)),
     };
@@ -479,7 +480,7 @@ impl Out<'_> {
 /// subpath hashes differently, swaps it into the store and records the new
 /// commit and hash. A skill whose source is not trusted is first re-vetted
 /// by the judge on the diff from the installed copy ([`gate`]), and refused
-/// ([`no_judge`], exit 2) when no judge is configured; a local-path one is
+/// (exit 2, with [`no_judge`] once) when no judge is configured; a local-path one is
 /// not updatable. A skill that fails or is refused is left as it was and the
 /// rest still run; the exit code is the highest of the failures', 2 for no
 /// judge and 1 for the rest. A name that is not a store skill is a usage error.
@@ -498,7 +499,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         pane: args.pane,
         backend: OnceCell::new(),
     });
-    let (mut updated, mut code) = (false, 0);
+    let (mut updated, mut unjudged, mut code) = (false, false, 0);
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
         // A cancelled job starts nothing more.
         if out.cancelled() {
@@ -519,13 +520,12 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         let vet = match &revet {
             _ if l.trusted || remote.trusted_by(&cfg.trusted) => None,
             None => {
-                let refused = format!(
-                    "update refused: {} is not trusted and re-vetting it needs a [judge], which the config lacks; \
-                     add it to trusted to update it without vetting",
-                    l.origin
-                );
-                out.error(&format!("ERROR: update {}: {}", l.name, no_judge(&refused)));
-                code = 2;
+                out.error(&format!(
+                    "ERROR: update {}: update refused: {} is not trusted and re-vetting it needs a [judge], \
+                     which the config lacks; add it to trusted to update it without vetting",
+                    l.name, l.origin
+                ));
+                (unjudged, code) = (true, 2);
                 continue;
             }
             Some(r) => Some(r),
@@ -558,6 +558,9 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         if !errors.is_empty() {
             code = code.max(1);
         }
+    }
+    if unjudged {
+        out.error(&no_judge());
     }
     Ok(ExitCode::from(code))
 }
@@ -820,10 +823,18 @@ impl Consent {
     }
 }
 
-/// `refused`, an untrusted add or update with no `[judge]`, followed by the
-/// two judges any setup can configure and a prefilled issue asking for one
-/// of the user's harness.
-fn no_judge(refused: &str) -> String {
+/// The judges any setup can configure, each as a `[judge]` table to paste
+/// into the config, after a TOML comment saying what it calls.
+const JUDGE_EXAMPLES: [&str; 2] = [
+    "# command: any CLI that reads the prompt on stdin\n[judge]\nagent = \"command\"\nargv = [\"llm\", \"-m\", \"gpt-5\"]\n",
+    "# http: an OpenAI-compatible endpoint\n[judge]\nagent = \"http\"\nurl = \"https://api.openai.com/v1\"\n\
+     model = \"gpt-5\"\napi_key_env = \"OPENAI_API_KEY\"\n",
+];
+
+/// What to do with no `[judge]`, after an untrusted add or update is
+/// refused for want of one: [`JUDGE_EXAMPLES`], and a prefilled issue asking
+/// for a judge for the user's harness.
+fn no_judge() -> String {
     let body = "mazo refuses an untrusted add or update without a [judge], and none of its judges fits the harness I use.\n\n\
                 Harness: <name and version>\n\
                 How it runs one prompt without a terminal: <command or API>\n";
@@ -833,12 +844,8 @@ fn no_judge(refused: &str) -> String {
     )
     .expect("a valid URL");
     format!(
-        "{refused}\n\
-         a judge mazo can call with any setup:\n  \
-         command, any CLI that reads the prompt on stdin: [judge] agent = \"command\" argv = [\"llm\", \"-m\", \"gpt-5\"]\n  \
-         http, an OpenAI-compatible endpoint: [judge] agent = \"http\" url = \"https://api.openai.com/v1\" \
-         model = \"gpt-5\" api_key_env = \"OPENAI_API_KEY\"\n\
-         or ask for a judge for your harness: {issue}"
+        "add one of these judges to the config:\n{}or ask for a judge for your harness: {issue}",
+        JUDGE_EXAMPLES.join("")
     )
 }
 
@@ -1061,7 +1068,7 @@ pub fn content_hash(dir: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Remote, Source, content_hash, renamed};
+    use super::{JUDGE_EXAMPLES, Remote, Source, content_hash, no_judge, renamed};
 
     fn remote(arg: &str) -> Remote {
         match Source::parse(arg) {
@@ -1139,6 +1146,18 @@ mod tests {
             assert!(!r.trusted_by(&list(&["repo", "owner/other", "other/repo", "github.com"])), "{arg}");
             assert!(!r.trusted_by(&[]), "{arg}");
             assert!(r.trusted_by(&list(&["OWNER"])) && r.trusted_by(&list(&["Owner/Repo"])), "{arg}");
+        }
+    }
+
+    #[test]
+    fn each_judge_example_is_printed_and_loads_as_a_valid_config_judge() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for example in JUDGE_EXAMPLES {
+            assert!(no_judge().contains(example), "{example}");
+            std::fs::write(&path, format!("source = \".\"\n{example}")).unwrap();
+            let cfg = crate::config::load(&path).unwrap_or_else(|e| panic!("{example}: {e}")).unwrap();
+            assert!(cfg.judge.is_some(), "{example}");
         }
     }
 
