@@ -16,7 +16,7 @@ use mazo::{Error, audit, html, links, policy, render, scan, store, tui};
     name = "mazo",
     version,
     about = "Skill usage from agent transcripts, and sync of skill links",
-    after_help = "Bare `mazo` at a terminal opens a TUI: usage, unused and skill cards, with retire and sync.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
+    after_help = "Bare `mazo` at a terminal opens a TUI: usage, unused and skill cards, with retire, sync and audit.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -178,7 +178,7 @@ struct AuditArgs {
     /// The skill to audit.
     skill: String,
     /// The most sessions to judge.
-    #[arg(long, default_value_t = 20, conflicts_with = "all")]
+    #[arg(long, default_value_t = audit::LIMIT, conflicts_with = "all")]
     limit: usize,
     /// Judge every candidate session.
     #[arg(long)]
@@ -304,54 +304,17 @@ fn with_scanned(
 /// `mazo audit`: usage errors are caught before the scan, and a failed
 /// login check before any judge call.
 fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo::Result<ExitCode> {
-    let (skill, budget) = (args.skill.as_str(), args.max_budget_usd);
-    let Some(root) = inv.root(skill) else {
-        return Err(Error::Usage(format!("not a skill in the source: {skill}")));
+    let planned = audit::plan(cfg, inv, &args.skill, args.max_budget_usd)?;
+    let run = audit::Args {
+        limit: (!args.all).then_some(args.limit),
+        resynth: args.resynth,
+        dry_run: args.dry_run,
+        json: args.json,
     };
-    let Some(judge) = &cfg.judge else {
-        return Err(Error::Usage(
-            "no judge configured; add one to the config, for example:\n[judge]\nagent = \"claude\"".into(),
-        ));
-    };
-    // A judge that reports no dollar figure has `--limit` as its only cap.
-    let backend = audit::backend(judge, &cfg.homes)?;
-    let budget = match (backend.budget_flag(), budget) {
-        (Some(_), budget) => Some(budget.unwrap_or(audit::DEFAULT_BUDGET)),
-        (None, Some(_)) => {
-            return Err(Error::Usage(format!(
-                "--max-budget-usd needs a judge that reports its cost; the {} judge is capped by --limit",
-                ledger::name(judge.agent)
-            )));
-        }
-        (None, None) => None,
-    };
-    if budget.is_some_and(|b| b < 4 * audit::CENT) {
-        return Err(Error::Usage("--max-budget-usd must be at least 0.04".into()));
-    }
     scanned(cfg, inv, |data, input| {
-        let limit = (!args.all).then_some(args.limit);
-        let candidates = audit::select(input.events, skill, &audit::audited(data, skill)?, limit);
-        let a = audit::Audit {
-            skill,
-            source: root,
-            data,
-            judge,
-            backend: backend.as_ref(),
-            budget,
-            evals: &mazo::evals::load(inv, skill),
-            usage: &report::usage_section(input, skill),
-        };
-        if args.dry_run {
-            print!("{}", audit::dry_run(&a, &candidates, tty)?);
-            return Ok(ExitCode::SUCCESS);
-        }
-        // A failed login check is a usage error: no judge was started.
-        if audit::calls(&a, &candidates, args.resynth)? {
-            a.caller().login()?;
-        }
-        let run = audit::run(&a, &candidates, args.resynth)?;
-        print!("{}", if args.json { run.json(&a) } else { run.text(&a) });
-        Ok(if run.ok() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+        let (out, ok) = audit::command(&planned, &run, input, data, tty, None)?;
+        print!("{out}");
+        Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) })
     })
 }
 

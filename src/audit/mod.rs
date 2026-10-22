@@ -6,9 +6,11 @@
 //! nothing.
 //!
 //! [`select`] picks and condenses the sessions, [`session`] checks a stage-1
-//! answer, [`skill`] runs stage 2, and [`judges`] holds each judge agent; this
-//! module is the run both stages share.
+//! answer, [`skill`] runs stage 2, [`judges`] holds each judge agent, and
+//! [`command`] is `mazo audit` as the CLI and the TUI run it; this module is
+//! the run both stages share.
 
+mod command;
 mod judges;
 mod select;
 mod session;
@@ -18,7 +20,8 @@ mod vet;
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, mpsc};
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -27,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
+pub use command::{Args, LIMIT, Planned, command, plan};
 use judges::NoAnswer;
 pub use judges::{Backend, backend};
 pub use select::{Candidate, MAX_CHARS, SkillText, input, select, skill_at};
@@ -50,6 +54,9 @@ pub const CENT: u64 = 10_000;
 /// A run's budget when `--max-budget-usd` is not given, for a judge that
 /// reports its cost: one dollar.
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
+
+/// Why a run the pane cancelled failed.
+const CANCELLED: &str = "the audit was cancelled";
 
 /// The fields of an `audits.jsonl` line that later runs read back.
 #[derive(Deserialize)]
@@ -221,12 +228,28 @@ pub struct Audit<'a> {
     pub evals: &'a Evals,
     /// The card's usage section, for stage 2.
     pub usage: &'a Value,
+    /// The TUI's job pane; without one the run reports on stderr.
+    pub pane: Option<&'a Pane>,
+}
+
+/// The TUI's job pane: the lines a run reports go to `lines`, and setting
+/// `cancel` kills the judge call in flight and fails the run.
+pub struct Pane {
+    pub lines: mpsc::Sender<String>,
+    pub cancel: Arc<AtomicBool>,
+}
+
+/// `micros` as dollars; under `subscription` it is Claude's client-side
+/// estimate, not a charge, and says so.
+pub fn usd(judge: &Judge, micros: u64) -> String {
+    let label = if judge.billing == Billing::Subscription { " API-equivalent" } else { "" };
+    format!("${}{label}", cents(micros))
 }
 
 impl Audit<'_> {
     /// How this run calls its judge.
     pub fn caller(&self) -> Caller<'_> {
-        Caller { data: self.data, judge: self.judge, backend: self.backend }
+        Caller { data: self.data, judge: self.judge, backend: self.backend, pane: self.pane }
     }
 
     fn usd(&self, micros: u64) -> String {
@@ -235,21 +258,34 @@ impl Audit<'_> {
 }
 
 /// What a judge call needs, and all it needs: the data directory its scratch
-/// lives under, the `[judge]` config and the backend. Audit and vet both call
-/// through it.
+/// lives under, the `[judge]` config, the backend, and the pane a TUI job
+/// reports to. Audit and vet both call through it.
 #[derive(Clone, Copy)]
 pub struct Caller<'a> {
     pub data: &'a Path,
     pub judge: &'a Judge,
     pub backend: &'a dyn Backend,
+    /// Without one, the calls report on stderr and are never cancelled.
+    pub pane: Option<&'a Pane>,
 }
 
 impl Caller<'_> {
-    /// A dollar figure; under `subscription` it is Claude's client-side
-    /// estimate, not a charge, and says so.
+    /// A dollar figure as [`usd`] words it.
     fn usd(&self, micros: u64) -> String {
-        let label = if self.judge.billing == Billing::Subscription { " API-equivalent" } else { "" };
-        format!("${}{label}", cents(micros))
+        usd(self.judge, micros)
+    }
+
+    /// Reports `line` on the pane, else on stderr.
+    fn note(&self, line: &str) {
+        match self.pane {
+            Some(pane) => _ = pane.lines.send(line.into()),
+            None => eprintln!("{line}"),
+        }
+    }
+
+    /// Whether the pane asked the run to stop.
+    fn cancelled(&self) -> bool {
+        self.pane.is_some_and(|p| p.cancel.load(Ordering::Relaxed))
     }
 
     /// Under `subscription`, the judge's login check, made once before a run's
@@ -257,7 +293,7 @@ impl Caller<'_> {
     /// error: no judge was started.
     pub fn login(&self) -> Result<()> {
         match self.judge.billing {
-            Billing::Subscription => self.backend.login(self.data),
+            Billing::Subscription => self.backend.login(self.data, &|| self.cancelled()),
             Billing::Api => Ok(()),
         }
     }
@@ -265,7 +301,7 @@ impl Caller<'_> {
     /// Under `subscription`, names `billing = "api"` after a judge failure.
     fn hint(&self) {
         if self.judge.billing == Billing::Subscription {
-            eprintln!("hint: to judge with an API key instead, set billing = \"api\" under [judge]");
+            self.note("hint: to judge with an API key instead, set billing = \"api\" under [judge]");
         }
     }
 }
@@ -315,8 +351,9 @@ enum Ruling<T> {
 /// The call-and-validate step both stages share: `stage`'s judge on `input`,
 /// its answer checked by `check`, an invalid one retried once with why it was
 /// rejected. Each call is capped at `limit` minus `spent`, adds its cost to
-/// `spent`, and starts only on a cap of a cent or more; `progress` names it
-/// while stderr is a terminal.
+/// `spent`, and starts only on a cap of a cent or more and an uncancelled run;
+/// `progress` names it on the pane, or while stderr is a terminal. A cancel
+/// kills the call in flight and fails the run.
 fn judge<T>(
     c: &Caller,
     stage: &Stage,
@@ -333,11 +370,15 @@ fn judge<T>(
         if cap.is_some_and(|cap| cap < CENT) {
             return Ok(Ruling::Unfunded(why));
         }
-        if std::io::stderr().is_terminal() {
-            let cap = cap.map(|cap| format!(" (cap {})", c.usd(cap))).unwrap_or_default();
-            eprintln!("{progress}{cap}");
+        if c.cancelled() {
+            return Err(CANCELLED.into());
         }
-        let reply = c.backend.call(c.data, c.judge.billing, stage, cap, &retry(input, rejected.as_deref()))?;
+        if c.pane.is_some() || std::io::stderr().is_terminal() {
+            let cap = cap.map(|cap| format!(" (cap {})", c.usd(cap))).unwrap_or_default();
+            c.note(&format!("{progress}{cap}"));
+        }
+        let input = retry(input, rejected.as_deref());
+        let reply = c.backend.call(c.data, c.judge.billing, stage, cap, &input, &|| c.cancelled())?;
         *spent += reply.cost.unwrap_or_default();
         cost = reply.cost.map(|r| r + cost.unwrap_or_default());
         match reply.answer.map(&check) {
@@ -399,7 +440,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                 run.judged += 1;
             }
             Ruling::Dropped(why) => {
-                eprintln!("warning: {}: judge answer dropped after one retry: {why}", c.event.session);
+                a.caller().note(&format!("warning: {}: judge answer dropped after one retry: {why}", c.event.session));
                 run.dropped += 1;
             }
             Ruling::Unfunded(_) => {
@@ -407,7 +448,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                 break;
             }
             Ruling::Stopped(why) => {
-                eprintln!("ERROR: {}: {why}", c.event.session);
+                a.caller().note(&format!("ERROR: {}: {why}", c.event.session));
                 a.caller().hint();
                 run.left = &candidates[i..];
                 run.stopped = true;

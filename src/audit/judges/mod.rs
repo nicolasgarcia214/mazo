@@ -20,7 +20,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use super::session::{SESSION, SESSION_PROMPT, SESSION_SCHEMA};
-use super::{Stage, cents, frame};
+use super::{CANCELLED, Stage, cents, frame};
 use crate::Result;
 use crate::config::{Billing, Home, Judge, JudgeAgent};
 use crate::ledger::Agent;
@@ -28,12 +28,21 @@ use crate::ledger::Agent;
 /// How mazo calls one agent as its judge.
 pub trait Backend {
     /// One judge call with `stage`'s prompt on `input`, capped at `cap`, its
-    /// scratch under `data` and its environment scrubbed for `billing`.
-    fn call(&self, data: &Path, billing: Billing, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply>;
+    /// scratch under `data` and its environment scrubbed for `billing`; a
+    /// subprocess is killed once `cancel` turns true.
+    fn call(
+        &self,
+        data: &Path,
+        billing: Billing,
+        stage: &Stage,
+        cap: Option<u64>,
+        input: &str,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Reply>;
     /// Under `subscription`, the check a run makes once before its first call,
-    /// with `data` for a scratch directory. A failed check is an
-    /// [`crate::Error::Usage`] that says what would be billed.
-    fn login(&self, _data: &Path) -> Result<()> {
+    /// with `data` for a scratch directory, killed once `cancel` turns true. A
+    /// failed check is an [`crate::Error::Usage`] that says what would be billed.
+    fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
         Ok(())
     }
     /// The flag that caps a call's dollar cost, for an agent that reports one.
@@ -57,7 +66,7 @@ pub trait Subprocess {
     /// What the call reads on stdin; none closes it.
     fn stdin(&self, stage: &Stage, input: &str) -> Option<String>;
     /// As [`Backend::login`].
-    fn login(&self, _data: &Path) -> Result<()> {
+    fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
         Ok(())
     }
     /// A variable naming a scratch home under `data`, made afresh before and
@@ -81,12 +90,20 @@ pub trait Subprocess {
 }
 
 impl<T: Subprocess> Backend for T {
-    fn call(&self, data: &Path, billing: Billing, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
-        spawn(self, data, billing, stage, cap, input)
+    fn call(
+        &self,
+        data: &Path,
+        billing: Billing,
+        stage: &Stage,
+        cap: Option<u64>,
+        input: &str,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Reply> {
+        spawn(self, data, billing, stage, cap, input, cancel)
     }
 
-    fn login(&self, data: &Path) -> Result<()> {
-        Subprocess::login(self, data)
+    fn login(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<()> {
+        Subprocess::login(self, data, cancel)
     }
 
     fn budget_flag(&self) -> Option<&'static str> {
@@ -240,7 +257,7 @@ fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
 /// directory, both removed after, and its scratch home made afresh before and
 /// after. A capped call of an agent with a [`Subprocess::budget_flag`] gets that
 /// flag, and is counted at its cap when killed past its time, the most it
-/// could have spent.
+/// could have spent. A call killed once `cancel` turned true fails the run.
 fn spawn(
     backend: &impl Subprocess,
     data: &Path,
@@ -248,6 +265,7 @@ fn spawn(
     stage: &Stage,
     cap: Option<u64>,
     input: &str,
+    cancel: &dyn Fn() -> bool,
 ) -> Result<Reply> {
     let argv = backend.argv(stage);
     let (unique, dir) = run_dir(data)?;
@@ -284,7 +302,7 @@ fn spawn(
             cmd.env(var, home);
         }
         scrub(&mut cmd, billing);
-        wait(cmd.spawn()?, stdin, JUDGE_TIMEOUT)
+        wait(cmd.spawn()?, stdin, JUDGE_TIMEOUT, cancel)
     });
     let written = fs::read(&result);
     let removed = fs::remove_dir_all(&dir);
@@ -296,6 +314,9 @@ fn spawn(
         backend.scratch(data)?;
     }
     let Some(output) = output else {
+        if cancel() {
+            return Err(CANCELLED.into());
+        }
         let minutes = JUDGE_TIMEOUT.as_secs() / 60;
         let answer = Err(NoAnswer::Retry(format!("no answer within {minutes} minutes; the judge was killed")));
         return Ok(Reply { cost: cap.filter(|_| backend.budget_flag().is_some()), answer });
@@ -314,12 +335,17 @@ const STDERR_CHARS: usize = 200;
 const KILL_GRACE: Duration = Duration::from_secs(5);
 
 /// `child`'s output once it exits, after writing `stdin` to it; `None` when it
-/// was still running after `limit` and was killed: SIGTERM first, which
+/// was still running after `limit`, or when `cancel` turned true, and was killed: SIGTERM first, which
 /// launchers such as Codex's npm shim forward to the process doing the work
 /// and SIGKILL would orphan, then SIGKILL after [`KILL_GRACE`]. The pipes are read on
 /// detached threads given a second after the exit, so a grandchild left
 /// holding one costs its output, not a hang.
-fn wait(mut child: Child, stdin: Option<String>, limit: Duration) -> std::io::Result<Option<Output>> {
+fn wait(
+    mut child: Child,
+    stdin: Option<String>,
+    limit: Duration,
+    cancel: &dyn Fn() -> bool,
+) -> std::io::Result<Option<Output>> {
     // A judge that exits without reading its input closes the pipe; its
     // output says why.
     if let (Some(mut pipe), Some(stdin)) = (child.stdin.take(), stdin) {
@@ -343,7 +369,7 @@ fn wait(mut child: Child, stdin: Option<String>, limit: Duration) -> std::io::Re
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || cancel() {
             // SAFETY: kill(2) on our own child, unreaped, so its pid is not reused.
             unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
             let grace = Instant::now() + KILL_GRACE;
@@ -379,7 +405,15 @@ mod tests {
     struct Canned;
 
     impl Backend for Canned {
-        fn call(&self, _: &Path, _: Billing, _: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+        fn call(
+            &self,
+            _: &Path,
+            _: Billing,
+            _: &Stage,
+            cap: Option<u64>,
+            input: &str,
+            _: &dyn Fn() -> bool,
+        ) -> Result<Reply> {
             Ok(Reply { cost: cap, answer: Ok(Value::from(input)) })
         }
         fn dry_run(&self, _: &Path) -> String {
@@ -401,16 +435,17 @@ mod tests {
             budget: None,
             evals: &evals,
             usage: &Value::Null,
+            pane: None,
         };
         let c = a.caller();
-        let reply = c.backend.call(c.data, c.judge.billing, &SESSION, Some(7), "in").unwrap();
+        let reply = c.backend.call(c.data, c.judge.billing, &SESSION, Some(7), "in", &|| false).unwrap();
         assert_eq!((reply.cost, reply.answer.ok()), (Some(7), Some(Value::from("in"))));
         assert!(!data.path().join("audit-runs").exists());
     }
 
     #[test]
     fn wait_returns_the_output_of_a_judge_that_exits() {
-        let out = wait(sh("cat; echo e >&2"), Some("in".into()), Duration::from_secs(30)).unwrap().unwrap();
+        let out = wait(sh("cat; echo e >&2"), Some("in".into()), Duration::from_secs(30), &|| false).unwrap().unwrap();
         assert!(out.status.success());
         assert_eq!((out.stdout.as_slice(), out.stderr.as_slice()), (b"in".as_slice(), b"e\n".as_slice()));
     }
@@ -418,21 +453,21 @@ mod tests {
     #[test]
     fn wait_kills_a_judge_past_its_limit_even_when_a_grandchild_holds_its_pipes() {
         let started = Instant::now();
-        assert!(wait(sh("sleep 10 & sleep 10"), None, Duration::from_millis(100)).unwrap().is_none());
+        assert!(wait(sh("sleep 10 & sleep 10"), None, Duration::from_millis(100), &|| false).unwrap().is_none());
         assert!(started.elapsed() < Duration::from_secs(5));
         // A launcher that forwards SIGTERM takes the process doing the work with it. The
         // launcher reaps the worker so `kill -0` cannot see a zombie no one has reaped.
         let pid = tempfile::NamedTempFile::new().unwrap();
         let launcher =
             format!("trap 'kill $!; wait $!; exit' TERM; sleep 10 & echo $! > {}; wait", pid.path().display());
-        assert!(wait(sh(&launcher), None, Duration::from_millis(200)).unwrap().is_none());
+        assert!(wait(sh(&launcher), None, Duration::from_millis(200), &|| false).unwrap().is_none());
         let worker = fs::read_to_string(pid.path()).unwrap();
         std::thread::sleep(Duration::from_millis(100));
         let alive = Command::new("kill").args(["-0", worker.trim()]).stderr(Stdio::null()).status().unwrap();
         assert!(!alive.success(), "the worker outlived its launcher");
         // An exited judge whose grandchild keeps stdout open costs its output, not a hang.
         let started = Instant::now();
-        let out = wait(sh("sleep 10 & echo x"), None, Duration::from_secs(30)).unwrap().unwrap();
+        let out = wait(sh("sleep 10 & echo x"), None, Duration::from_secs(30), &|| false).unwrap().unwrap();
         assert!(out.status.success());
         assert!(started.elapsed() < Duration::from_secs(5));
     }

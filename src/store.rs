@@ -235,7 +235,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         }
         Some(judge) => Some((judge, audit::backend(judge, &cfg.homes)?)),
     };
-    let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref() });
+    let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: None });
     if let Some(c) = &caller {
         // Refused before the judge is paid for an answer nobody can accept.
         if !args.yes && !std::io::stdin().is_terminal() {

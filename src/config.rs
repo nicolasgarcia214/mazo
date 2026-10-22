@@ -340,7 +340,8 @@ fn detect_judge() -> Result<Option<JudgeAgent>> {
         let found = std::env::split_paths(&path)
             .any(|dir| dir.join(name).metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0));
         let judge = Judge { agent, ..Judge::default() };
-        (found && crate::audit::backend(&judge, &[]).and_then(|b| b.login(&scratch)).is_ok()).then_some(agent)
+        (found && crate::audit::backend(&judge, &[]).and_then(|b| b.login(&scratch, &|| false)).is_ok())
+            .then_some(agent)
     });
     fs::remove_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
     Ok(detected)
