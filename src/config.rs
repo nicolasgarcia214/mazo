@@ -194,8 +194,17 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     };
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let raw: RawConfig = toml::from_str(&text).map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
-    if let Some(bad) = raw.trusted.iter().find(|t| t.split('/').count() > 2 || t.split('/').any(str::is_empty)) {
-        return Err(Error::Usage(format!("{}: trusted entry {bad:?} must be owner or owner/repo", path.display())));
+    // A first segment with a `.` is a host, which an owner or owner/repo follows.
+    let malformed = |t: &&String| {
+        let segments: Vec<&str> = t.split('/').collect();
+        let most = if segments[0].contains('.') { 3 } else { 2 };
+        !(most - 1..=most).contains(&segments.len()) || segments.iter().any(|s| s.is_empty())
+    };
+    if let Some(bad) = raw.trusted.iter().find(malformed) {
+        return Err(Error::Usage(format!(
+            "{}: trusted entry {bad:?} must be owner, owner/repo, host/owner or host/owner/repo",
+            path.display()
+        )));
     }
     if let Some(judge) = &raw.judge {
         judge.check().map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
@@ -518,17 +527,19 @@ mod tests {
     }
 
     #[test]
-    fn trusted_takes_owners_and_repos_only() {
+    fn trusted_takes_owners_and_repos_optionally_on_a_host() {
         let tmp = tempfile::tempdir().unwrap();
         let load = |trusted: &str| {
             let path = tmp.path().join("config.toml");
             fs::write(&path, format!("source = \".\"\n{trusted}")).unwrap();
             load(&path).map(|c| c.is_some())
         };
-        for ok in ["", "trusted = []\n", "trusted = [\"owner\", \"owner/repo\"]\n"] {
+        let hosts = "trusted = [\"gitlab.com/acme\", \"git.example.org/acme/skills\", \"github.com/owner\"]\n";
+        for ok in ["", "trusted = []\n", "trusted = [\"owner\", \"owner/repo\"]\n", hosts] {
             assert!(load(ok).unwrap(), "{ok:?}");
         }
-        for bad in ["", "/", "owner/", "/repo", "owner//repo", "owner/repo/skill"] {
+        let hosted = ["gitlab.com", "gitlab.com/", "gitlab.com//x", "gitlab.com/acme/x/y", ".com/acme/x/"];
+        for bad in ["", "/", "owner/", "/repo", "owner//repo", "owner/repo/skill"].into_iter().chain(hosted) {
             let err = load(&format!("trusted = [\"owner\", {bad:?}]\n")).unwrap_err();
             assert!(matches!(&err, Error::Usage(m) if m.contains(&format!("{bad:?}"))), "{bad:?}: {err}");
         }

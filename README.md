@@ -131,10 +131,12 @@ api_key_env = "OPENAI_API_KEY"
 
 `trusted` lists the owners (`owner`, every repository of that owner) and
 repositories (`owner/repo`) whose skills `mazo add` installs without vetting.
-A git source's owner is the first segment of its URL's path and its repository
-the second, on any host, compared ignoring ASCII case:
-`git@codeberg.org:Me/skills.git` matches `me` and `me/skills`. An entry with an empty segment or more than two segments is a
-usage error.
+An entry whose first segment has no `.` is on GitHub (`me` trusts
+`https://github.com/Me/skills.git` and no other host); otherwise that segment
+names the host (`codeberg.org/me/skills` trusts `git@codeberg.org:me/skills.git`).
+Names compare ignoring ASCII case; a `file://` or local source is never
+trusted by an entry, and an entry with an empty segment, or more than two
+segments after its host, is a usage error.
 Skills in `source` are always trusted. A config without `trusted` trusts no
 other source.
 
