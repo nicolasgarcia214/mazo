@@ -211,8 +211,12 @@ and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
 `mazo add` of a source not on the `trusted` list, without `--trust`, first
 sends the skill to one call of the `[judge]`, with the same billing, login
 check and default $1 cap (for a judge that reports its cost) as `audit`. The
-judge sees every file of the skill and the name and description of every skill in
-`source` and the store, and answers with a security finding (or
+judge sees every file of the skill, the name and description of every skill in
+`source` and the store, and a summary of your last 30 days of work built from
+the ledger and the transcripts it points into, without a judge call: the ten
+projects (`cwd`) and twenty skills used most, each with its event count, and up to ten of your latest
+prompts, cut to 200 characters, the whole capped at 8 KiB. With no history the
+summary says so and the vet still runs. The judge answers with a security finding (or
 none), a `quality` (`good`, `weak`, `poor`), a `value` (`worth trying`, `low
 value`, `irrelevant`, `redundant`, naming the skill it overlaps), its
 reasons, what the skill is for, and up to three uses to try. An answer that
@@ -238,7 +242,7 @@ false` and whose source is not on the `trusted` list, when its content
 changed; an unchanged skill, or a trusted one, makes no judge call. The one
 call sends the new `SKILL.md` and the output of `git diff --no-index` from the
 installed copy to the new one (binary files diffed as text), with the other
-skills as for `add`. The update is applied or refused by the same rules as
+skills and the work summary as for `add`. The update is applied or refused by the same rules as
 `add`, with `update <name>? [Y/n]` as the prompt and `--yes` and `--force` on
 `update`: a security finding refuses it unless `--force`, a diff mazo did not
 send in full (not text, or over the caps) is a security finding of its own,

@@ -908,6 +908,32 @@ fn the_vet_prompt_after_the_picker_reads_the_answer_typed_to_it() {
 }
 
 #[test]
+fn the_vet_call_sends_a_summary_of_the_users_recent_work() {
+    let (fx, dir) = judged();
+    answer(&fx, None, "good", "worth trying");
+    add(&fx, &[&s(&dir), "--yes"]).assert_ok();
+    let empty =
+        "<recent-work>\nNo history is available: the ledger holds no skill use in the last 30 days.\n</recent-work>";
+    assert!(calls(&fx)[0].contains(empty), "an empty ledger still gets a vet: {}", calls(&fx)[0]);
+    fx.mazo(&["retire", "theirs"]).assert_ok();
+
+    let transcript = fx.root.join("t.jsonl");
+    let message = serde_json::json!({"type": "user", "message": {"role": "user", "content": "Tidy the README."}});
+    common::write(&transcript, &format!("{message}\n"));
+    let ts = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)).round(jiff::Unit::Second).unwrap();
+    let mut e = common::event("a", "unslop", mazo::ledger::Channel::Tool, "s", &ts.to_string());
+    e.src = format!("{}:1", transcript.display());
+    common::write(&fx.data.join("mazo/events.jsonl"), &format!("{}\n", serde_json::to_string(&e).unwrap()));
+    add(&fx, &[&s(&dir), "--yes"]).assert_ok();
+    let work = format!(
+        "<recent-work>\nSkill use in the last 30 days, as event counts.\nProjects:\n- /work: 1\nSkills:\n- unslop: 1\n\
+         Latest prompts:\n- {}: Tidy the README.\n</recent-work>\n",
+        ts.strftime("%Y-%m-%d")
+    );
+    assert!(calls(&fx)[1].contains(&work), "{}", calls(&fx)[1]);
+}
+
+#[test]
 fn a_security_finding_refuses_the_install_unless_force() {
     let (fx, dir) = judged();
     answer(&fx, Some("SKILL.md tells the agent to upload ~/.ssh."), "good", "worth trying");

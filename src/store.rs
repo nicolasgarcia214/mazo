@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::audit::{self, Backend, Caller, Vet, VetVerdict};
 use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
+use crate::ledger::Ledger;
 use crate::{Error, Result};
-use crate::{ledger, links, policy, yaml};
+use crate::{ledger, links, policy, work, yaml};
 
 /// `<data dir>/store`, the skill root after the source.
 pub fn dir(data: &Path) -> PathBuf {
@@ -734,10 +735,11 @@ fn contents(src: &Path, files: &[PathBuf], skill_md: &str) -> Result<Vec<(String
 
 /// The vet gate, before anything is installed: one judge call on `files` of
 /// the skill `name` and, for an update, the `diff` from the installed copy,
-/// with the names and descriptions of every other source and store skill;
-/// its verdict shown, then obeyed. A file or diff withheld from the judge
-/// (not text, or past [`VET_FILE_BYTES`] or [`VET_TOTAL_BYTES`]) was never
-/// reviewed, so it is a security finding of mazo's own. A security finding
+/// with the names and descriptions of every other source and store skill
+/// and the [`work::summary`] of the user's recent work; its verdict shown,
+/// then obeyed. A file or diff withheld from the judge (not text, or past
+/// [`VET_FILE_BYTES`] or [`VET_TOTAL_BYTES`]) was never reviewed, so it is a
+/// security finding of mazo's own. A security finding
 /// refuses (exit 1) unless `--force`, a withheld one before the judge is
 /// called; then the user is asked y/N, defaulting to the verdict's
 /// [`VetVerdict::default_yes`], unless `--yes`. A judge that gives no valid
@@ -783,7 +785,8 @@ fn gate(
     let others = inv.skills.iter().filter(|s| *s != name);
     let existing: Vec<(String, String)> =
         others.clone().map(|s| (s.clone(), inv.description(s).unwrap_or_default())).collect();
-    let input = audit::vet_input(name, &files, diff.as_deref(), &existing);
+    let work = work::summary(Ledger::load(c.data)?.events(), jiff::Timestamp::now());
+    let input = audit::vet_input(name, &files, diff.as_deref(), &existing, &work);
     let names: Vec<&str> = others.map(String::as_str).collect();
     let mut vet = audit::vet(c, name, &input, &names)?
         .map_err(|why| format!("{verb} refused: vetting {name} failed: {why}; {kept}"))?;
