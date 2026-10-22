@@ -252,6 +252,13 @@
     },
     "uncommitted": true
   },
+  "manual": {
+    "for": "Removes slop from prose.",
+    "try": [],
+    "your_use": [
+      "Tighten the release notes."
+    ]
+  },
   "path": "<skills>/unslop",
   "retros": [
     {

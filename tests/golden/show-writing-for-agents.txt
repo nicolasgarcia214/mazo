@@ -1,3 +1,5 @@
+for:      Writes agent-facing documents. Prose polish is the unslop skill.
+
 writing-for-agents: since 2026-09-13
 
 day        strong weak

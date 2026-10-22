@@ -1,3 +1,5 @@
+for:      Shared goal contract. Not for prose review (that is the unslop skill).
+
 goal-smart: since 2026-09-13
 
 day        strong weak
