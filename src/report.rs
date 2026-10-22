@@ -312,6 +312,14 @@ impl Unit {
         }
     }
 
+    fn plural(self) -> &'static str {
+        match self {
+            Unit::Day => "days",
+            Unit::Week => "weeks",
+            Unit::Month => "months",
+        }
+    }
+
     /// The first day of the bucket holding `d`.
     fn start(self, d: Date) -> Date {
         match self {
@@ -337,6 +345,12 @@ impl Unit {
             Unit::Month => d.strftime("%b").to_string(),
         }
     }
+}
+
+/// What a bar of a card's activity chart over `since` spans, in the plural:
+/// `days`, `weeks` or `months`.
+pub fn buckets_of(since: Since) -> &'static str {
+    Unit::of(since).plural()
 }
 
 /// A bar of a card's activity chart.

@@ -398,22 +398,25 @@ fn chart_of(input: &Input, skill: &str, since: Since) -> Vec<report::Bucket> {
 /// The buckets of `skill`'s chart over `since` that `screen` shows, checked
 /// bar by bar: the chart's bottom row under the heading holds the labels, a
 /// column apart from `skip` within `room` columns, the row above each count;
-/// today's label muted, the others in the accent.
+/// today's label muted, the others in the accent. The heading notes a chart
+/// cut to the newest buckets.
 fn check_chart(
     input: &Input,
+    skill: &str,
     screen: &[(String, Vec<Color>)],
-    skip: usize,
-    room: usize,
+    (skip, room): (usize, usize),
     since: Since,
 ) -> Vec<report::Bucket> {
-    let chart = chart_of(input, "unslop", since);
+    let chart = chart_of(input, skill, since);
     assert!(chart.iter().any(|b| b.sessions > 0), "{chart:?}");
     assert!(chart.last().unwrap().partial && chart.iter().filter(|b| b.partial).count() == 1);
-    let heading = screen.iter().position(|(l, _)| l.chars().skip(skip).collect::<String>().starts_with("unslop: "));
-    let labels = heading.unwrap_or_else(|| panic!("no heading in {screen:#?}")) + 2 + 5;
+    let heading = format!("{skill}: ");
+    let heading = screen.iter().position(|(l, _)| l.chars().skip(skip).collect::<String>().starts_with(&heading));
+    let heading = heading.unwrap_or_else(|| panic!("no heading in {screen:#?}"));
+    let labels = heading + 2 + 5;
     let cells = |y: usize| screen[y].0.chars().collect::<Vec<_>>();
     let (names, counts) = (cells(labels), cells(labels - 1));
-    let width = chart.iter().map(|b| b.label.len()).max().unwrap();
+    let width = chart.iter().map(|b| b.label.len().max(b.sessions.to_string().len())).max().unwrap();
     let shown = &chart[chart.len().saturating_sub((room + 1) / (width + 1))..];
     for (i, b) in shown.iter().enumerate() {
         let x = skip + i * (width + 1);
@@ -424,6 +427,8 @@ fn check_chart(
         let expected = if b.partial { Color::DarkGray } else { Color::Cyan };
         assert_eq!(screen[labels].1[x], expected, "{b:?}");
     }
+    let note = format!(" · last {} {}", shown.len(), report::buckets_of(since));
+    assert_eq!(screen[heading].0.contains(&note), shown.len() < chart.len(), "{note:?}: {screen:#?}");
     shown.to_vec()
 }
 
@@ -441,23 +446,47 @@ fn the_card_charts_sessions_per_bucket_of_the_window_and_w_rebuckets_it() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen(), Screen::Card);
     // Full screen: the inset either side.
-    let days = check_chart(&input, &draw(&mut app, 200, 40), 2, 196, Since::Days(30));
+    let days = check_chart(&input, "unslop", &draw(&mut app, 200, 40), (2, 196), Since::Days(30));
     assert_eq!(days.len(), chart_of(&input, "unslop", Since::Days(30)).len(), "every day fits");
     assert_eq!(days.last().unwrap().label, &common::NOW[8..10]);
     press(&mut app, KeyCode::Char('w'));
-    let weeks = check_chart(&input, &draw(&mut app, 200, 40), 2, 196, Since::Days(60));
+    let weeks = check_chart(&input, "unslop", &draw(&mut app, 200, 40), (2, 196), Since::Days(60));
     assert!(weeks.iter().all(|b| b.label.starts_with('W')) && weeks.len() < days.len(), "{weeks:?}");
     press(&mut app, KeyCode::Char('w'));
-    let months = check_chart(&input, &draw(&mut app, 200, 40), 2, 196, Since::All);
+    let months = check_chart(&input, "unslop", &draw(&mut app, 200, 40), (2, 196), Since::All);
     assert!(months.iter().all(|b| b.label.len() == 3 && !b.label.starts_with('W')), "{months:?}");
 
     // Beside a wide table: the rule and the inset, then the newest days that fit.
     press(&mut app, KeyCode::Esc);
     let (skip, room) = (200 - 80 + 3, 80 - 5);
-    let days = check_chart(&input, &draw(&mut app, 200, 40), skip, room, Since::Days(30));
+    let days = check_chart(&input, "unslop", &draw(&mut app, 200, 40), (skip, room), Since::Days(30));
     assert_eq!(days.len(), (room + 1) / 3);
     press(&mut app, KeyCode::Char('w'));
-    check_chart(&input, &draw(&mut app, 200, 40), skip, room, Since::Days(60));
+    check_chart(&input, "unslop", &draw(&mut app, 200, 40), (skip, room), Since::Days(60));
+}
+
+/// Every bar shows its count, however short the bar or wide the count: the
+/// bars widen to the widest count, so the side pane keeps the newest days
+/// and says so.
+#[test]
+fn every_bar_shows_its_count_and_a_cut_chart_says_how_many_buckets_it_shows() {
+    let repo = common::report_repo();
+    let world = common::report_world(repo.path());
+    let sessions = |day: i64, n: usize| {
+        (0..n).map(move |i| {
+            common::event(&format!("{day}-{i}"), "unslop", Channel::Tool, &format!("{day}-{i}"), &common::ago(day))
+        })
+    };
+    let events: Vec<Event> = sessions(2, 12).chain(sessions(1, 105)).chain(sessions(0, 1)).collect();
+    let input = world.input(&events);
+    let mut app = app(&input);
+    let side = (140 - 56 + 3, 56 - 5);
+    let days = check_chart(&input, "unslop", &draw(&mut app, 140, 40), side, Since::Days(30));
+    assert_eq!(days.len(), (side.1 + 1) / 4, "bars three columns wide, a column apart");
+    assert_eq!(days.iter().rev().take(3).map(|b| b.sessions).collect::<Vec<_>>(), [1, 105, 12]);
+    press(&mut app, KeyCode::Enter);
+    let days = check_chart(&input, "unslop", &draw(&mut app, 140, 40), (2, 136), Since::Days(30));
+    assert_eq!(days.len(), 31, "every day fits full screen");
 }
 
 /// From 140 columns the usage table leaves 40% of the width, at least 50
@@ -489,7 +518,9 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
         // The rule and an inset either side.
         let room = usize::from(width) - table - 5;
         for (shown, line) in side.iter().zip(&card) {
-            assert_eq!(*shown, line.chars().take(room).collect::<String>().trim_end(), "{width}: {screen:#?}");
+            // Less the heading's note on a cut chart.
+            let shown = shown.split(" · last ").next().unwrap();
+            assert_eq!(shown, line.chars().take(room).collect::<String>().trim_end(), "{width}: {screen:#?}");
         }
         assert!(rows(&screen).iter().all(|r| !r.contains("for:")), "{screen:#?}");
     }
