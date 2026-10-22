@@ -684,7 +684,7 @@ impl App {
         let target = skill.clone().unwrap_or_else(|| "every store skill".into());
         self.start("update", target, None, move |data, pane| {
             let names = Vec::from_iter(skill);
-            let args = store::Update { names: &names, yes: true, force: false, pane: Some(pane) };
+            let args = store::Update { names: &names, yes: true, force: false, pane: Some(pane), project: false };
             match store::update(&data.cfg, &data.inv, &data.dir, &args) {
                 Ok(code) => (String::new(), code == ExitCode::SUCCESS),
                 Err(e) => (format!("ERROR: {e}"), false),
@@ -777,7 +777,7 @@ impl App {
         let mut out = Vec::new();
         let ran = match act {
             Act::Retire(skill) => {
-                lifecycle::retire(&d.cfg, &d.inv, &d.dir, &skill, false, &mut out).map(|retired| match retired {
+                lifecycle::retire(&d.cfg, &d.inv, &d.dir, &skill, false, false, &mut out).map(|retired| match retired {
                     Retired::Blocked(lines) | Retired::Refused(lines) => {
                         [vec![format!("retire {skill} refused:")], lines].concat()
                     }

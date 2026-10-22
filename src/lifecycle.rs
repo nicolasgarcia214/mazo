@@ -6,7 +6,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use crate::config::{Config, Home};
+use crate::config::Config;
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent, Ledger};
 use crate::{Error, Result};
@@ -251,21 +251,51 @@ pub enum Retired {
 /// in the sync plan as if the skill were gone, all before any write. Then
 /// moves a source skill `<source>/<name>` to `<source>/.archive/<name>` (`git
 /// mv` when tracked) and applies that plan; or, for a store skill, applies
-/// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never
-/// commits. Prints nothing: the scan's warnings go to `warnings`, kept even
-/// when a later step fails.
+/// that plan, drops its lockfile entry and deletes `<store>/<name>`. With
+/// `project`, it retires only a skill of the project at the current
+/// directory's git root, its blockers found with the project's skills: its
+/// links in the project skill dirs go instead of the homes', then its
+/// project lockfile entry and directory. Never commits. Prints nothing: the
+/// scan's warnings go to `warnings`, kept even when a later step fails.
 pub fn retire(
     cfg: &Config,
     inv: &Inventory,
     data: &Path,
     name: &str,
     force: bool,
+    project: bool,
     warnings: &mut Vec<String>,
 ) -> Result<Retired> {
-    let Some(root) = inv.root(name) else {
-        // Only a store skill retires without a source.
-        cfg.need_source(&format!("retire {name}"))?;
-        return Err(Error::Usage(format!("{name} is not a canonical skill")));
+    let project = if project { Some(store::project_root("retire")?) } else { None };
+    let with_project;
+    let inv = match &project {
+        Some(p) => {
+            with_project = store::project_inventory(inv, p)?;
+            &with_project
+        }
+        None => inv,
+    };
+    let root = match &project {
+        // The global store may hold a skill of the same name, ahead of it.
+        Some(p) => {
+            let store = store::project_dir(p);
+            let roots = inv.origins.get(name).into_iter().flatten();
+            let Some(root) = roots.into_iter().find(|r| **r == store) else {
+                return Err(Error::Usage(format!("{name} is not a project skill")));
+            };
+            root.as_path()
+        }
+        None => {
+            let Some(root) = inv.root(name) else {
+                let hint = store::project_hint(name);
+                // Only a store skill retires without a source.
+                if hint.is_empty() {
+                    cfg.need_source(&format!("retire {name}"))?;
+                }
+                return Err(Error::Usage(format!("{name} is not a canonical skill{hint}")));
+            };
+            root
+        }
     };
     let from = root.join(name);
     // A source skill is archived; a store skill is removed.
@@ -291,14 +321,14 @@ pub fn retire(
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
-    let homes: Vec<&Home> = cfg.homes.iter().collect();
-    let plan = links::plan(cfg, &rest, &homes, Some(&from));
-    let errors = links::sync_errors(cfg, &rest, &homes, &plan);
+    let target = store::Target { data, project: project.as_deref() };
+    let (plan, errors) = target.home_sync(cfg, &rest, Some(&from));
     if !errors.is_empty() {
         return Ok(Retired::Refused(errors));
     }
 
     let mut out = Vec::new();
+
     if let Some(to) = &to {
         let archive = root.join(".archive");
         std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
@@ -310,15 +340,10 @@ pub fn retire(
         out.push(format!("archived  {} -> {}", from.display(), to.display()));
         out.extend(links::apply(&plan)?);
     } else {
-        // Links first, then the lock entry, then the directory: a failure
-        // leaves at worst an unrecorded store skill, never an entry for a
-        // missing one.
-        out.extend(links::apply(&plan)?);
-        store::Lock::remove(data, name)?;
-        std::fs::remove_dir_all(&from).map_err(|e| format!("{}: {e}", from.display()))?;
-        out.push(format!("removed   {}", from.display()));
+        out.extend(target.remove(&from, name, &plan)?);
     }
-    if cfg.policy.claude_name_only {
+    // The homes' settings name only global skills.
+    if cfg.policy.claude_name_only && project.is_none() {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
             if let Some(v) = policy::settings(h).ok().and_then(|s| s["skillOverrides"].get(name).cloned()) {
                 out.push(format!("{} can drop:\n  \"{name}\": {v}", h.settings().display()));

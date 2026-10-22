@@ -1,7 +1,8 @@
 //! The store of installed third-party skills, `<data dir>/store/`, and its
 //! lockfile `<data dir>/mazo.lock`: `mazo add`, `mazo update`, and the entry
-//! `mazo retire` drops. `mazo add --project` installs into a project's own
-//! store, `<git root>/.mazo/skills/`, with its own `<git root>/mazo.lock`.
+//! `mazo retire` drops. With `--project`, `add`, `update` and `retire` act on
+//! a project's own store, `<git root>/.mazo/skills/`, and its own
+//! `<git root>/mazo.lock`.
 
 use std::cell::OnceCell;
 use std::fs;
@@ -41,16 +42,60 @@ pub fn inventory(source: Option<&Path>, data: &Path) -> Result<Inventory> {
 /// A project's store, under its git root; committed with the project.
 const PROJECT_STORE: &str = ".mazo/skills";
 
+/// The store of the project at the git root `project`.
+pub fn project_dir(project: &Path) -> PathBuf {
+    project.join(PROJECT_STORE)
+}
+
 /// The project skill dirs, each two levels under the git root: Claude Code's,
 /// and the one Codex and Pi share.
 const PROJECT_LINKS: [&str; 2] = [".claude/skills", ".agents/skills"];
 
-/// The git root of the current directory, which `add --project` installs into.
-fn project_root() -> Result<PathBuf> {
+/// The git root of the current directory, which `<verb> --project` acts on.
+pub fn project_root(verb: &str) -> Result<PathBuf> {
     let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
     let top = crate::inventory::git(&cwd, &["rev-parse", "--show-toplevel"]);
     top.map(|t| PathBuf::from(t.trim()))
-        .ok_or_else(|| Error::Usage(format!("add --project: {} is not in a git repository", cwd.display())))
+        .ok_or_else(|| Error::Usage(format!("{verb} --project: {} is not in a git repository", cwd.display())))
+}
+
+/// `inv` with the project's store as a further root, and each store and
+/// project skill's install date.
+pub fn project_inventory(inv: &Inventory, project: &Path) -> Result<Inventory> {
+    let store = project_dir(project);
+    let roots: Vec<&Path> = inv.roots.iter().map(PathBuf::as_path).chain([store.as_path()]).collect();
+    let mut with = Inventory::load_roots(inv.source.as_deref(), &roots)?;
+    // `load_roots` knows no install dates: the global store's, then the project's.
+    let project_lock = Lock::load(project)?.skills.into_iter().map(|l| (l.name.clone(), l));
+    with.installed = inv.installed.clone().into_iter().chain(project_lock).collect();
+    Ok(with)
+}
+
+/// What a command that found no store skill `name` adds when the current
+/// directory's project has one: a pointer to `--project`.
+pub fn project_hint(name: &str) -> &'static str {
+    let in_project =
+        project_root("").and_then(|p| Lock::load(&p)).is_ok_and(|l| l.skills.iter().any(|s| s.name == name));
+    if in_project { "; it is a project skill, so pass --project" } else { "" }
+}
+
+/// `name`'s links in the project skill dirs, each with the relative target
+/// it holds, so that it resolves on any checkout of the project.
+fn project_links(project: &Path, name: &str) -> [(PathBuf, PathBuf); 2] {
+    PROJECT_LINKS.map(|d| (project.join(d).join(name), Path::new("../..").join(PROJECT_STORE).join(name)))
+}
+
+/// Removes `name`'s links in the project skill dirs, those that still point
+/// at its project store directory, and returns the lines reporting it.
+fn unlink_project(project: &Path, name: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for (link, target) in project_links(project, name) {
+        if fs::read_link(&link).is_ok_and(|t| t == target) {
+            fs::remove_file(&link).map_err(|e| format!("{}: {e}", link.display()))?;
+            out.push(format!("pruned    {}", link.display()));
+        }
+    }
+    Ok(out)
 }
 
 /// `<data dir>/mazo.lock`, or a project's: one `[[skill]]` per installed skill.
@@ -333,7 +378,7 @@ struct Fetched<'a> {
 /// `--project`, outside a git repository is a usage error before anything
 /// else, and the vet sees the project's skills too.
 pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<ExitCode> {
-    let project = if args.project { Some(project_root()?) } else { None };
+    let project = if args.project { Some(project_root("add")?) } else { None };
     let (arg, out) = (args.source, Out(args.pane));
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let (source, trusted) = resolve(cfg, arg, args.trust)?;
@@ -379,15 +424,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         confirm_calls(children.len(), args.consent(), out)?;
     }
     let mut inv = match &project {
-        Some(p) => {
-            let store = p.join(PROJECT_STORE);
-            let roots: Vec<&Path> = inv.roots.iter().map(PathBuf::as_path).chain([store.as_path()]).collect();
-            let mut with = Inventory::load_roots(inv.source.as_deref(), &roots)?;
-            // `load_roots` knows no install dates: the global store's, then the project's.
-            let project_lock = Lock::load(p)?.skills.into_iter().map(|l| (l.name.clone(), l));
-            with.installed = inv.installed.clone().into_iter().chain(project_lock).collect();
-            with
-        }
+        Some(p) => project_inventory(inv, p)?,
         None => inv.clone(),
     };
     let target = Target { data, project: project.as_deref() };
@@ -405,12 +442,51 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     Ok(ExitCode::from(code))
 }
 
-/// Where `install` puts a skill: the data directory's store, or a project's.
+/// The store a command acts on: the data directory's, or a project's.
 #[derive(Clone, Copy)]
-struct Target<'a> {
-    data: &'a Path,
+pub struct Target<'a> {
+    pub data: &'a Path,
     /// The project's git root, for `--project`.
-    project: Option<&'a Path>,
+    pub project: Option<&'a Path>,
+}
+
+impl Target<'_> {
+    /// The sync of every home after a change to this store, over `inv`
+    /// without `gone`: its plan and the errors that stop it. Empty for a
+    /// project's store, which the homes do not link.
+    pub fn home_sync(self, cfg: &Config, inv: &Inventory, gone: Option<&Path>) -> (links::Plan, Vec<String>) {
+        if self.project.is_some() {
+            return Default::default();
+        }
+        let homes: Vec<&Home> = cfg.homes.iter().collect();
+        let plan = links::plan(cfg, inv, &homes, gone);
+        let errors = links::sync_errors(cfg, inv, &homes, &plan);
+        (plan, errors)
+    }
+
+    /// Removes the skill `name` at `from` in this store: its links (`plan`'s,
+    /// and a project's own), then its lock entry, then its directory, so
+    /// that a failure leaves at worst an unrecorded skill, never an entry for
+    /// a missing one. The lines reporting it.
+    pub fn remove(self, from: &Path, name: &str, plan: &links::Plan) -> Result<Vec<String>> {
+        let mut out = links::apply(plan)?;
+        if let Some(p) = self.project {
+            out.extend(unlink_project(p, name)?);
+        }
+        Lock::remove(&self.lock_dir(), name)?;
+        fs::remove_dir_all(from).map_err(|e| format!("{}: {e}", from.display()))?;
+        out.push(format!("removed   {}", from.display()));
+        Ok(out)
+    }
+
+    fn store(self) -> PathBuf {
+        self.project.map_or_else(|| dir(self.data), project_dir)
+    }
+
+    /// Where its `mazo.lock` is.
+    fn lock_dir(self) -> PathBuf {
+        self.project.unwrap_or(self.data).to_path_buf()
+    }
 }
 
 /// Installs the skill of `from` in `child` (`None` for `from.root` itself)
@@ -440,12 +516,12 @@ fn install(
     let (skill_md, files) = checked(&src, &name, rename.is_some()).map_err(usage)?;
 
     let Target { data, project } = target;
-    let project_store = project.map(|p| p.join(PROJECT_STORE));
-    let store = project_store.clone().unwrap_or_else(|| dir(data));
+    let store = target.store();
     let to = store.join(&name);
-    let links: Vec<PathBuf> = project.into_iter().flat_map(|p| PROJECT_LINKS.map(|d| p.join(d).join(&name))).collect();
-    let roots = cfg.source.iter().cloned().chain([dir(data)]).chain(project_store);
-    let taken = roots.map(|r| r.join(&name)).chain(links.iter().cloned()).find(|p| p.symlink_metadata().is_ok());
+    let links: Vec<(PathBuf, PathBuf)> = project.into_iter().flat_map(|p| project_links(p, &name)).collect();
+    let roots = cfg.source.iter().cloned().chain([dir(data)]).chain(project.map(|_| store.clone()));
+    let taken =
+        roots.map(|r| r.join(&name)).chain(links.iter().map(|(l, _)| l.clone())).find(|p| p.symlink_metadata().is_ok());
     if let Some(p) = taken {
         return Err(Error::Usage(format!(
             "add refused: {} already exists; pass --as <name> to install it under another name",
@@ -489,21 +565,19 @@ fn install(
         r#try,
         verdict,
     };
-    let lock_dir = project.unwrap_or(data);
+    let lock_dir = target.lock_dir();
     let record = |locked| {
-        Lock::load(lock_dir).and_then(|mut lock| {
+        Lock::load(&lock_dir).and_then(|mut lock| {
             lock.skills.push(locked);
-            lock.save(lock_dir)
+            lock.save(&lock_dir)
         })
     };
     if project.is_some() {
-        // Relative, so that they resolve on any checkout of the project.
-        let target = Path::new("../..").join(PROJECT_STORE).join(&name);
         let mut made = Vec::new();
-        let linked = links.iter().try_for_each(|link| {
+        let linked = links.iter().try_for_each(|(link, target)| {
             let parent = link.parent().expect("a project link has a parent");
             fs::create_dir_all(parent).map_err(|e| err(parent, e))?;
-            std::os::unix::fs::symlink(&target, link).map_err(|e| err(link, e))?;
+            std::os::unix::fs::symlink(target, link).map_err(|e| err(link, e))?;
             made.push(link);
             Ok(())
         });
@@ -557,6 +631,8 @@ pub struct Update<'a> {
     /// The TUI's job pane: what the update reports, and its judge's
     /// progress, go there instead of to stdout and stderr.
     pub pane: Option<&'a Pane>,
+    /// Update the project skills at the current directory's git root.
+    pub project: bool,
 }
 
 /// Where an update reports: the TUI's job pane, else stdout, or stderr for
@@ -594,11 +670,27 @@ impl Out<'_> {
 /// not updatable. A skill that fails or is refused is left as it was and the
 /// rest still run; the exit code is the highest of the failures', 2 for no
 /// judge and 1 for the rest. A name that is not a store skill is a usage error.
+/// With `--project` it updates the project's skills and lockfile instead, the
+/// judge seeing the project's skills too; their links, relative to the
+/// project store, need no change.
 pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<ExitCode> {
     let (names, out) = (args.names, Out(args.pane));
-    let lock = Lock::load(data)?;
+    let project = if args.project { Some(project_root("update")?) } else { None };
+    let target = Target { data, project: project.as_deref() };
+    let with_project;
+    let inv = match &project {
+        Some(p) => {
+            with_project = project_inventory(inv, p)?;
+            &with_project
+        }
+        None => inv,
+    };
+    let lock = Lock::load(&target.lock_dir())?;
     if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
-        return Err(Error::Usage(format!("update: not a store skill: {n}")));
+        return Err(Error::Usage(match project {
+            Some(_) => format!("update: not a project skill: {n}"),
+            None => format!("update: not a store skill: {n}{}", project_hint(n)),
+        }));
     }
     let consent = Consent { update: true, yes: args.yes, force: args.force, asks: None };
     let revet = cfg.judge.as_ref().map(|judge| Revet {
@@ -641,9 +733,9 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             Some(r) => Some(r),
         };
         remote.subpath = if l.subpath == "." { PathBuf::new() } else { l.subpath.clone().into() };
-        match refresh(cfg, inv, data, l, &remote, vet, out) {
+        match refresh(cfg, inv, target, l, &remote, vet, out) {
             Ok(Some(commit)) => {
-                out.line(&format!("updated {} to {commit}", dir(data).join(&l.name).display()));
+                out.line(&format!("updated {} to {commit}", target.store().join(&l.name).display()));
                 updated = true;
             }
             Ok(None) => out.line(&format!("{}: up to date", l.name)),
@@ -654,9 +746,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         }
     }
     if updated {
-        let homes: Vec<&Home> = cfg.homes.iter().collect();
-        let plan = links::plan(cfg, inv, &homes, None);
-        let errors = links::sync_errors(cfg, inv, &homes, &plan);
+        let (plan, errors) = target.home_sync(cfg, inv, None);
         for e in &errors {
             out.error(e);
         }
@@ -677,23 +767,24 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
 
 /// Clones `remote` into `<data>/.clone-<pid>` and, when the skill at its
 /// subpath hashes unlike `l`, passes it through the `vet` gate if there is
-/// one, then swaps the copy in for `store/<name>` under the data lock and
-/// records the commit and hash, and any new verdict: the new commit, or
-/// `None` when up to date. A refused vet, a sync that would fail with the new
-/// copy, or any failed write leaves the old copy and the lockfile as they
-/// were; the sync's errors go to `out`. A cancel stops it before the swap,
-/// and a copy an interrupted swap set aside is put back first ([`recover`]).
+/// one, then swaps the copy in for `<store>/<name>` of `target` under the
+/// data lock and records the commit and hash, and any new verdict, in its
+/// lockfile: the new commit, or `None` when up to date. A refused vet, a
+/// sync that would fail with the new copy (for the data directory's store),
+/// or any failed write leaves the old copy and the lockfile as they were;
+/// the sync's errors go to `out`. A cancel stops it before the swap, and a
+/// copy an interrupted swap set aside is put back first ([`recover`]).
 fn refresh(
     cfg: &Config,
     inv: &Inventory,
-    data: &Path,
+    target: Target,
     l: &Locked,
     remote: &Remote,
     vet: Option<&Revet>,
     out: Out,
 ) -> Result<Option<String>> {
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
-    let store = dir(data);
+    let (data, store, lock_dir) = (target.data, target.store(), target.lock_dir());
     let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
     {
         let _lock = ledger::lock(data)?;
@@ -738,10 +829,9 @@ fn refresh(
     });
     swapped?;
 
-    let homes: Vec<&Home> = cfg.homes.iter().collect();
-    let errors = links::sync_errors(cfg, inv, &homes, &links::plan(cfg, inv, &homes, None));
+    let (_, errors) = target.home_sync(cfg, inv, None);
     let recorded = if errors.is_empty() {
-        Lock::load(data).and_then(|mut lock| {
+        Lock::load(&lock_dir).and_then(|mut lock| {
             let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;
             entry.commit = Some(commit.clone());
             entry.content_hash = content_hash;
@@ -749,7 +839,7 @@ fn refresh(
                 (entry.vetted_at, entry.r#for, entry.r#try) = (Some(at), Some(vet.r#for), vet.r#try);
                 entry.verdict = Some(vet.verdict);
             }
-            lock.save(data)
+            lock.save(&lock_dir)
         })
     } else {
         Err("update refused; the skill was left as it was".into())
