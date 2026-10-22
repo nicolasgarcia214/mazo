@@ -23,7 +23,10 @@ use ratatui::crossterm::execute;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{
+    Block, BorderType, Clear, HighlightSpacing, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Table, TableState, Tabs,
+};
 
 use crate::audit::{self, SkillRecord};
 use crate::config::{Config, Home};
@@ -308,46 +311,110 @@ fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
     }
 }
 
-/// The header and rows of a table as lines, one space between columns, the
-/// header bold in the accent. The columns past the first two that do not fit
-/// in `width` are dropped from the right. The skill column is never styled,
-/// so a name never takes a status colour.
-fn table(header: &[(&str, Align)], rows: &[Vec<String>], width: usize) -> Vec<Line<'static>> {
-    let chars = |s: &str| s.chars().count();
-    let mut widths: Vec<usize> = header.iter().map(|(h, _)| chars(h)).collect();
-    for row in rows {
-        for (w, cell) in widths.iter_mut().zip(row) {
-            *w = (*w).max(chars(cell));
-        }
+/// A table column: its header, alignment and cells.
+struct Column {
+    head: &'static str,
+    align: Align,
+    cells: Vec<String>,
+}
+
+impl Column {
+    /// The width of its widest cell or its header.
+    fn width(&self) -> usize {
+        self.cells.iter().map(|c| c.chars().count()).chain([self.head.chars().count()]).max().unwrap_or(0)
     }
-    let mut used = 0;
-    let mut shown = 0;
-    for (i, w) in widths.iter().enumerate() {
-        let need = used + w + usize::from(i > 0);
-        if i >= 2 && need > width {
+}
+
+/// How a column gives way as the terminal narrows.
+enum Narrow {
+    Drop(&'static str),
+    /// The two columns fold into one under the header, each cell `a/b`.
+    Fold(&'static str, &'static str, &'static str),
+    /// The column's cells are cut with `…`, down to its header's width.
+    Cut(&'static str),
+}
+
+/// How the columns give way as the terminal narrows, the first first, each
+/// step taken only while the table overflows. A column not named here
+/// never narrows; one only cut never drops.
+const NARROWING: &[Narrow] = &[
+    Narrow::Drop("30d"),
+    Narrow::Drop("typed"),
+    Narrow::Drop("ref"),
+    Narrow::Drop("read"),
+    Narrow::Fold("slash", "tool", "via"),
+    Narrow::Drop("agents"),
+    Narrow::Cut("notes"),
+    Narrow::Cut("skill"),
+];
+
+/// `cols` narrowed by [`NARROWING`] until they fit in `room` columns, one
+/// space between them, and the width of each: the first and the last take
+/// what is left over.
+fn fit(mut cols: Vec<Column>, room: usize) -> (Vec<Column>, Vec<u16>) {
+    let used = |cols: &[Column]| cols.iter().map(Column::width).sum::<usize>() + cols.len().saturating_sub(1);
+    for step in NARROWING {
+        let over = used(&cols).saturating_sub(room);
+        if over == 0 {
             break;
         }
-        (used, shown) = (need, i + 1);
-    }
-    let line = |cells: Vec<&str>, style: bool| {
-        let mut spans = Vec::new();
-        for (i, (cell, (&w, (head, align)))) in cells.into_iter().zip(widths.iter().zip(header)).take(shown).enumerate()
-        {
-            if i > 0 {
-                spans.push(Span::raw(" "));
+        let at = |cols: &[Column], head| cols.iter().position(|c| c.head == head);
+        match *step {
+            Narrow::Drop(head) => _ = at(&cols, head).map(|i| cols.remove(i)),
+            Narrow::Fold(a, b, head) => {
+                if let (Some(i), Some(j)) = (at(&cols, a), at(&cols, b)) {
+                    let b = cols.remove(j);
+                    let a = &mut cols[if i < j { i } else { i - 1 }];
+                    a.cells = a.cells.iter().zip(&b.cells).map(|(x, y)| format!("{x}/{y}")).collect();
+                    a.head = head;
+                }
             }
-            let pad = Span::raw(" ".repeat(w - chars(cell)));
-            let text = if style && i > 0 { styled(head, cell) } else { vec![Span::raw(cell.to_string())] };
-            match align {
-                Align::Left => spans.extend(text.into_iter().chain([pad])),
-                Align::Right => spans.extend(std::iter::once(pad).chain(text)),
+            Narrow::Cut(head) => {
+                if let Some(col) = at(&cols, head).map(|i| &mut cols[i]) {
+                    let keep = col.width().saturating_sub(over).max(head.chars().count());
+                    for cell in &mut col.cells {
+                        *cell = report::cut(cell, keep);
+                    }
+                }
             }
         }
-        Line::from(spans)
+    }
+    let mut widths: Vec<usize> = cols.iter().map(Column::width).collect();
+    let spare = room.saturating_sub(used(&cols));
+    let last = widths.len() - 1;
+    widths[0] += spare / 2;
+    widths[last] += spare - spare / 2;
+    (cols, widths.into_iter().map(|w| w as u16).collect())
+}
+
+/// `header` and `rows` as a table that fits `width` columns: the header bold
+/// in the accent, a cell aligned as its column. The skill column is never
+/// styled, so a name never takes a status colour.
+fn table(header: &[(&'static str, Align)], rows: Vec<Vec<String>>, width: usize) -> Table<'static> {
+    let mut cols: Vec<Column> = header.iter().map(|&(head, align)| Column { head, align, cells: Vec::new() }).collect();
+    for row in rows {
+        for (col, cell) in cols.iter_mut().zip(row) {
+            col.cells.push(cell);
+        }
+    }
+    let (cols, widths) = fit(cols, width);
+    let aligned = |line: Line<'static>, align: Align| match align {
+        Align::Left => line,
+        Align::Right => line.right_aligned(),
     };
-    let mut out = vec![line(header.iter().map(|(h, _)| *h).collect(), false).fg(theme::ACCENT).bold()];
-    out.extend(rows.iter().map(|r| line(r.iter().map(String::as_str).collect(), true)));
-    out
+    let head = Row::new(cols.iter().map(|c| aligned(Line::raw(c.head), c.align))).fg(theme::ACCENT).bold();
+    let rows = (0..cols.first().map_or(0, |c| c.cells.len())).map(|r| {
+        Row::new(cols.iter().enumerate().map(|(i, c)| {
+            let cell = &c.cells[r];
+            let spans = if i > 0 { styled(c.head, cell) } else { vec![Span::raw(cell.clone())] };
+            aligned(Line::from(spans), c.align)
+        }))
+    });
+    Table::new(rows, widths.into_iter().map(Constraint::Length))
+        .header(head)
+        .row_highlight_style(theme::selected())
+        .highlight_symbol(theme::gutter(true))
+        .highlight_spacing(HighlightSpacing::Always)
 }
 
 impl App {
@@ -929,28 +996,40 @@ impl App {
         })
     }
 
-    /// The top bar: the name, the tabs or the card's trail, then the count
-    /// of listed skills and the filter, the window, and the agent, channel
-    /// and authoring filters when set.
-    fn header(&self) -> Line<'static> {
+    /// The top bar in `area`: the name, the tabs or the card's trail, then
+    /// the count of listed skills and the filter, the window, and the agent,
+    /// channel and authoring filters when set.
+    fn draw_top(&self, frame: &mut Frame, area: Rect) {
         let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
-        let mut spans = vec![Span::raw(" ♠ mazo ").fg(Color::Black).bg(theme::ACCENT).bold(), Span::raw("  ")];
-        match (self.screen, &self.card) {
+        // The first `width` columns of `area`, and the rest.
+        let split = |area, width: usize| {
+            Layout::horizontal([Constraint::Length(width as u16), Constraint::Fill(1)]).areas(area)
+        };
+        let logo = Line::from(vec![Span::raw(" ♠ mazo ").fg(Color::Black).bg(theme::ACCENT).bold(), Span::raw(" ")]);
+        let [at, area] = split(area, logo.width());
+        frame.render_widget(logo, at);
+        let area = match (self.screen, &self.card) {
             (Screen::Card, Some((skill, _))) => {
                 let back = if self.back == Screen::Unused { "unused" } else { "usage" };
-                spans.extend([muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]);
+                let trail =
+                    Line::from(vec![muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]);
+                let [at, area] = split(area, trail.width());
+                frame.render_widget(trail, at);
+                area
             }
             _ => {
-                for (s, label) in [(Screen::Usage, "usage"), (Screen::Unused, "unused")] {
-                    spans.push(if s == self.screen {
-                        Span::raw(label).fg(theme::ACCENT).bold().underlined()
-                    } else {
-                        muted(label)
-                    });
-                    spans.push(Span::raw("  "));
-                }
+                const TABS: [&str; 2] = ["usage", "unused"];
+                let tabs = Tabs::new(TABS)
+                    .select(usize::from(self.screen == Screen::Unused))
+                    .style(theme::MUTED)
+                    .highlight_style(Style::new().fg(theme::ACCENT).bold().underlined())
+                    .divider(Span::raw("│").fg(theme::MUTED));
+                // Each title is padded with a space either side, a divider between.
+                let [at, area] = split(area, TABS.iter().map(|t| t.len() + 3).sum::<usize>() - 1);
+                frame.render_widget(tabs, at);
+                area
             }
-        }
+        };
         let mut chips: Vec<(&str, String)> = Vec::new();
         if self.screen != Screen::Card {
             chips.push(("", format!("{} skills", self.listed().len())));
@@ -969,14 +1048,14 @@ impl App {
             chips.extend(self.channel.map(|c| ("channel ", name(c))));
             chips.extend(self.authoring.then(|| ("authoring ", "on".to_string())));
         }
-        spans.push(Span::raw(" "));
+        let mut spans = vec![Span::raw(" ")];
         for (i, (label, value)) in chips.into_iter().enumerate() {
             if i > 0 {
                 spans.push(muted(" · "));
             }
             spans.extend([muted(label), Span::raw(value).fg(theme::ACCENT)]);
         }
-        Line::from(spans)
+        frame.render_widget(Line::from(spans), area);
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
@@ -994,7 +1073,7 @@ impl App {
             height,
         ])
         .areas(frame.area());
-        frame.render_widget(Paragraph::new(self.header()), top);
+        self.draw_top(frame, top);
         frame.render_widget(Paragraph::new(footer_lines), footer);
         if let Some(job) = &self.job {
             draw_job(frame, job, pane);
@@ -1057,19 +1136,15 @@ impl App {
             frame.render_widget(Paragraph::new(line), body.centered_vertically(Constraint::Length(1)));
             return;
         }
-        // Room for the gutter and the scrollbar.
-        let mut lines = table(header, &rows, usize::from(body.width).saturating_sub(3));
         self.page = usize::from(body.height).saturating_sub(1).max(1);
-        let rows = lines.split_off(1.min(lines.len()));
         let total = rows.len();
         let first = self.selected.saturating_sub(self.page - 1);
-        lines[0].spans.insert(0, theme::gutter(false));
-        lines.extend(rows.into_iter().enumerate().skip(first).map(|(i, mut l)| {
-            let selected = i == self.selected;
-            l.spans.insert(0, theme::gutter(selected));
-            if selected { l.patch_style(theme::selected()) } else { l }
-        }));
-        frame.render_widget(Paragraph::new(lines), body);
+        // The scrollbar, when shown, takes the last column.
+        let area = Rect { width: body.width.saturating_sub(u16::from(total > self.page)), ..body };
+        // Room for the gutter.
+        let table = table(header, rows, usize::from(area.width).saturating_sub(2));
+        let mut state = TableState::new().with_offset(first).with_selected(Some(self.selected));
+        frame.render_stateful_widget(table, area, &mut state);
         let below = Rect { y: body.y + 1, height: body.height.saturating_sub(1), ..body };
         scrollbar(frame, below, total, first, self.page);
     }
