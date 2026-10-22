@@ -3,9 +3,15 @@
 //! `mazo usage` and `mazo unused`, and the HTML report's legend.
 
 /// What each column of the usage table means, in its order.
-pub const USAGE_COLUMNS: [(&str, &str); 13] = [
+pub const USAGE_COLUMNS: [(&str, &str); 15] = [
     ("skill", "the skill's name; (project) marks a project skill"),
     ("sess", "distinct sessions with a strong load (slash, tool or typed) in the window"),
+    ("7d", "distinct sessions with a strong load over the last 7 days, whatever the window"),
+    ("30d", "distinct sessions with a strong load over the last 30 days, whatever the window"),
+    (
+        "trend",
+        "30d against the 30 days before: ↑ up 20% or more, ↓ down 20% or more, → within 20%, new from none, blank for none in either",
+    ),
     ("slash", "loads the user invoked: /name in Claude, $name in Codex, a <skill> block in Pi"),
     ("tool", "loads through Claude's Skill tool"),
     ("typed", "/name lines in Claude's history.jsonl whose transcript is gone"),
@@ -14,13 +20,12 @@ pub const USAGE_COLUMNS: [(&str, &str); 13] = [
     ("agents", "the agents that loaded it: C Claude, X Codex, P Pi"),
     ("ctx", "what each agent it is linked into keeps of it in context: an agent letter, then its glyph"),
     ("last", "its last strong load: today or Nd ago"),
-    ("30d", "its strong loads per day over the last 30 days, · for none"),
     ("grade", "the latest /grade score, then its stale mark"),
     ("audit", "the latest audit's verdict, else the vet mazo add recorded, else not judged"),
 ];
 
 /// What the TUI's usage table does on a narrow terminal, said under its columns.
-pub const NARROW: &str = "on a narrow terminal some columns hide in priority order, 30d first, \
+pub const NARROW: &str = "on a narrow terminal some columns hide in priority order, typed first, \
     and slash and tool fold into via, shown as slash/tool such as 4/78";
 
 /// What each column of the unused list means, in its order.
@@ -38,7 +43,7 @@ pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
 
 /// The marks and glyphs in the cells, what each means, and how the HTML
 /// report says it when it draws the mark otherwise.
-pub const MARKS: [(&str, &str, Option<&str>); 8] = [
+pub const MARKS: [(&str, &str, Option<&str>); 7] = [
     ("agents", "C Claude, X Codex, P Pi", None),
     ("●", "name and description in context: Claude on, every Codex skill, Pi by default", None),
     ("◐", "name only in context: Claude name-only", None),
@@ -48,7 +53,6 @@ pub const MARKS: [(&str, &str, Option<&str>); 8] = [
         None,
     ),
     ("×", "off: Claude off", None),
-    ("·", "no events that day", Some("a grey tick for a day with no events")),
     ("stale", "the skill changed since the grade", None),
     ("(project)", "a project skill, counted apart", None),
 ];
@@ -61,7 +65,7 @@ pub const FAQ: [(&str, &[&str]); 6] = [
             "The w window: counts cover only the window in the top bar; w cycles it through 30 days, 60 days and all.",
             "Log coverage: mazo reads only the logs on disk; the coverage line says how far back each home goes.",
             "sess counts distinct sessions, not loads: five loads in one session are 1.",
-            "Reads and refs are weak loads, excluded from sess, last and 30d.",
+            "Reads and refs are weak loads, excluded from sess, 7d, 30d, trend and last.",
             "Authoring reads, in sessions that edit or grade the skill, are hidden until A shows them.",
             "Probe sessions, from Claude's other entrypoints, are dropped; mazo usage --all counts them.",
             "Project rows: a skill both global and in the project has one row per scope, counted apart.",
@@ -144,6 +148,11 @@ mod tests {
         let heads = |h: &[(&str, crate::render::Align)]| h.iter().map(|(n, _)| n.to_string()).collect::<Vec<_>>();
         assert_eq!(names(&USAGE_COLUMNS), heads(&USAGE_HEADER));
         assert_eq!(names(&UNUSED_COLUMNS), heads(&UNUSED_HEADER));
+    }
+
+    #[test]
+    fn the_trend_column_says_its_twenty_percent_threshold() {
+        assert!(lines(false).iter().any(|l| l.starts_with("    trend  ") && l.contains("20%")));
     }
 
     #[test]

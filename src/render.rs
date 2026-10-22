@@ -1,5 +1,5 @@
-//! Text rendering helpers shared by reports: aligned tables, sparklines,
-//! local timestamps and status colours.
+//! Text rendering helpers shared by reports: aligned tables, local
+//! timestamps and status colours.
 
 use std::ffi::OsStr;
 
@@ -71,8 +71,8 @@ fn width(s: &str) -> usize {
 }
 
 /// An aligned plain-text table, one space between columns, the header bold
-/// when `tty`. Widths count visible chars, so sparkline cells are one column
-/// each and painted cells keep their alignment. Trailing spaces are trimmed
+/// when `tty`. Widths count visible chars, so painted cells keep their
+/// alignment. Trailing spaces are trimmed
 /// from every line.
 pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> String {
     let mut widths: Vec<usize> = header.iter().map(|(h, _)| width(h)).collect();
@@ -114,25 +114,9 @@ pub fn local(ts: &str, tz: &TimeZone, format: &str) -> String {
     ts.parse::<Timestamp>().map_or(ts.to_string(), |t| t.to_zoned(tz.clone()).strftime(format).to_string())
 }
 
-const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
-/// One cell per count: `·` for zero, and `▁`…`█` for a non-zero count scaled
-/// against the largest, so a single event is still visible.
-pub fn sparkline(counts: &[usize]) -> String {
-    let max = counts.iter().copied().max().unwrap_or(0);
-    counts.iter().map(|&c| if c == 0 { '·' } else { BARS[(c * 8).div_ceil(max) - 1] }).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sparkline_marks_empty_days_and_keeps_small_counts_visible() {
-        assert_eq!(sparkline(&[0, 1, 7, 50, 100]), "·▁▁▄█");
-        assert_eq!(sparkline(&[0, 0]), "··");
-        assert_eq!(sparkline(&[3]), "█");
-    }
 
     #[test]
     fn local_formats_in_the_zone_and_keeps_an_unparsed_timestamp() {

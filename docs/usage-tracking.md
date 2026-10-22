@@ -19,7 +19,7 @@ agent loaded the skill:
 | `ref` | weak | The agent read another Markdown file inside the skill's directory. |
 
 A strong load means the skill was used. Only strong loads count towards
-`sess`, `last` and the sparkline, and only they make a skill used for `unused`
+`sess`, `7d`, `30d`, `trend` and `last`, and only they make a skill used for `unused`
 and `retire`. A weak load means the agent looked at the skill, which may be
 authoring rather than following it.
 
@@ -48,8 +48,11 @@ for what a scan can miss.
 
 ## `mazo usage`
 
-One row per skill: sessions, loads per channel, agents, last use, a 30-day
-sparkline, the latest grade, and the audit column. That column is the first of
+One row per skill: sessions in the window, sessions over the last 7 and 30
+local days whatever the window, the trend of the last 30 days against the 30
+before (`↑` at +20% or more, `↓` at -20% or less, `→` otherwise, `new` from
+none, blank for none in either), loads per channel, agents, last use, the
+latest grade, and the audit column. That column is the first of
 these that exists, cut to 40 characters with `…`:
 
 1. the latest audit's verdict, labelled `audit:`;
