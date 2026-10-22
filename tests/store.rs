@@ -89,6 +89,19 @@ fn add_copies_the_skill_records_it_and_links_it_into_every_home() {
 }
 
 #[test]
+fn a_tilde_source_expands_to_home_and_records_the_absolute_path() {
+    let (fx, dir) = fixture();
+    let under_home = fx.home.join("skills/theirs");
+    fs::create_dir_all(under_home.parent().unwrap()).unwrap();
+    fs::rename(&dir, &under_home).unwrap();
+    // No shell runs, so mazo sees the tilde as typed, as from the TUI.
+    add(&fx, &["~/skills/theirs", "--trust"]).assert_ok();
+    assert!(store(&fx).join("theirs/SKILL.md").is_file());
+    let origin = fs::canonicalize(&under_home).unwrap();
+    assert_eq!(lock(&fx)[0]["origin"].as_str(), Some(s(&origin).as_str()));
+}
+
+#[test]
 fn status_and_sync_keep_store_skills_beside_source_skills() {
     let (fx, dir) = fixture();
     add(&fx, &[&s(&dir), "--trust"]).assert_ok();
