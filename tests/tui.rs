@@ -524,7 +524,9 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
     let fx = Actions::new(true);
     let fresh = fx.data.parent().unwrap().join("in/fresh");
     common::write(&fresh.join("SKILL.md"), "---\nname: fresh\ndescription: X.\n---\n");
-    store::add(&fx.cfg, &fx.inv(), &fx.data, &fresh.to_string_lossy(), None, None, true).unwrap();
+    let fresh = fresh.to_string_lossy();
+    let args = store::Add { source: &fresh, rename: None, pick: None, trust: true, yes: false, force: false };
+    store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
     let now: jiff::Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
     let lock = fx.data.join("mazo.lock");
     let mut lines: Vec<String> = std::fs::read_to_string(&lock).unwrap().lines().map(String::from).collect();
