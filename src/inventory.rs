@@ -67,6 +67,13 @@ impl Inventory {
     pub fn root(&self, name: &str) -> Option<&Path> {
         self.origins.get(name).and_then(|r| r.first()).map(PathBuf::as_path)
     }
+
+    /// The `description` of a skill's `SKILL.md` frontmatter, when it reads.
+    pub fn description(&self, name: &str) -> Option<String> {
+        let text = std::fs::read_to_string(self.root(name)?.join(name).join("SKILL.md")).ok()?;
+        let meta = crate::yaml::frontmatter(&text).ok()?;
+        crate::yaml::get(&meta, "description").and_then(crate::yaml::text).map(str::to_string)
+    }
 }
 
 /// Any non-hidden child directory of the root that contains `SKILL.md`.

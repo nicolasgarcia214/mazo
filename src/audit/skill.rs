@@ -11,8 +11,7 @@ use serde_json::{Value, json};
 
 use super::session::{Followed, Outcome};
 use super::{
-    Audit, JudgeRecord, Ruling, Stage, Synthesis, Verdict, append, frame, hint, judge, list, object, parsed, stamp,
-    text,
+    Audit, JudgeRecord, Ruling, Stage, Synthesis, Verdict, append, frame, judge, list, object, parsed, stamp, text,
 };
 use crate::Result;
 use crate::inventory::git;
@@ -283,7 +282,7 @@ pub(super) fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
     }
     let input = synthesis_input(a, &judged)?;
     let progress = format!("reporting on {} sessions", judged.len());
-    Ok(match judge(a, &SKILL, a.budget, spent, &input, &progress, |v| validate_report(v, &judged))? {
+    Ok(match judge(&a.caller(), &SKILL, a.budget, spent, &input, &progress, |v| validate_report(v, &judged))? {
         Ruling::Valid(result, cost) => {
             let record = SkillRecord {
                 v: 1,
@@ -303,7 +302,7 @@ pub(super) fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
         Ruling::Unfunded(None) => Synthesis::Skipped,
         Ruling::Stopped(why) => {
             eprintln!("ERROR: skill report: {why}");
-            hint(a);
+            a.caller().hint();
             Synthesis::Stopped(why)
         }
     })

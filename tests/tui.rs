@@ -285,7 +285,9 @@ impl Actions {
         let fx = Actions { _temp: temp, skills: home.join("skills"), source: dir, data, cfg };
         // `add` links every skill.
         let stored = root.join("in/stored");
-        store::add(&fx.cfg, &fx.inv(), &fx.data, &stored.to_string_lossy(), None, None, true).unwrap();
+        let stored = stored.to_string_lossy();
+        let args = store::Add { source: &stored, rename: None, pick: None, trust: true, yes: false, force: false };
+        store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
         fx
     }
 

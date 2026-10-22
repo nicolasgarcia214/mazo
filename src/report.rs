@@ -17,7 +17,6 @@ use crate::history::Commit;
 use crate::inventory::{self, Inventory};
 use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin, name};
 use crate::render::{self, Align};
-use crate::yaml;
 
 /// A report window: the last N days, or everything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,11 +695,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
 
     // A name only in history keeps its place in the source.
     let path = inv.root(skill).or(inv.source.as_deref()).map(|r| r.join(skill));
-    let description = path
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p.join("SKILL.md")).ok())
-        .and_then(|text| yaml::frontmatter(&text).ok())
-        .and_then(|fm| yaml::get(&fm, "description").and_then(yaml::text).map(str::to_string));
+    let description = inv.description(skill);
     let history = inv.history.as_ref().map(|h| CardHistory {
         first: h.first(skill),
         last: h.last(skill),

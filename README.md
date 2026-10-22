@@ -136,7 +136,20 @@ trusted = true
 installed_at = "2026-10-21T12:00:00Z"
 ```
 
-The vetting `verdict` is optional and not written yet.
+A vetted install (see [Vetting a skill](#vetting-a-skill)) has `trusted =
+false` and also records the judge's answer:
+
+```toml
+vetted_at = "2026-10-21T12:00:00Z"
+for = "Tidies release notes before a tag."  # what the skill is for
+try = ["Tidy the changelog for 1.2."]       # up to three uses to try
+[skill.verdict]
+security = "…"                     # only with a security finding
+quality = "good"                   # good, weak or poor
+value = "worth trying"             # worth trying, low value, irrelevant or redundant
+redundant_with = "mine"            # only when it overlaps an existing skill
+reasons = ["Clear steps."]
+```
 
 ## Commands
 
@@ -151,7 +164,7 @@ The vetting `verdict` is optional and not written yet.
 | `mazo sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
 | `mazo init [--source <dir>]` | Writes the config, naming the skills directory when given: one home per existing agent directory, every policy rule off, and the first of claude, codex and pi found on `PATH` and logged in as `[judge]`, asking on a terminal when none is. Refuses to overwrite. |
 | `mazo new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry or a store skill of that name. Does not sync. |
-| `mazo add <source>` | Copies a skill into the store, records it in `mazo.lock` and links it into every home. `<source>` is a local path (one that exists, or starts with `.`, `/` or `~`); a git URL (`https://…`, `ssh://…`, `git@host:owner/repo.git`, `file://…`), where a path after the segment ending in `.git` is the subpath (`https://host/owner/repo.git/skills/x`); or GitHub shorthand `owner/repo[/path/to/skill]`, cloned from `https://github.com/owner/repo.git`. The recorded origin drops a trailing `/` and ends in `.git` (except a `file://` URL), so `https://github.com/owner/repo` and `owner/repo` record the same one. A repository is shallow-cloned with the system `git` into the data directory, without prompting (ssh runs with `BatchMode=yes` unless `GIT_SSH_COMMAND` is set), and the clone removed afterwards; a failed clone exits 1 with git's error and installs nothing. The source (at its subpath) is the skill when it holds a `SKILL.md`; otherwise its child directories holding one are its skills, and with several `--skill <name>` picks one (without it, exit 2 lists them). Refuses (exit 2, writing nothing) a name already in `source` or the store; `--as <name>` installs it under another name and rewrites its `SKILL.md` `name:`. A skill containing a symlink, or one a symlink leads outside the clone, is refused. A source not on the `trusted` list needs `--trust`, since vetting is not available yet; local paths are never on it. Installs nothing if the resulting sync would fail. |
+| `mazo add <source>` | Copies a skill into the store, records it in `mazo.lock` and links it into every home. `<source>` is a local path (one that exists, or starts with `.`, `/` or `~`); a git URL (`https://…`, `ssh://…`, `git@host:owner/repo.git`, `file://…`), where a path after the segment ending in `.git` is the subpath (`https://host/owner/repo.git/skills/x`); or GitHub shorthand `owner/repo[/path/to/skill]`, cloned from `https://github.com/owner/repo.git`. The recorded origin drops a trailing `/` and ends in `.git` (except a `file://` URL), so `https://github.com/owner/repo` and `owner/repo` record the same one. A repository is shallow-cloned with the system `git` into the data directory, without prompting (ssh runs with `BatchMode=yes` unless `GIT_SSH_COMMAND` is set), and the clone removed afterwards; a failed clone exits 1 with git's error and installs nothing. The source (at its subpath) is the skill when it holds a `SKILL.md`; otherwise its child directories holding one are its skills, and with several `--skill <name>` picks one (without it, exit 2 lists them). Refuses (exit 2, writing nothing) a name already in `source` or the store; `--as <name>` installs it under another name and rewrites its `SKILL.md` `name:`. A skill containing a symlink, or one a symlink leads outside the clone, is refused. A source not on the `trusted` list is vetted by the `[judge]` before anything is copied (see [Vetting a skill](#vetting-a-skill)); local paths are never on it. With no `[judge]` it is refused (exit 2) unless `--trust`, which installs without vetting. Installs nothing if the resulting sync would fail. |
 | `mazo update [names...]` | Re-clones each git-sourced store skill (every one when no name is given) from its recorded origin, shallow and without prompting as `add` does, and reads the same subpath. When the copy's content hash differs, it replaces `store/<name>/` (staged beside it and swapped in, so a failure leaves the old copy) and records the new `commit` and `content_hash`, keeping `installed_at`; then it links the way `add` does. An unchanged skill is reported up to date and its `mazo.lock` entry is left as it was. A skill with `trusted = false`, whose source is not on the `trusted` list either, is skipped, since re-vetting is not available yet; a local-path skill is not updatable. A failed clone, or an update the resulting sync would refuse, leaves that skill as it was; the rest still run and the command exits 1. A name that is not a store skill is a usage error. |
 | `mazo retire <name>` | Moves a skill of `source` to `.archive/` (`git mv` when tracked) and prunes its links. A store skill is removed instead: its links, its `mazo.lock` entry and its store directory are deleted. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `mazo prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
@@ -183,6 +196,31 @@ On a terminal, `usage`, `unused` and `status` colour their status tokens:
 `unused` and `ERROR:` in red; `held`, `new`, the `named by` note, `warning:`
 and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
 `NO_COLOR` set to a non-empty value, carries no colour.
+
+## Vetting a skill
+
+`mazo add` of a source not on the `trusted` list, without `--trust`, first
+sends the skill to one call of the `[judge]`, with the same billing, login
+check and default $1 cap (for a judge that reports its cost) as `audit`. The
+judge sees every file of the skill and the name and description of every skill in
+`source` and the store, and answers with a security finding (or
+none), a `quality` (`good`, `weak`, `poor`), a `value` (`worth trying`, `low
+value`, `irrelevant`, `redundant`, naming the skill it overlaps), its
+reasons, what the skill is for, and up to three uses to try. An answer that
+breaks the schema is retried once. mazo prints the verdict, then:
+
+- A security finding refuses the install (exit 1) unless `--force`; with
+  `--force` the install still asks as below. A file mazo did not send in
+  full (not text, over 64 KiB, or past 256 KiB in all) is a security finding
+  of its own: the refusal names each one and why, before the judge is called.
+- It asks `install <name>? [Y/n]` when the skill is worth trying and not
+  `poor`, and `[y/N]` otherwise; Enter takes the default.
+- `--yes` accepts without asking. Without a terminal on stdin and without
+  `--yes`, the install is refused (exit 2) before the judge is called.
+
+A refused or declined install, or a judge that gave no valid answer, leaves
+no store directory and no `mazo.lock` entry. An accepted one records the
+verdict in its `mazo.lock` entry.
 
 ## Auditing a skill
 

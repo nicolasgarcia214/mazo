@@ -3,11 +3,13 @@
 //! `mazo retire` drops.
 
 use std::fs;
+use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
 
+use crate::audit::{self, Caller, Vet, VetVerdict};
 use crate::config::{Config, Home};
 use crate::inventory::Inventory;
 use crate::{Error, Result};
@@ -53,8 +55,17 @@ pub struct Locked {
     pub trusted: bool,
     /// RFC 3339.
     pub installed_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verdict: Option<String>,
+    /// When the judge vetted the skill, RFC 3339; none for a trusted install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vetted_at: Option<String>,
+    /// The judge's one or two sentences on what the skill is for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#for: Option<String>,
+    /// Up to three uses the judge suggests trying.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub r#try: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<VetVerdict>,
 }
 
 impl Lock {
@@ -183,30 +194,56 @@ impl Drop for Scratch {
     }
 }
 
-/// `mazo add <source> [--skill <name>] [--as <name>] [--trust]`: copies the
-/// skill at `source` (a local path, or a repository shallow-cloned into
-/// `<data dir>/.clone-<pid>`) into the store, records it in the lockfile and
-/// links it into every home. A bad skill, a name taken in any root, several
-/// skills and no `--skill`, or an untrusted source is a usage error, and a
-/// sync that would fail with the skill installed is a refusal; either way the
-/// store and the lockfile are left as they were.
-pub fn add(
-    cfg: &Config,
-    inv: &Inventory,
-    data: &Path,
-    arg: &str,
-    rename: Option<&str>,
-    pick: Option<&str>,
-    trust: bool,
-) -> Result<ExitCode> {
+/// `mazo add`'s arguments.
+pub struct Add<'a> {
+    /// A local path, a git URL or GitHub `owner/repo[/path]`.
+    pub source: &'a str,
+    /// `--as`.
+    pub rename: Option<&'a str>,
+    /// `--skill`.
+    pub pick: Option<&'a str>,
+    /// Install without vetting.
+    pub trust: bool,
+    /// Accept a vetted skill without asking.
+    pub yes: bool,
+    /// Install a skill with a security finding.
+    pub force: bool,
+}
+
+/// `mazo add <source> [--skill <name>] [--as <name>] [--trust] [--yes]
+/// [--force]`: copies the skill at `source` (a local path, or a repository
+/// shallow-cloned into `<data dir>/.clone-<pid>`) into the store, records it
+/// in the lockfile and links it into every home. A source that is not
+/// trusted is first vetted by the judge ([`gate`]). A bad skill, a name taken
+/// in any root, several skills and no `--skill`, or an untrusted source with
+/// no judge is a usage error, and a refused vet or a sync that would fail
+/// with the skill installed is a refusal; either way the store and the
+/// lockfile are left as they were.
+pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<ExitCode> {
+    let (arg, rename) = (args.source, args.rename);
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let source = Source::parse(arg).map_err(usage)?;
-    let trusted = trust || matches!(&source, Source::Git(r) if r.trusted_by(&cfg.trusted));
-    if !trusted {
-        return Err(Error::Usage(format!(
-            "add refused: {arg} is not on the trust list and vetting is not available yet; \
-             pass --trust to install it without vetting"
-        )));
+    let trusted = args.trust || matches!(&source, Source::Git(r) if r.trusted_by(&cfg.trusted));
+    // The judge is set up, and its login checked, before anything is cloned.
+    let backend = match &cfg.judge {
+        _ if trusted => None,
+        None => {
+            return Err(Error::Usage(format!(
+                "add refused: {arg} is not on the trust list and vetting is not available yet; \
+                 pass --trust to install it without vetting"
+            )));
+        }
+        Some(judge) => Some((judge, audit::backend(judge, &cfg.homes)?)),
+    };
+    let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref() });
+    if let Some(c) = &caller {
+        // Refused before the judge is paid for an answer nobody can accept.
+        if !args.yes && !std::io::stdin().is_terminal() {
+            return Err(Error::Usage(
+                "add refused: a vetted install asks y/N; pass --yes when stdin is not a terminal".into(),
+            ));
+        }
+        c.login()?;
     }
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let mut scratch = None;
@@ -225,7 +262,7 @@ pub fn add(
             (clone.join(&remote.subpath), remote.url.clone(), remote.subpath.clone(), Some(commit), remote.name())
         }
     };
-    let (src, child) = skill_in(&root, &own, pick).map_err(usage)?;
+    let (src, child) = skill_in(&root, &own, args.pick).map_err(usage)?;
     let src = resolved(&src, scratch.as_ref().map(|s| s.0.as_path())).map_err(usage)?;
     let subpath = match &child {
         Some(c) => subpath.join(c),
@@ -243,7 +280,12 @@ pub fn add(
         )));
     }
 
-    let installed_at = jiff::Timestamp::now().round(jiff::Unit::Second).map_err(|e| e.to_string())?.to_string();
+    let vetted = match &caller {
+        Some(c) => Some((gate(c, inv, args, &name, &src, &files, &skill_md)?, now()?)),
+        None => None,
+    };
+
+    let installed_at = now()?;
     let _lock = ledger::lock(data)?;
     // Copied under a hidden name, which no root lists, then renamed into place.
     let staged = store.join(format!(".add-{name}"));
@@ -263,7 +305,23 @@ pub fn add(
     let errors = links::sync_errors(cfg, &with, &homes, &plan);
     let recorded = if errors.is_empty() {
         let subpath = if subpath.as_os_str().is_empty() { ".".into() } else { subpath.to_string_lossy().into() };
-        let locked = Locked { name, origin, subpath, commit, content_hash, trusted, installed_at, verdict: None };
+        let (vetted_at, r#for, r#try, verdict) = match vetted {
+            Some((vet, at)) => (Some(at), Some(vet.r#for), vet.r#try, Some(vet.verdict)),
+            None => (None, None, Vec::new(), None),
+        };
+        let locked = Locked {
+            name,
+            origin,
+            subpath,
+            commit,
+            content_hash,
+            trusted,
+            installed_at,
+            vetted_at,
+            r#for,
+            r#try,
+            verdict,
+        };
         Lock::load(data).and_then(|mut lock| {
             lock.skills.push(locked);
             lock.save(data)
@@ -446,6 +504,104 @@ fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: &Path) -> Result
         }
     });
     copied.map_err(Error::from).and_then(|()| content_hash(staged)).inspect_err(|_| drop(fs::remove_dir_all(staged)))
+}
+
+/// Now, to the second, RFC 3339.
+fn now() -> Result<String> {
+    Ok(jiff::Timestamp::now().round(jiff::Unit::Second).map_err(|e| e.to_string())?.to_string())
+}
+
+/// The most bytes of one file, and of all files, the vet judge is sent; a
+/// file past either, or one that is not text, is withheld.
+const VET_FILE_BYTES: u64 = 64 * 1024;
+const VET_TOTAL_BYTES: u64 = 256 * 1024;
+
+/// The vet gate, before anything is copied: one judge call on the files of
+/// the skill at `src` (`files`, with `skill_md` as its `SKILL.md`) and the
+/// names and descriptions of every source and store skill, its verdict
+/// shown, then obeyed. A file withheld from the judge (not text, or past
+/// [`VET_FILE_BYTES`] or [`VET_TOTAL_BYTES`]) was never reviewed, so it is a
+/// security finding of mazo's own. A security finding refuses the install
+/// (exit 1) unless `--force`, a withheld file before the judge is called;
+/// then the user is asked y/N, defaulting to the verdict's
+/// [`VetVerdict::default_yes`], unless `--yes`. A judge that gives no valid
+/// answer, or a No, refuses the install.
+fn gate(
+    c: &Caller,
+    inv: &Inventory,
+    args: &Add,
+    name: &str,
+    src: &Path,
+    files: &[PathBuf],
+    skill_md: &str,
+) -> Result<Vet> {
+    let (mut sent, mut withheld, mut total) = (Vec::new(), Vec::new(), 0);
+    for rel in files {
+        let path = src.join(rel);
+        if path.is_dir() {
+            continue;
+        }
+        let bytes = if rel == Path::new("SKILL.md") {
+            skill_md.as_bytes().to_vec()
+        } else {
+            fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?
+        };
+        let size = bytes.len() as u64;
+        let why = if size > VET_FILE_BYTES {
+            Err("over the per-file cap")
+        } else if total + size > VET_TOTAL_BYTES {
+            Err("over the total cap")
+        } else {
+            String::from_utf8(bytes).map_err(|_| "not text")
+        };
+        let rel = rel.to_string_lossy().into_owned();
+        let text = match why {
+            Ok(text) => {
+                total += size;
+                text
+            }
+            Err(why) => {
+                withheld.push(format!("{rel} ({size} bytes, {why})"));
+                format!("(withheld: {size} bytes, {why})")
+            }
+        };
+        sent.push((rel, text));
+    }
+    let withheld = (!withheld.is_empty()).then(|| format!("not sent to the judge in full: {}", withheld.join(", ")));
+    if let Some(withheld) = &withheld
+        && !args.force
+    {
+        return Err(format!("add refused: {withheld}; pass --force to install it anyway").into());
+    }
+    let existing: Vec<(String, String)> =
+        inv.skills.iter().map(|s| (s.clone(), inv.description(s).unwrap_or_default())).collect();
+    let input = audit::vet_input(name, &sent, &existing);
+    let names: Vec<&str> = inv.skills.iter().map(String::as_str).collect();
+    let mut vet = audit::vet(c, name, &input, &names)?
+        .map_err(|why| format!("add refused: vetting {name} failed: {why}; nothing was installed"))?;
+    if let Some(withheld) = withheld {
+        let found = vet.verdict.security.take();
+        vet.verdict.security = Some(found.map_or_else(|| withheld.clone(), |f| format!("{f}; {withheld}")));
+    }
+    print!("{}", vet.text(name));
+    if vet.verdict.security.is_some() && !args.force {
+        return Err("add refused: the judge found a security issue; pass --force to install it anyway".into());
+    }
+    if args.yes {
+        return Ok(vet);
+    }
+    let default = vet.verdict.default_yes();
+    eprint!("install {name}? {} ", if default { "[Y/n]" } else { "[y/N]" });
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
+    let yes = match answer.trim() {
+        "" => default,
+        a => matches!(a, "y" | "Y" | "yes"),
+    };
+    if !yes {
+        return Err("add declined; nothing was installed".into());
+    }
+    Ok(vet)
 }
 
 /// The skill under `root` and the child it is in: `root` itself, named
