@@ -3,10 +3,20 @@
 See which skills Claude Code, Codex and Pi actually load, and keep one skills
 directory linked into all of them.
 
-mazo reads the session logs those agents already write and stores each skill
-load in its own ledger. It links your skills, and skills you install from git,
-into every agent home. Before it installs a skill from a source you have not
-trusted, it has a judge of your choice vet it.
+A skill is a directory holding a `SKILL.md` that an agent loads. mazo reads
+the session logs those agents already write and stores each skill load in its
+own ledger. It links your skills, and skills you install from git, into every
+agent home. Before it installs a skill from a source you have not trusted, it
+has a judge of your choice vet it.
+
+```console
+$ mazo usage
+skill         sess slash tool typed read ref agents last   30d                            grade quality
+release-notes    3     3    0     0    0   0 C      1d ago ······················█··█··█·     - not judged
+triage           1     1    0     0    0   0 C      4d ago ·························█····     - not judged
+tidy-imports     0     0    0     0    0   0        -      ······························     - not judged
+coverage: claude since 2026-10-14
+```
 
 ## What it does
 
@@ -29,26 +39,29 @@ trusted, it has a judge of your choice vet it.
 mazo runs on Linux and macOS (x86_64 and aarch64) and needs at least one of
 Claude Code, Codex or Pi.
 
-No release has been published yet. A release will ship a prebuilt binary
-through npm, Homebrew and a shell installer. These download from the
-repository's GitHub releases, so they work once a release is published and
-readable:
+### Build from source
+
+No release has been published yet, so this is the way to install mazo today.
+It needs a Rust toolchain.
+
+Build with Cargo. Set `CARGO_NET_GIT_FETCH_WITH_CLI=true` so Cargo fetches the
+private repository with your git credentials:
+
+```sh
+CARGO_NET_GIT_FETCH_WITH_CLI=true \
+  cargo install --locked --git https://github.com/nicolasgarcia214/mazo
+```
+
+### Prebuilt binaries
+
+A release ships a prebuilt binary through npm, Homebrew and a shell installer.
+These download from the repository's GitHub releases, so they work once a
+release is published and readable:
 
 ```sh
 npx mazo                          # or: npm install -g mazo
 brew install nicolasgarcia214/tap/mazo
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nicolasgarcia214/mazo/releases/latest/download/mazo-installer.sh | sh
-```
-
-### Build from source
-
-Until then, or to build from source with a Rust toolchain, let Cargo fetch the
-repository with your git credentials by setting
-`CARGO_NET_GIT_FETCH_WITH_CLI=true`:
-
-```sh
-CARGO_NET_GIT_FETCH_WITH_CLI=true \
-  cargo install --locked --git https://github.com/nicolasgarcia214/mazo
 ```
 
 ## Quick start
@@ -74,7 +87,7 @@ mazo                              # open the terminal UI
 | [`mazo scan`](docs/usage-tracking.md#mazo-scan) | Read new log lines into the ledger. |
 | [`mazo usage`](docs/usage-tracking.md#mazo-usage) | One row per skill with its loads, last use and quality. |
 | [`mazo unused`](docs/usage-tracking.md#mazo-unused) | Skills with no strong load in the window. |
-| [`mazo show <skill>`](docs/usage-tracking.md#mazo-show) | The skill card. |
+| [`mazo show <skill>`](docs/usage-tracking.md#mazo-show) | Everything mazo knows about one skill. |
 | [`mazo report`](docs/usage-tracking.md#mazo-report) | One self-contained HTML page of usage and cards. |
 | [`mazo status`](docs/managing-skills.md#mazo-status) | Drift and policy for every home. Writes nothing. |
 | [`mazo sync`](docs/managing-skills.md#mazo-sync) | Link every skill into every home. |
@@ -84,7 +97,7 @@ mazo                              # open the terminal UI
 | [`mazo retire <name>`](docs/managing-skills.md#mazo-retire) | Archive a skill of `source`, or remove a store skill. |
 | [`mazo prune [<name>]`](docs/managing-skills.md#mazo-prune) | Delete archived skills from `.archive/`. |
 | [`mazo audit <skill>`](docs/audit.md) | Have an agent judge how the skill performs in real sessions. |
-| [`mazo`](docs/tui.md) | Open the TUI at a terminal; print the help off one. |
+| [`mazo`](docs/tui.md) | Open the TUI; print the help when not on a terminal. |
 
 `add`, `update` and `retire` take `--project` to act on one project's skills;
 see [project skills](docs/project-skills.md). Exit codes are 0 on success, 1
@@ -99,21 +112,13 @@ writes it.
 
 ```toml
 source = "."                      # your skills directory, relative to this file; optional
-loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
-trusted = ["owner", "owner/repo"] # sources whose skills install without vetting
 
 [[home]]
 name  = "claude"
 agent = "claude"
 path  = "~/.claude"
 
-[[home]]
-name  = "pi"
-agent = "pi"
-path  = "~/.pi/agent"
-links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
-
-[judge]                           # the agent mazo audit calls; none without this table
+[judge]                           # the agent that vets installs and runs audits; none without this table
 agent = "claude"                  # claude (default), codex, pi, command or http
 model = "sonnet"                  # optional; unset means the agent's own default
 billing = "subscription"          # subscription (default) or api
@@ -157,16 +162,8 @@ the source you name.
 
 ## Development
 
-CI runs these on Linux and macOS:
-
-```sh
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-TZ=Pacific/Kiritimati cargo test --locked
-TZ=Pacific/Pago_Pago cargo test --locked
-```
-
-[CONTRIBUTING.md](CONTRIBUTING.md) covers the test suite and adding an agent.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the checks CI runs, the test suite
+and adding an agent.
 
 ## License
 

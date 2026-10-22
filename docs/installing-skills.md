@@ -28,8 +28,7 @@ root instead (see [project skills](project-skills.md)).
 - GitHub shorthand `owner/repo[/path/to/skill]`, cloned from
   `https://github.com/owner/repo.git`.
 
-A git source, URL or GitHub shorthand, containing `?`, `#` or `\` is a usage
-error.
+A git URL or GitHub shorthand containing `?`, `#` or `\` is a usage error.
 
 The recorded origin drops a trailing `/` and ends in `.git` (except a `file://`
 URL), so `https://github.com/owner/repo` and `owner/repo` record the same one.
@@ -68,25 +67,17 @@ nothing). `--as <name>` installs the skill under another name and rewrites the
 
 ### Symlinks
 
-mazo refuses a skill that contains a symlink, or one that a symlink leads
-outside the clone.
+mazo refuses a skill that contains a symlink, or a symlink that points outside
+the clone.
 
 ### Trust
 
 mazo sends a source not on the `trusted` list to the `[judge]` before it copies
 anything (see [vetting a skill](#vetting-a-skill)). Local paths are never on
 the list. The [configuration reference](configuration.md#trusted) gives the
-matching rules.
-
-With no `[judge]`, mazo refuses the add (exit 2) unless `--trust`, which
-installs without vetting. The refusal shows a pasteable `[judge]` table for a
-`command` and an `http` judge, and a link to a prefilled GitHub issue asking
-for a judge for your harness.
-
-`--all` on an untrusted source first prints the number of judge calls, one per
-skill, and asks `make <n> judge calls? [y/N]` before the first. Declining
-installs nothing and exits 1. Without a terminal it needs `--yes`, and exits 2
-before any call otherwise. A trusted `--all` asks nothing.
+matching rules. `--trust` installs without vetting. The vetting section covers
+[the refusal with no `[judge]`](#no-judge) and
+[the `--all` prompt](#judge-calls-with---all).
 
 ## `mazo update`
 
@@ -105,8 +96,8 @@ same subpath.
   is not on the `trusted` list either, mazo re-vets it before replacing it (see
   [re-vetting an update](#re-vetting-an-update)). mazo does not vet a trusted
   one. With no `[judge]`, mazo refuses the untrusted skill. It prints one line
-  per such skill, then once the judge tables and issue link that `add` shows,
-  and exits 2.
+  per such skill, then once the judge tables and issue link of
+  [the add refusal](#no-judge), and exits 2.
 - **Not updatable.** A local-path skill. A name that is not a store skill is a
   usage error.
 
@@ -116,11 +107,9 @@ command exits 1, or 2 when mazo refused a skill for want of a `[judge]`.
 `--project` updates the project's skills instead (see
 [project skills](project-skills.md)).
 
-## `mazo retire` on a store skill
+## Removing a store skill
 
-`mazo retire <name>` on a store skill removes it: mazo deletes its links, its
-`mazo.lock` entry and its store directory. The blockers, `--force` and the data
-lock are the same as for a skill of `source`; see
+`mazo retire <name>` removes a store skill; see
 [`mazo retire`](managing-skills.md#mazo-retire).
 
 ## Vetting a skill
@@ -162,14 +151,12 @@ decides:
 
 - A security finding refuses the install (exit 1) unless `--force`. With
   `--force` the install still asks as below.
-- A file mazo did not send in full is a security finding of its own. That is a
-  file that is not text, is over 64 KiB, or arrives after the first 256 KiB of
-  the skill's files. The refusal names each such file and why, before mazo
-  calls the judge.
+- A file mazo withheld is a security finding of its own. mazo withholds a file
+  that is not text, is over 64 KiB, or would take the total sent past 256 KiB;
+  only files sent count towards that total. The refusal names each withheld
+  file and why, before mazo calls the judge.
 - `--yes` accepts without asking. Without a terminal on stdin and without
   `--yes`, mazo refuses the install (exit 2) before it calls the judge.
-- `--all` makes one judge call per skill. It prints their number and asks
-  `make <n> judge calls? [y/N]` before the first, which `--yes` answers.
 
 Otherwise mazo asks `install <name>? [Y/n]` or `install <name>? [y/N]`, and
 Enter takes the default:
@@ -179,10 +166,23 @@ Enter takes the default:
 | `worth trying` and not `poor` | `[Y/n]` |
 | anything else | `[y/N]` |
 
-With no `[judge]`, mazo refuses the add (exit 2). The refusal names the two
-judges any setup can configure, `command` and `http` (see
-[the `[judge]` table](configuration.md#judge)), and links a prefilled GitHub
-issue asking for a judge for your harness.
+### Judge calls with `--all`
+
+`--all` on an untrusted source makes one judge call per skill. It first prints
+their number and asks `make <n> judge calls? [y/N]` before the first, which
+`--yes` answers. Declining installs nothing and exits 1. Without a terminal it
+needs `--yes`, and exits 2 before any call otherwise. A trusted `--all` asks
+nothing.
+
+### No judge
+
+With no `[judge]`, mazo refuses an untrusted add (exit 2) unless `--trust`. The
+refusal names the two judges any setup can configure, `command` and `http`,
+and shows a pasteable `[judge]` table for each (see
+[the `[judge]` table](configuration.md#judge)). It also links a prefilled
+GitHub issue asking for a judge for your harness.
+
+### After the verdict
 
 A refused or declined install, or a judge that gave no valid answer, leaves no
 store directory and no `mazo.lock` entry. An accepted one records the verdict

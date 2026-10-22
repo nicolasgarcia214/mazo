@@ -13,6 +13,30 @@ or with one that does not parse, every command but `init` exits 2.
 A config can be a symlink. mazo resolves `source` and a relative home `path`
 against the directory of the file it points to.
 
+## Example
+
+```toml
+source = "."                      # your skills directory, relative to this file; optional
+loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
+trusted = ["owner", "owner/repo"] # sources whose skills install without vetting
+
+[[home]]
+name  = "claude"
+agent = "claude"
+path  = "~/.claude"
+
+[[home]]
+name  = "pi"
+agent = "pi"
+path  = "~/.pi/agent"
+links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
+
+[judge]                           # the agent that vets installs and runs audits; none without this table
+agent = "claude"                  # claude (default), codex, pi, command or http
+model = "sonnet"                  # optional; unset means the agent's own default
+billing = "subscription"          # subscription (default) or api
+```
+
 ## `mazo init`
 
 `mazo init [--source <dir>]` writes the config, and refuses to overwrite an
@@ -103,7 +127,10 @@ them. `authoring_skills` is empty by default.
 
 The agent that `mazo audit` and vetting call. A config without a `[judge]`
 table has no judge: `mazo audit` exits 2, and mazo refuses an untrusted
-`mazo add` unless `--trust`. When the table exists, `agent` defaults to `claude`:
+`mazo add` unless `--trust`. When the table exists, `agent` defaults to `claude`.
+
+Earlier versions assumed claude when the table was missing; a config that
+relied on that must add it:
 
 ```toml
 [judge]

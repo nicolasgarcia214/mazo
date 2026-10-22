@@ -20,8 +20,15 @@ projects. It sends at most `--limit` sessions (default 20), or every one with
   endpoint.
 
 Every call runs in an empty directory under the data directory, and mazo writes
-nothing inside the source. mazo appends to `audits.jsonl` each answer that
-cites real lines and quotes nothing.
+nothing inside the source.
+
+mazo checks each session answer before it keeps it. The answer must match the
+schema and its length caps, and every finding must cite a line that is in the
+condensed session. No field may quote the session: a quote is 40 characters in
+a row shared with a user message, an assistant message or a tool result, or a
+whole user message of 12 to 39 characters. mazo retries an answer that fails a
+check once, telling the judge what failed, then drops it. It appends each
+answer that passes to `audits.jsonl`.
 
 When the run wrote any session record, or with `--resynth`, one more call
 writes the skill report over every session record of the skill. The report
@@ -100,4 +107,5 @@ does when the budget runs out.
 ## JSON output
 
 `--json` prints the new skill record, the session records written and dropped,
-the spend (null for Codex and Pi) and the sessions left.
+the spend and the sessions left. The spend is null for every judge but Claude,
+since Codex, Pi, a command judge and an http judge report no cost.

@@ -16,8 +16,8 @@ TZ=Pacific/Pago_Pago cargo test --locked
 
 The two `TZ` values are UTC+14 and UTC-11.
 
-The suite includes the 18 ported `install.sh` tests and ingest properties such
-as "a fresh scan equals an incremental one". The tests read the synthetic
+The suite includes 18 tests ported from the old `install.sh` and ingest
+properties such as "a fresh scan equals an incremental one". The tests read the synthetic
 skills tree in `tests/fixtures/skills`. Set `MAZO_TEST_SKILLS` to run them
 against a real skills directory instead.
 

@@ -13,7 +13,7 @@ but what an action writes, and it re-reads the data after each action.
 | Key | Action |
 |---|---|
 | arrows, `hjkl` | Move. |
-| `Enter` | Open a card. On the unused list, on a store skill whose status is `unused` (its `new` window since install has ended), ask to retire it instead. |
+| `Enter` | Open a card. On the unused list, a store skill whose status is `unused` (its `new` window since install has ended) asks to retire it instead. |
 | `Esc` | Go back. On a list, close the audit pane once the audit ends. |
 | `Tab` | Switch between usage and unused. |
 | `/` | Filter by name. |
@@ -30,8 +30,9 @@ but what an action writes, and it re-reads the data after each action.
 
 ## Retire
 
-`r` retires as [`mazo retire`](managing-skills.md#mazo-retire) does. A skill
-`retire` refuses shows its blockers, and there is no `--force`.
+`r` retires as [`mazo retire`](managing-skills.md#mazo-retire) does. When
+`retire` would refuse a skill, the dialog lists its blockers. There is no
+`--force`.
 
 ## Update
 
@@ -42,7 +43,7 @@ updatable.
 The dialog names the judge and its cap and asks "update and ask about each
 judge verdict?". The update runs in the background pane. Each re-vet of an
 untrusted skill that changed opens the y/N dialog an add uses. Enter takes the
-gate's default, and Esc or `q` answers No.
+prompt's default, and Esc or `q` answers No.
 
 There is no `--force`, so a security finding still refuses that skill's
 update. mazo reports an up-to-date skill without a judge call.
@@ -76,7 +77,9 @@ working.
 ## Jobs and confirmation
 
 One job, an add, an update or an audit, runs at a time. While a job runs, `r`,
-`s`, `i`, `u`, `U` and `x` show that it is running and do nothing. Quitting
-while one runs asks first, and on `y` mazo kills its judge call.
+`s`, `i`, `u`, `U`, `x` and `Enter`'s retire on the unused list show that it is
+running and do nothing. Quitting while one runs asks first, and on `y` mazo
+kills its judge call.
 
-Every other action runs only on `y`, and any other key cancels.
+Retiring, applying the plan `s` shows, starting an update and starting an
+audit each run only on `y`; any other key cancels.
