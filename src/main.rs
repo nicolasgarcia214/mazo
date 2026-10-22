@@ -162,7 +162,7 @@ enum Cmd {
         /// Install without vetting.
         #[arg(long)]
         trust: bool,
-        /// Accept the vetted skill without asking; required when stdin is not a terminal.
+        /// Accept the vetted skill, and the judge calls of --all, without asking; required when stdin is not a terminal.
         #[arg(long)]
         yes: bool,
         /// Install even when the judge reports a security issue.

@@ -269,7 +269,8 @@ struct Fetched<'a> {
 /// [--yes] [--force]`: copies the skills chosen at `source` (a local path, or
 /// a repository shallow-cloned into `<data dir>/.clone-<pid>`) into the store,
 /// each recorded in the lockfile and linked into every home ([`install`]). A
-/// source that is not trusted is first vetted by the judge ([`gate`]). A
+/// source that is not trusted is first vetted by the judge ([`gate`]),
+/// with `--all` once its judge calls are agreed to ([`confirm_calls`]). A
 /// source of several skills installs the one `--skill` names, every one with
 /// `--all`, else the ones picked at a terminal ([`skills_in`]); none picked
 /// installs nothing. A refused skill leaves the rest to install; the exit
@@ -283,16 +284,19 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     let backend = match &cfg.judge {
         _ if trusted => None,
         None => {
-            return Err(Error::Usage(format!(
-                "add refused: {arg} is not on the trust list and vetting is not available yet; \
+            return Err(Error::Usage(no_judge(&format!(
+                "add refused: {arg} is not on the trust list and vetting it needs a [judge], which the config lacks; \
                  pass --trust to install it without vetting"
-            )));
+            ))));
         }
         Some(judge) => Some((judge, audit::backend(judge, &cfg.homes)?)),
     };
     let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: None });
     if let Some(c) = &caller {
-        args.consent().answerable().map_err(Error::Usage)?;
+        // `--all` shows its call count first, so it asks once the source is read.
+        if !args.all {
+            args.consent().answerable().map_err(Error::Usage)?;
+        }
         c.login()?;
     }
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
@@ -317,6 +321,9 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     let children = skills_in(&from.root, &from.own, args)?;
     if children.is_empty() {
         println!("nothing selected; nothing was installed");
+    }
+    if caller.is_some() && args.all {
+        confirm_calls(children.len(), args.consent())?;
     }
     let mut inv = inv.clone();
     let mut code = 0;
@@ -471,10 +478,11 @@ impl Out<'_> {
 /// store skill (every one when `names` is empty) and, when the copy at its
 /// subpath hashes differently, swaps it into the store and records the new
 /// commit and hash. A skill whose source is not trusted is first re-vetted
-/// by the judge on the diff from the installed copy ([`gate`]), and skipped
-/// when no judge is configured; a local-path one is not updatable. A skill
-/// that fails or is refused is left as it was and the rest still run; any
-/// failure exits 1. A name that is not a store skill is a usage error.
+/// by the judge on the diff from the installed copy ([`gate`]), and refused
+/// ([`no_judge`], exit 2) when no judge is configured; a local-path one is
+/// not updatable. A skill that fails or is refused is left as it was and the
+/// rest still run; the exit code is the highest of the failures', 2 for no
+/// judge and 1 for the rest. A name that is not a store skill is a usage error.
 pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<ExitCode> {
     let (names, out) = (args.names, Out(args.pane));
     let lock = Lock::load(data)?;
@@ -490,7 +498,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         pane: args.pane,
         backend: OnceCell::new(),
     });
-    let (mut updated, mut failed) = (false, false);
+    let (mut updated, mut code) = (false, 0);
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
         // A cancelled job starts nothing more.
         if out.cancelled() {
@@ -504,17 +512,20 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             }
             Err(e) => {
                 out.error(&format!("ERROR: update {}: {e}", l.name));
-                failed = true;
+                code = code.max(1);
                 continue;
             }
         };
         let vet = match &revet {
             _ if l.trusted || remote.trusted_by(&cfg.trusted) => None,
             None => {
-                out.line(&format!(
-                    "{}: skipped; {} is not trusted and re-vetting it needs a [judge] in the config",
-                    l.name, l.origin
-                ));
+                let refused = format!(
+                    "update refused: {} is not trusted and re-vetting it needs a [judge], which the config lacks; \
+                     add it to trusted to update it without vetting",
+                    l.origin
+                );
+                out.error(&format!("ERROR: update {}: {}", l.name, no_judge(&refused)));
+                code = 2;
                 continue;
             }
             Some(r) => Some(r),
@@ -528,7 +539,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             Ok(None) => out.line(&format!("{}: up to date", l.name)),
             Err(e) => {
                 out.error(&format!("ERROR: update {}: {e}", l.name));
-                failed = true;
+                code = code.max(1);
             }
         }
     }
@@ -544,9 +555,11 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
                 out.line(&line);
             }
         }
-        failed |= !errors.is_empty();
+        if !errors.is_empty() {
+            code = code.max(1);
+        }
     }
-    Ok(if failed { ExitCode::from(1) } else { ExitCode::SUCCESS })
+    Ok(ExitCode::from(code))
 }
 
 /// Clones `remote` into `<data>/.clone-<pid>` and, when the skill at its
@@ -805,6 +818,47 @@ impl Consent {
             self.act()
         ))
     }
+}
+
+/// `refused`, an untrusted add or update with no `[judge]`, followed by the
+/// two judges any setup can configure and a prefilled issue asking for one
+/// of the user's harness.
+fn no_judge(refused: &str) -> String {
+    let body = "mazo refuses an untrusted add or update without a [judge], and none of its judges fits the harness I use.\n\n\
+                Harness: <name and version>\n\
+                How it runs one prompt without a terminal: <command or API>\n";
+    let issue = url::Url::parse_with_params(
+        "https://github.com/nicolasgarcia214/mazo/issues/new",
+        [("title", "Support <harness> as a judge"), ("body", body)],
+    )
+    .expect("a valid URL");
+    format!(
+        "{refused}\n\
+         a judge mazo can call with any setup:\n  \
+         command, any CLI that reads the prompt on stdin: [judge] agent = \"command\" argv = [\"llm\", \"-m\", \"gpt-5\"]\n  \
+         http, an OpenAI-compatible endpoint: [judge] agent = \"http\" url = \"https://api.openai.com/v1\" \
+         model = \"gpt-5\" api_key_env = \"OPENAI_API_KEY\"\n\
+         or ask for a judge for your harness: {issue}"
+    )
+}
+
+/// `add --all` of an untrusted source: the `n` judge calls, one per skill,
+/// shown and agreed to y/N before the first; `--yes` agrees, and without a
+/// terminal it is required.
+fn confirm_calls(n: usize, consent: Consent) -> Result<()> {
+    let s = if n == 1 { "" } else { "s" };
+    println!("vetting {n} skill{s} makes {n} judge call{s}");
+    consent.answerable().map_err(Error::Usage)?;
+    if consent.yes {
+        return Ok(());
+    }
+    eprint!("make {n} judge call{s}? [y/N] ");
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
+    if !matches!(answer.trim(), "y" | "Y" | "yes") {
+        return Err("add declined; nothing was installed".into());
+    }
+    Ok(())
 }
 
 /// Every file of `files` under `src` as `(relative path, bytes)`, with
