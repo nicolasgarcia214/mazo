@@ -3,7 +3,8 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{BufRead, ErrorKind, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -234,9 +235,14 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
 }
 
 /// `mazo init`: a config at `path` naming `source`, if given, absolutely, a
-/// home for each agent directory under `~` that exists, and every rule off.
-/// Refuses to overwrite.
-pub fn init(path: &Path, source: Option<&Path>) -> Result<()> {
+/// home for each agent directory under `~` that exists, every rule off, and
+/// the [`detect_judge`] judge, else the one [`choose_judge`] reads from `ask`.
+/// Refuses to overwrite, before detecting or asking.
+pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -> Result<Option<JudgeAgent>> {
+    let exists = || format!("{} exists; not overwriting it", path.display());
+    if path.symlink_metadata().is_ok() {
+        return Err(exists().into());
+    }
     let source = match source {
         Some(source) => {
             let abs = fs::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
@@ -256,17 +262,90 @@ pub fn init(path: &Path, source: Option<&Path>) -> Result<()> {
                 links: BTreeMap::new(),
             })
             .collect();
-    let raw =
-        RawConfig { source, loose: Vec::new(), trusted: Vec::new(), policy: Policy::default(), judge: None, homes };
-    let text = toml::to_string(&raw).map_err(|e| e.to_string())?;
+    let judge = match (detect_judge()?, ask) {
+        (Some(agent), _) => Some(agent),
+        (None, Some(input)) => choose_judge(input, &mut std::io::stderr())?,
+        (None, None) => None,
+    };
+    let text = config_text(source, homes, judge)?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| match e.kind() {
-        ErrorKind::AlreadyExists => format!("{} exists; not overwriting it", path.display()),
+        ErrorKind::AlreadyExists => exists(),
         _ => format!("{}: {e}", path.display()),
     })?;
-    file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()).into())
+    file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(judge)
+}
+
+/// Each judge agent by its config name, in the order `init` tries them.
+pub const JUDGE_AGENTS: [(&str, JudgeAgent); 5] = [
+    ("claude", JudgeAgent::Claude),
+    ("codex", JudgeAgent::Codex),
+    ("pi", JudgeAgent::Pi),
+    ("command", JudgeAgent::Command),
+    ("http", JudgeAgent::Http),
+];
+
+/// The `[judge]` tables `init` writes commented out, since they are invalid
+/// until filled in.
+const COMMAND_PLACEHOLDER: &str = "\n# [judge]\n# agent = \"command\"\n# argv = [\"<program>\", \"<argument>\"]\n";
+const HTTP_PLACEHOLDER: &str = "\n# [judge]\n# agent = \"http\"\n# url = \"<base url; mazo posts to <url>/chat/completions>\"\n\
+# model = \"<model>\"\n# api_key_env = \"<variable holding the API key; delete for none>\"\n";
+
+/// The first of claude, codex and pi whose binary is on `PATH` and whose
+/// subscription login check passes; Pi has no check. The checks read local
+/// state only: `claude auth status` and Codex's `auth.json`.
+fn detect_judge() -> Result<Option<JudgeAgent>> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let data = crate::ledger::data_dir()?;
+    for (name, agent) in &JUDGE_AGENTS[..3] {
+        let found = std::env::split_paths(&path)
+            .any(|dir| dir.join(name).metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0));
+        if found && crate::audit::backend(&Judge { agent: *agent, ..Judge::default() }, &[])?.login(&data).is_ok() {
+            return Ok(Some(*agent));
+        }
+    }
+    Ok(None)
+}
+
+/// The judge agent named on a line of `input`, asked for on `prompt` until
+/// one is; `None` when `input` ends first.
+pub fn choose_judge(input: &mut dyn BufRead, prompt: &mut dyn Write) -> Result<Option<JudgeAgent>> {
+    let names: Vec<&str> = JUDGE_AGENTS.iter().map(|(name, _)| *name).collect();
+    let ask = |prompt: &mut dyn Write| {
+        write!(prompt, "no claude, codex or pi login found; judge for mazo audit [{}]: ", names.join("/"))
+            .and_then(|()| prompt.flush())
+            .map_err(|e| format!("stderr: {e}"))
+    };
+    loop {
+        ask(prompt)?;
+        let mut answer = String::new();
+        if input.read_line(&mut answer).map_err(|e| format!("stdin: {e}"))? == 0 {
+            return Ok(None);
+        }
+        if let Some((_, agent)) = JUDGE_AGENTS.iter().find(|(name, _)| *name == answer.trim()) {
+            return Ok(Some(*agent));
+        }
+    }
+}
+
+/// The config `init` writes: `judge` as a `[judge]` table, or for `command`
+/// and `http` as a commented-out one to fill in.
+fn config_text(source: Option<String>, homes: Vec<RawHome>, judge: Option<JudgeAgent>) -> Result<String> {
+    let table = judge
+        .filter(|a| !matches!(a, JudgeAgent::Command | JudgeAgent::Http))
+        .map(|agent| Judge { agent, ..Judge::default() });
+    let raw =
+        RawConfig { source, loose: Vec::new(), trusted: Vec::new(), policy: Policy::default(), judge: table, homes };
+    let mut text = toml::to_string(&raw).map_err(|e| e.to_string())?;
+    match judge {
+        Some(JudgeAgent::Command) => text.push_str(COMMAND_PLACEHOLDER),
+        Some(JudgeAgent::Http) => text.push_str(HTTP_PLACEHOLDER),
+        _ => {}
+    }
+    Ok(text)
 }
 
 pub(crate) fn home_dir() -> Result<String> {
@@ -499,6 +578,36 @@ mod tests {
             "[judge]\nagent = \"command\"\nargv = [\"llm\"]\nurl = \"u\"\n",
         ] {
             assert!(usage(table).ends_with("[judge] url and api_key_env are for agent = \"http\" only"), "{table:?}");
+        }
+    }
+
+    #[test]
+    fn choose_judge_asks_until_a_line_names_an_agent() {
+        for (name, agent) in JUDGE_AGENTS {
+            let mut prompt = Vec::new();
+            let chosen = choose_judge(&mut format!("gpt\n\n {name} \n").as_bytes(), &mut prompt).unwrap();
+            assert_eq!(chosen, Some(agent), "{name}");
+            let ask = "no claude, codex or pi login found; judge for mazo audit [claude/codex/pi/command/http]: ";
+            assert_eq!(String::from_utf8(prompt).unwrap(), ask.repeat(3), "{name}");
+        }
+        assert_eq!(choose_judge(&mut "gpt\n".as_bytes(), &mut Vec::new()).unwrap(), None);
+    }
+
+    #[test]
+    fn init_writes_command_and_http_judges_commented_out_until_filled_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (_, agent) in JUDGE_AGENTS {
+            let text = config_text(None, Vec::new(), Some(agent)).unwrap();
+            fs::write(&path, &text).unwrap();
+            let judge = load(&path).unwrap().unwrap().judge;
+            let placeholder = matches!(agent, JudgeAgent::Command | JudgeAgent::Http);
+            assert_eq!(judge.map(|j| j.agent), (!placeholder).then_some(agent), "{text}");
+            let commented = text.lines().filter(|l| l.starts_with("# ")).count();
+            assert_eq!(commented, [0, 0, 0, 3, 5][agent as usize], "{text}");
+            // Uncommented, the placeholders make a valid table of that agent.
+            fs::write(&path, text.replace("# ", "")).unwrap();
+            assert_eq!(load(&path).unwrap().unwrap().judge.map(|j| j.agent), Some(agent), "{text}");
         }
     }
 }
