@@ -1,6 +1,6 @@
 //! The store of installed third-party skills, `<data dir>/store/`, and its
-//! lockfile `<data dir>/mazo.lock`: `mazo add`, and the entry `mazo retire`
-//! drops.
+//! lockfile `<data dir>/mazo.lock`: `mazo add`, `mazo update`, and the entry
+//! `mazo retire` drops.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -226,22 +226,13 @@ pub fn add(
         }
     };
     let (src, child) = skill_in(&root, &own, pick).map_err(usage)?;
-    // A symlink in the repository must not lead the copy outside the clone.
-    let src = fs::canonicalize(&src).map_err(|e| usage(e.to_string()))?;
-    if let Some(Scratch(clone)) = &scratch
-        && !src.starts_with(fs::canonicalize(clone).map_err(|e| err(clone, e))?)
-    {
-        return Err(usage(format!("{} leaves the repository", src.display())));
-    }
+    let src = resolved(&src, scratch.as_ref().map(|s| s.0.as_path())).map_err(usage)?;
     let subpath = match &child {
         Some(c) => subpath.join(c),
         None => subpath,
     };
-    let skill_md = fs::read_to_string(src.join("SKILL.md")).map_err(|e| usage(format!("SKILL.md: {e}")))?;
     let name = rename.map(str::to_string).or(child).unwrap_or(own);
-    let skill_md = if rename.is_some() { renamed(&skill_md, &name) } else { skill_md };
-    yaml::frontmatter(&skill_md).and_then(|meta| policy::always_on(&meta, &name)).map_err(|e| usage(e.to_string()))?;
-    let files = tree(&src).map_err(usage)?;
+    let (skill_md, files) = checked(&src, &name, rename.is_some()).map_err(usage)?;
 
     let store = dir(data);
     let to = store.join(&name);
@@ -256,20 +247,8 @@ pub fn add(
     let _lock = ledger::lock(data)?;
     // Copied under a hidden name, which no root lists, then renamed into place.
     let staged = store.join(format!(".add-{name}"));
-    let _ = fs::remove_dir_all(&staged);
-    fs::create_dir_all(&staged).map_err(|e| err(&staged, e))?;
-    let copied = files.iter().try_for_each(|rel| {
-        let (from, dest) = (src.join(rel), staged.join(rel));
-        if from.is_dir() {
-            fs::create_dir(&dest).map_err(|e| err(&dest, e))
-        } else if rel == Path::new("SKILL.md") {
-            fs::write(&dest, &skill_md).map_err(|e| err(&dest, e))
-        } else {
-            fs::copy(&from, &dest).map(drop).map_err(|e| err(&dest, e))
-        }
-    });
-    let hashed = copied.map_err(Error::from).and_then(|()| content_hash(&staged));
-    let installed = hashed.and_then(|hash| fs::rename(&staged, &to).map(|()| hash).map_err(|e| err(&to, e).into()));
+    let installed = stage(&src, &files, &skill_md, &staged)
+        .and_then(|hash| fs::rename(&staged, &to).map(|()| hash).map_err(|e| err(&to, e).into()));
     let content_hash = installed.inspect_err(|_| drop(fs::remove_dir_all(&staged)))?;
 
     // From here until the lockfile is written, `store/<name>` has no lock
@@ -304,6 +283,169 @@ pub fn add(
         println!("{line}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `mazo update [names…]`: re-clones each git-sourced store skill (every one
+/// when `names` is empty) and, when the copy at its subpath hashes
+/// differently, swaps it into the store and records the new commit and hash.
+/// A skill whose source is not trusted is skipped, since re-vetting is not
+/// available yet, and a local-path one is not updatable. A skill that fails
+/// is left as it was and the rest still run; any failure exits 1. A name that
+/// is not a store skill is a usage error.
+pub fn update(cfg: &Config, inv: &Inventory, data: &Path, names: &[String]) -> Result<ExitCode> {
+    let lock = Lock::load(data)?;
+    if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
+        return Err(Error::Usage(format!("update: not a store skill: {n}")));
+    }
+    let clone = Scratch(data.join(format!(".clone-{}", std::process::id())));
+    let (mut updated, mut failed) = (false, false);
+    for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
+        let mut remote = match Source::parse(&l.origin) {
+            Ok(Source::Git(remote)) => remote,
+            Ok(Source::Local(_)) => {
+                println!("{}: not updatable; installed from a local path", l.name);
+                continue;
+            }
+            Err(e) => {
+                eprintln!("ERROR: update {}: {e}", l.name);
+                failed = true;
+                continue;
+            }
+        };
+        if !l.trusted && !remote.trusted_by(&cfg.trusted) {
+            println!("{}: skipped; {} is not trusted and re-vetting is not available yet", l.name, l.origin);
+            continue;
+        }
+        remote.subpath = if l.subpath == "." { PathBuf::new() } else { l.subpath.clone().into() };
+        match refresh(cfg, inv, data, l, &remote, &clone.0) {
+            Ok(Some(commit)) => {
+                println!("updated {} to {commit}", dir(data).join(&l.name).display());
+                updated = true;
+            }
+            Ok(None) => println!("{}: up to date", l.name),
+            Err(e) => {
+                eprintln!("ERROR: update {}: {e}", l.name);
+                failed = true;
+            }
+        }
+    }
+    if updated {
+        let homes: Vec<&Home> = cfg.homes.iter().collect();
+        let plan = links::plan(cfg, inv, &homes, None);
+        let errors = links::sync_errors(cfg, inv, &homes, &plan);
+        for e in &errors {
+            eprintln!("{e}");
+        }
+        if errors.is_empty() {
+            for line in links::apply(&plan)? {
+                println!("{line}");
+            }
+        }
+        failed |= !errors.is_empty();
+    }
+    Ok(if failed { ExitCode::from(1) } else { ExitCode::SUCCESS })
+}
+
+/// Clones `remote` into `clone` and, when the skill at its subpath hashes
+/// unlike `l`, swaps the copy in for `store/<name>` under the data lock and
+/// records the commit and hash: the new commit, or `None` when up to date. A
+/// sync that would fail with the new copy, or any failed write, puts the old
+/// one back and leaves the lockfile as it was.
+fn refresh(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &Path,
+    l: &Locked,
+    remote: &Remote,
+    clone: &Path,
+) -> Result<Option<String>> {
+    let _ = fs::remove_dir_all(clone);
+    let commit = remote.clone_into(clone)?;
+    let src = resolved(&clone.join(&remote.subpath), Some(clone))?;
+    let (skill_md, files) = checked(&src, &l.name, l.name != remote.name())?;
+
+    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    let store = dir(data);
+    let (to, staged, old) =
+        (store.join(&l.name), store.join(format!(".update-{}", l.name)), store.join(format!(".old-{}", l.name)));
+    let _lock = ledger::lock(data)?;
+    let content_hash = stage(&src, &files, &skill_md, &staged)?;
+    if content_hash == l.content_hash {
+        fs::remove_dir_all(&staged).map_err(|e| err(&staged, e))?;
+        return Ok(None);
+    }
+    let _ = fs::remove_dir_all(&old);
+    let swapped = fs::rename(&to, &old)
+        .map_err(|e| err(&to, e))
+        .and_then(|()| fs::rename(&staged, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to))));
+    if let Err(e) = swapped {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(e.into());
+    }
+
+    let homes: Vec<&Home> = cfg.homes.iter().collect();
+    let errors = links::sync_errors(cfg, inv, &homes, &links::plan(cfg, inv, &homes, None));
+    let recorded = if errors.is_empty() {
+        Lock::load(data).and_then(|mut lock| {
+            let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;
+            entry.commit = Some(commit.clone());
+            entry.content_hash = content_hash;
+            lock.save(data)
+        })
+    } else {
+        Err("update refused; the skill was left as it was".into())
+    };
+    if let Err(e) = recorded {
+        fs::remove_dir_all(&to).and_then(|()| fs::rename(&old, &to)).map_err(|e| err(&to, e))?;
+        for e in &errors {
+            eprintln!("{e}");
+        }
+        return Err(e);
+    }
+    // Installed and recorded; a hidden leftover is listed by no root.
+    let _ = fs::remove_dir_all(&old);
+    Ok(Some(commit))
+}
+
+/// `src` resolved; inside `clone` when there is one, so that a symlink in the
+/// repository cannot lead the copy outside it.
+fn resolved(src: &Path, clone: Option<&Path>) -> std::result::Result<PathBuf, String> {
+    let src = fs::canonicalize(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    if let Some(clone) = clone
+        && !src.starts_with(fs::canonicalize(clone).map_err(|e| format!("{}: {e}", clone.display()))?)
+    {
+        return Err(format!("{} leaves the repository", src.display()));
+    }
+    Ok(src)
+}
+
+/// The `SKILL.md` of the skill at `src` installed as `name`, its `name:`
+/// rewritten when `rename`, once it passes the always-on rules; and every
+/// entry under `src`.
+fn checked(src: &Path, name: &str, rename: bool) -> std::result::Result<(String, Vec<PathBuf>), String> {
+    let skill_md = fs::read_to_string(src.join("SKILL.md")).map_err(|e| format!("SKILL.md: {e}"))?;
+    let skill_md = if rename { renamed(&skill_md, name) } else { skill_md };
+    yaml::frontmatter(&skill_md).and_then(|meta| policy::always_on(&meta, name)).map_err(|e| e.to_string())?;
+    Ok((skill_md, tree(src)?))
+}
+
+/// Copies `files` of `src` into a fresh `staged`, `SKILL.md` as `skill_md`,
+/// and returns the copy's [`content_hash`]. On failure `staged` is removed.
+fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: &Path) -> Result<String> {
+    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    let _ = fs::remove_dir_all(staged);
+    fs::create_dir_all(staged).map_err(|e| err(staged, e))?;
+    let copied = files.iter().try_for_each(|rel| {
+        let (from, dest) = (src.join(rel), staged.join(rel));
+        if from.is_dir() {
+            fs::create_dir(&dest).map_err(|e| err(&dest, e))
+        } else if rel == Path::new("SKILL.md") {
+            fs::write(&dest, skill_md).map_err(|e| err(&dest, e))
+        } else {
+            fs::copy(&from, &dest).map(drop).map_err(|e| err(&dest, e))
+        }
+    });
+    copied.map_err(Error::from).and_then(|()| content_hash(staged)).inspect_err(|_| drop(fs::remove_dir_all(staged)))
 }
 
 /// The skill under `root` and the child it is in: `root` itself, named

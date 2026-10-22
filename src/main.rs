@@ -159,6 +159,11 @@ enum Cmd {
         #[arg(long)]
         trust: bool,
     },
+    /// Re-clone git-sourced store skills from trusted sources and install what changed.
+    Update {
+        /// The store skills to update; every one when omitted.
+        names: Vec<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -252,6 +257,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Add { source, name, skill, trust } => {
             store::add(&cfg, &inv, &data, &source, name.as_deref(), skill.as_deref(), trust)
         }
+        Cmd::Update { names } => store::update(&cfg, &inv, &data, &names),
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }
