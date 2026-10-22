@@ -1,0 +1,7 @@
+interface:
+  display_name: "Grade"
+  short_description: "Grade code or specs 1-10 with brutal honesty"
+  default_prompt: "Use $grade to evaluate this module and give it an honest 1-10 score."
+
+policy:
+  allow_implicit_invocation: false
