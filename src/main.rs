@@ -208,8 +208,11 @@ fn main() -> ExitCode {
 fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let path = config::path()?;
     if let Some(Cmd::Init { source }) = &cmd {
-        config::init(&path, source.as_deref())?;
+        let mut stdin = std::io::stdin().lock();
+        let ask = stdin.is_terminal().then_some(&mut stdin as &mut dyn std::io::BufRead);
+        let judge = config::init(&path, source.as_deref(), ask)?;
         println!("wrote {}", path.display());
+        println!("{}", config::init_note(judge));
         return Ok(ExitCode::SUCCESS);
     }
     let Some(cfg) = config::load(&path)? else {

@@ -197,6 +197,14 @@ impl Fresh {
         run.command(env, args).output().unwrap()
     }
 
+    /// `mazo init args…` with only `~/bin`, where a test writes its stub
+    /// agents, on `PATH`.
+    fn init(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
+        let bin = self.home.join("bin");
+        let env: Vec<_> = env.iter().copied().chain([("PATH", bin.as_os_str())]).collect();
+        self.mazo(&env, &[&["init"], args].concat())
+    }
+
     /// `~/skills/plain/SKILL.md` with `name` and `description` only.
     fn plain_skill(&self) -> PathBuf {
         let source = self.home.join("skills");
@@ -243,7 +251,7 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     let source = f.plain_skill();
     for (env, path) in f.discovery() {
         // A relative `--source` is written absolute.
-        assert_ok(&f.mazo(&env_refs(&env), &["init", "--source", "skills"]));
+        assert_ok(&f.init(&env_refs(&env), &["--source", "skills"]));
         let v: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
         assert_eq!(v["source"].as_str(), Some(source.to_str().unwrap()), "{env:?}");
     }
@@ -252,7 +260,7 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     fs::create_dir_all(f.home.join(".pi/agent")).unwrap();
     let path = f.home.join("homes.toml");
     let env = [("MAZO_CONFIG", path.as_os_str())];
-    assert_ok(&f.mazo(&env, &["init", "--source", "skills"]));
+    assert_ok(&f.init(&env, &["--source", "skills"]));
     let text = fs::read_to_string(&path).unwrap();
     let v: toml::Table = text.parse().unwrap();
     assert_eq!(v.keys().collect::<Vec<_>>(), ["home", "loose", "policy", "source"], "{text}");
@@ -273,10 +281,77 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     assert_eq!(homes, [["claude", "claude", "~/.claude"], ["pi", "pi", "~/.pi/agent"]], "{text}");
 
     fs::write(&path, "mine\n").unwrap();
-    let o = f.mazo(&env, &["init", "--source", "skills"]);
+    let o = f.init(&env, &["--source", "skills"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(stderr(&o).contains("not overwriting"), "{}", stderr(&o));
     assert_eq!(fs::read_to_string(&path).unwrap(), "mine\n");
+}
+
+/// `~/bin/<name>`, a stub agent that prints `out` whatever it is asked.
+fn stub(f: &Fresh, name: &str, out: &str) {
+    let path = f.home.join("bin").join(name);
+    common::write(&path, &format!("#!/bin/sh\necho '{out}'\n"));
+    fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+}
+
+/// The `[judge]` table of the config `init` wrote at `path`, if any.
+fn judge(path: &std::path::Path) -> Option<toml::Value> {
+    fs::read_to_string(path).unwrap().parse::<toml::Table>().unwrap().remove("judge")
+}
+
+#[test]
+fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
+    const CLAUDE_AI: &str = r#"{"authMethod":"claude.ai"}"#;
+    // Each case: the stubs on PATH with what claude auth status prints, whether
+    // ~/.codex/auth.json holds a ChatGPT login, and the judge written.
+    let cases = [
+        (&[("claude", CLAUDE_AI), ("codex", ""), ("pi", "")][..], true, "claude"),
+        (&[("codex", ""), ("pi", "")], true, "codex"),
+        (&[("claude", r#"{"authMethod":"api_key"}"#), ("codex", ""), ("pi", "")], true, "codex"),
+        (&[("claude", "not json"), ("codex", ""), ("pi", "")], false, "pi"),
+        (&[("pi", "")], false, "pi"),
+        (&[("claude", CLAUDE_AI)], false, "claude"),
+    ];
+    for (stubs, codex_login, want) in cases {
+        let f = Fresh::new();
+        for (name, out) in stubs {
+            stub(&f, name, out);
+        }
+        if codex_login {
+            common::write(&f.home.join(".codex/auth.json"), r#"{"auth_mode":"chatgpt"}"#);
+        }
+        let o = f.init(&[], &[]);
+        assert_ok(&o);
+        assert_eq!(stdout(&o).lines().nth(1), Some(&*format!("judge: {want}")), "{stubs:?}");
+        let path = f.home.join(".config/mazo/config.toml");
+        let judge = judge(&path).unwrap_or_else(|| panic!("{stubs:?}: no [judge]"));
+        assert_eq!(judge["agent"].as_str(), Some(want), "{stubs:?}");
+        // The written config loads.
+        assert_ok(&f.mazo(&[], &["status"]));
+    }
+}
+
+#[test]
+fn init_without_a_judge_or_a_terminal_writes_no_judge_and_says_how_to_add_one() {
+    let f = Fresh::new();
+    // Neither a claude nor a codex without a subscription login is a judge.
+    stub(&f, "claude", r#"{"authMethod":"api_key"}"#);
+    stub(&f, "codex", "");
+    let tmp = f.home.join("tmp");
+    fs::create_dir(&tmp).unwrap();
+    let o = f.init(&[("TMPDIR", tmp.as_os_str())], &[]);
+    assert_ok(&o);
+    assert!(judge(&f.home.join(".config/mazo/config.toml")).is_none());
+    // The login checks leave no data directory and no scratch directory.
+    assert!(!f.home.join("data").exists());
+    assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
+    assert_eq!(
+        stdout(&o).lines().nth(1),
+        Some(
+            "no judge: log in to claude, codex or pi and add [judge] agent = \"<agent>\" to the config, \
+             or a command or http judge (see the README)"
+        )
+    );
 }
 
 #[test]
@@ -299,7 +374,7 @@ fn a_fresh_home_runs_init_then_sync() {
     let f = Fresh::new();
     let source = f.plain_skill();
     common::write(&f.home.join(".claude/settings.json"), "");
-    assert_ok(&f.mazo(&[], &["init", "--source", source.to_str().unwrap()]));
+    assert_ok(&f.init(&[], &["--source", source.to_str().unwrap()]));
     assert_ok(&f.mazo(&[], &["sync"]));
     assert_eq!(fs::read_link(f.home.join(".claude/skills/plain")).unwrap(), source.join("plain"));
     assert_ok(&f.mazo(&[], &["status"]));

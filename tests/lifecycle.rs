@@ -603,7 +603,10 @@ impl Sourceless {
         let root = fs::canonicalize(temp.path()).unwrap();
         common::write(&root.join("home/.claude/settings.json"), "{}\n");
         let fx = Sourceless { config: root.join("config/mazo.toml"), root, _temp: temp };
-        let out = fx.mazo(&["init"]);
+        // No agent on `PATH`, so init detects no judge.
+        let bin = fx.root.join("bin");
+        let run = Mazo::new(&fx.root, &fx.root.join("home"), &fx.config, &fx.root.join("data"));
+        let out = run.command(&[("PATH", bin.as_os_str())], &["init"]).output().unwrap();
         assert_eq!(code(&out), 0, "{}", stderr(&out));
         fx
     }
