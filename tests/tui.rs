@@ -285,7 +285,8 @@ impl Actions {
         let cfg = config::load(&root.join("mazo.toml")).unwrap().unwrap();
         let fx = Actions { _temp: temp, skills: home.join("skills"), source, data, cfg };
         // `add` links every skill.
-        store::add(&fx.cfg, &fx.inv(), &fx.data, &root.join("in/stored"), None, true).unwrap();
+        let stored = root.join("in/stored");
+        store::add(&fx.cfg, &fx.inv(), &fx.data, &stored.to_string_lossy(), None, None, true).unwrap();
         fx
     }
 
