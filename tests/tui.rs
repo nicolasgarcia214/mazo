@@ -190,7 +190,8 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert_eq!(colour_of(&screen, "goal-plan", "named by"), ratatui_colour("named by unslop"));
     assert_eq!(colour_of(&screen, "goal-plan", "held by"), Color::Reset);
     assert!(lines[0].contains(" unused ") && lines[0].contains("window 60d"), "{lines:#?}");
-    // The tabs in the top bar show the active one in the accent.
+    // The tabs in the top bar, a divider between them, show the active one in the accent.
+    assert!(lines[0].contains(" usage │ unused "), "{lines:#?}");
     assert_eq!(colour_of(&screen, "♠ mazo", "unused"), mazo::theme::ACCENT);
     assert_eq!(colour_of(&screen, "♠ mazo", "usage"), mazo::theme::MUTED);
 
@@ -344,6 +345,24 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
         assert!(words[0] == *skill || skill.starts_with(words[0].trim_end_matches('…')), "{screen:#?}");
         assert_eq!(words[1..], rest[..], "{screen:#?}");
     }
+}
+
+/// On a narrow terminal the unused list cuts its notes with `…` before it
+/// cuts a skill name.
+#[test]
+fn a_narrow_unused_list_cuts_the_notes_and_keeps_the_skill_names() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let mut app = app(&input);
+    press(&mut app, KeyCode::Tab);
+    let screen = text(&mut app, 50, 30);
+    let skills: Vec<String> =
+        report::unused_list(&input, Since::Days(60)).skills.into_iter().map(|r| r.skill).collect();
+    let shown = rows(&screen);
+    let first: Vec<&str> = shown.iter().map(|r| r.split_whitespace().next().unwrap()).collect();
+    assert_eq!(first, skills, "{screen:#?}");
+    let line = shown.iter().find(|l| l.starts_with("goal-plan ")).unwrap();
+    assert!(line.contains(" held by") && line.ends_with('…'), "{screen:#?}");
 }
 
 /// The footer lists only the keys that work on the screen, and a list with

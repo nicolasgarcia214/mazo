@@ -330,31 +330,36 @@ enum Narrow {
     Drop(&'static str),
     /// The two columns fold into one under the header, each cell `a/b`.
     Fold(&'static str, &'static str, &'static str),
+    /// The column's cells are cut with `…`, down to its header's width.
+    Cut(&'static str),
 }
 
-/// The columns that give way as the terminal narrows, the first first. A
-/// column not named here never drops.
-const NARROWING: [Narrow; 6] = [
+/// How the columns give way as the terminal narrows, the first first, each
+/// step taken only while the table overflows. A column not named here
+/// never narrows; one only cut never drops.
+const NARROWING: &[Narrow] = &[
     Narrow::Drop("30d"),
     Narrow::Drop("typed"),
     Narrow::Drop("ref"),
     Narrow::Drop("read"),
     Narrow::Fold("slash", "tool", "via"),
     Narrow::Drop("agents"),
+    Narrow::Cut("notes"),
+    Narrow::Cut("skill"),
 ];
 
 /// `cols` narrowed by [`NARROWING`] until they fit in `room` columns, one
 /// space between them, and the width of each: the first and the last take
-/// what is left over. When they still overflow, the first column's cells are
-/// cut with `…` and no other column is.
+/// what is left over.
 fn fit(mut cols: Vec<Column>, room: usize) -> (Vec<Column>, Vec<u16>) {
     let used = |cols: &[Column]| cols.iter().map(Column::width).sum::<usize>() + cols.len().saturating_sub(1);
     for step in NARROWING {
-        if used(&cols) <= room {
+        let over = used(&cols).saturating_sub(room);
+        if over == 0 {
             break;
         }
         let at = |cols: &[Column], head| cols.iter().position(|c| c.head == head);
-        match step {
+        match *step {
             Narrow::Drop(head) => _ = at(&cols, head).map(|i| cols.remove(i)),
             Narrow::Fold(a, b, head) => {
                 if let (Some(i), Some(j)) = (at(&cols, a), at(&cols, b)) {
@@ -364,20 +369,21 @@ fn fit(mut cols: Vec<Column>, room: usize) -> (Vec<Column>, Vec<u16>) {
                     a.head = head;
                 }
             }
+            Narrow::Cut(head) => {
+                if let Some(col) = at(&cols, head).map(|i| &mut cols[i]) {
+                    let keep = col.width().saturating_sub(over).max(head.chars().count());
+                    for cell in &mut col.cells {
+                        *cell = report::cut(cell, keep);
+                    }
+                }
+            }
         }
     }
-    let used = used(&cols);
     let mut widths: Vec<usize> = cols.iter().map(Column::width).collect();
-    if let Some(spare) = room.checked_sub(used) {
-        let last = widths.len() - 1;
-        widths[0] += spare / 2;
-        widths[last] += spare - spare / 2;
-    } else {
-        widths[0] = (widths[0] + room).saturating_sub(used).max(1);
-        for cell in &mut cols[0].cells {
-            *cell = report::cut(cell, widths[0]);
-        }
-    }
+    let spare = room.saturating_sub(used(&cols));
+    let last = widths.len() - 1;
+    widths[0] += spare / 2;
+    widths[last] += spare - spare / 2;
     (cols, widths.into_iter().map(|w| w as u16).collect())
 }
 
@@ -1017,9 +1023,9 @@ impl App {
                     .select(usize::from(self.screen == Screen::Unused))
                     .style(theme::MUTED)
                     .highlight_style(Style::new().fg(theme::ACCENT).bold().underlined())
-                    .divider("");
-                // Each title is padded with a space either side.
-                let [at, area] = split(area, TABS.iter().map(|t| t.len() + 2).sum());
+                    .divider(Span::raw("│").fg(theme::MUTED));
+                // Each title is padded with a space either side, a divider between.
+                let [at, area] = split(area, TABS.iter().map(|t| t.len() + 3).sum::<usize>() - 1);
                 frame.render_widget(tabs, at);
                 area
             }
