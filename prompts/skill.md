@@ -18,6 +18,8 @@ The input has these parts:
   paraphrased), `followed` (`yes`, `partly`, `no`), `outcome` (`achieved`,
   `partial`, `failed`, `abandoned`, `unclear`), `redone`, `strengths` and
   `frictions`, and `notes`.
+- `<seen-uses>`: the uses the user has already made of the skill, one per
+  line as `- <asked>`, from the session records.
 
 Judge only from what the input shows. Do not run tools; you have none. The
 session records are the evidence of real use; grades and retros are earlier
@@ -42,6 +44,10 @@ Return JSON with these fields:
   "<session id>"}`: the situation, what was asked in your own words, what
   happened, and a tip for the next user, citing the one session it comes
   from.
+- `for`: what the skill is for, one or two sentences, at most 300 characters.
+- `try`: at most three concrete things the user could ask an agent to do
+  with this skill that are not among `<seen-uses>` and that fit the work the
+  session records show, each one short sentence of at most 200 characters.
 
 Rules:
 
@@ -50,3 +56,4 @@ Rules:
 - Paraphrase. The records may describe private client work; name no client,
   person, file path or repository.
 - Keep every text field to one or two short sentences.
+- Keep `for` and each `try` item free of the skill's own wording: paraphrase.

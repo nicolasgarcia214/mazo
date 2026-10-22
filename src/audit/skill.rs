@@ -1,7 +1,7 @@
 //! Stage 2: one call over every session record of a skill, the rates mazo
 //! computes, and the skill record the card shows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -19,7 +19,7 @@ use crate::ledger::Agent;
 
 /// The stage-2 judge prompt, and the version skill records name.
 pub const SKILL_PROMPT: &str = include_str!("../../prompts/skill.md");
-pub const SKILL_PROMPT_VERSION: &str = "skill-v1";
+pub const SKILL_PROMPT_VERSION: &str = "skill-v2";
 
 /// Stage 2, one call per skill.
 pub static SKILL: Stage = Stage { prompt: SKILL_PROMPT, schema: &SKILL_SCHEMA };
@@ -28,6 +28,9 @@ const VERDICT_CHARS: usize = 400;
 const REPORT_CHARS: usize = 300;
 const REPORT_ITEMS: usize = 5;
 const REPORT_EXAMPLES: usize = 3;
+const FOR_CHARS: usize = 300;
+const TRY_CHARS: usize = 200;
+const TRIES: usize = 3;
 /// Stage 2's input cuts.
 const COMMITS: &str = "-30";
 const GRADE_BODY_CHARS: usize = 6_000;
@@ -64,6 +67,8 @@ pub static SKILL_SCHEMA: LazyLock<String> = LazyLock::new(|| {
                 REPORT_EXAMPLES,
             ),
         ),
+        ("for", text(FOR_CHARS)),
+        ("try", list(text(TRY_CHARS), TRIES)),
     ])
     .to_string()
 });
@@ -107,6 +112,13 @@ pub struct SkillReport {
     pub improvements: Vec<Improvement>,
     pub versus_grades: String,
     pub examples: Vec<Example>,
+    /// What the skill is for, one or two sentences; none in a record written
+    /// before the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#for: Option<String>,
+    /// Up to three uses to try that the audited sessions did not show.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub r#try: Vec<String>,
 }
 
 /// `n of N`, and the sessions counted in `n`.
@@ -192,6 +204,12 @@ fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<Skil
     if over(&r.verdict, VERDICT_CHARS) || over(&r.versus_grades, VERDICT_CHARS) {
         return Err(format!("verdict or versus_grades over {VERDICT_CHARS} characters"));
     }
+    if r.r#for.as_ref().is_none_or(|f| f.trim().is_empty() || over(f, FOR_CHARS)) {
+        return Err(format!("for is empty or over {FOR_CHARS} characters"));
+    }
+    if r.r#try.len() > TRIES || r.r#try.iter().any(|t| t.trim().is_empty() || over(t, TRY_CHARS)) {
+        return Err(format!("more than {TRIES} try items, or one empty or over {TRY_CHARS} characters"));
+    }
     let texts = r
         .patterns
         .iter()
@@ -222,8 +240,8 @@ fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<Skil
 
 /// The stage-2 judge's input: the current `SKILL.md`, its last
 /// 30 commits, every grade's and retro's frontmatter with the latest grade
-/// body and the latest three retro bodies cut, the card's usage section, and
-/// every session record of the skill.
+/// body and the latest three retro bodies cut, the card's usage section,
+/// every session record of the skill, and the uses those records show.
 fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
     let dir = a.source.join(a.skill);
     let path = dir.join("SKILL.md");
@@ -252,6 +270,8 @@ fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
         })
         .collect();
     let records: String = judged.iter().map(|j| serde_json::to_string(j).expect("record serialises") + "\n").collect();
+    let seen: BTreeSet<&str> = judged.iter().map(|j| j.result.asked.as_str()).collect();
+    let seen: String = seen.iter().map(|asked| format!("- {asked}\n")).collect();
     Ok([
         frame(&format!("skill name=\"{}\"", a.skill), &skill),
         frame("commits", &commits),
@@ -261,6 +281,7 @@ fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
         frame("latest-retros", &retro_bodies),
         frame("usage", &serde_json::to_string_pretty(a.usage).expect("usage serialises")),
         frame("session-records", &records),
+        frame("seen-uses", &seen),
     ]
     .join("\n"))
 }

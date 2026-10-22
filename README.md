@@ -158,7 +158,7 @@ reasons = ["Clear steps."]
 | `mazo scan` | Reads new log lines into the ledger. `--report` adds per-channel counts, unparsed commands and the parser canary; `--reparse` re-derives every event from the logs on disk. |
 | `mazo usage` | One row per skill: sessions, loads per channel, agents, last use, a 30-day sparkline, the latest grade. |
 | `mazo unused` | Skills with no strong load in the window, with `held`, `cluster`, `named by`, `new` and `weak-only` notes. |
-| `mazo show <skill>` | The skill card. It opens with a manual of at most 15 lines at 80 columns: For, what the skill is for (the judge's vet text from the lockfile, else the frontmatter description); Your use, the first line of up to three real prompts, cut to 100 characters; and Try, up to three uses the vet suggested. An empty part is left out. Then the daily histogram and recent events, each with the log line it came from, then description, git history, every grade and retro, cites and cited-by, usage by agent, channel and project, then examples: the invocation on each agent, the manifest's `default_prompt`, up to three real prompts read from transcripts at display time and never stored, and up to three curated examples from the latest audit; then that audit's date, session count, verdict, rates and top three improvements. `--json` emits the whole card. |
+| `mazo show <skill>` | The skill card. It opens with a manual of at most 15 lines at 80 columns: For, what the skill is for, and Try, up to three uses to try, both from the latest skill audit when it is newer than the vet or there is no vet, else from the vet in the lockfile, else For is the frontmatter description; and between them Your use, the first line of up to three real prompts, cut to 100 characters. An empty part is left out. Then the daily histogram and recent events, each with the log line it came from, then description, git history, every grade and retro, cites and cited-by, usage by agent, channel and project, then examples: the invocation on each agent, the manifest's `default_prompt`, up to three real prompts read from transcripts at display time and never stored, and up to three curated examples from the latest audit; then that audit's date, session count, verdict, rates and top three improvements. `--json` emits the whole card. |
 | `mazo report` | Writes one self-contained HTML page: the `usage --all` table with each skill's latest audit verdict, the grades to run as `/grade <skill>`, and every skill's card. It goes to `report.html` in the data directory with mode `0600` and is overwritten on each run. `--out <path>` writes elsewhere and warns inside a git worktree, because the page shows cwds; `--open` opens it. |
 | `mazo status` | Drift and policy for every home. Writes nothing. |
 | `mazo sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
@@ -261,7 +261,9 @@ real lines and quotes nothing is appended to `audits.jsonl`.
 
 When any session record was written, or with `--resynth`, one more call writes
 the skill report over every session record of the skill: a verdict, patterns,
-ranked improvements and curated examples, with the rates `followed`,
+ranked improvements, curated examples, what the skill is for, and up to
+three uses to try that are not among the uses the session records show, with
+the rates `followed`,
 `achieved` and `abandoned or redone` computed by mazo as `n of N`.
 
 **Budget.** With the Claude judge, the session calls share 75% of
