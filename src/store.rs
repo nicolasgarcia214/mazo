@@ -1,6 +1,7 @@
 //! The store of installed third-party skills, `<data dir>/store/`, and its
 //! lockfile `<data dir>/mazo.lock`: `mazo add`, `mazo update`, and the entry
-//! `mazo retire` drops.
+//! `mazo retire` drops. `mazo add --project` installs into a project's own
+//! store, `<git root>/.mazo/skills/`, with its own `<git root>/mazo.lock`.
 
 use std::cell::OnceCell;
 use std::fs;
@@ -36,7 +37,22 @@ pub fn inventory(source: Option<&Path>, data: &Path) -> Result<Inventory> {
     Ok(inv)
 }
 
-/// `<data dir>/mazo.lock`: one `[[skill]]` per installed skill.
+/// A project's store, under its git root; committed with the project.
+const PROJECT_STORE: &str = ".mazo/skills";
+
+/// The project skill dirs, each two levels under the git root: Claude Code's,
+/// and the one Codex and Pi share.
+const PROJECT_LINKS: [&str; 2] = [".claude/skills", ".agents/skills"];
+
+/// The git root of the current directory, which `add --project` installs into.
+fn project_root() -> Result<PathBuf> {
+    let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
+    let top = crate::inventory::git(&cwd, &["rev-parse", "--show-toplevel"]);
+    top.map(|t| PathBuf::from(t.trim()))
+        .ok_or_else(|| Error::Usage(format!("add --project: {} is not in a git repository", cwd.display())))
+}
+
+/// `<data dir>/mazo.lock`, or a project's: one `[[skill]]` per installed skill.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lock {
@@ -89,7 +105,7 @@ impl Locked {
 }
 
 impl Lock {
-    /// The lockfile under `data`; empty when there is none.
+    /// The lockfile in `data`, or in a project's git root; empty when there is none.
     pub fn load(data: &Path) -> Result<Lock> {
         let path = data.join("mazo.lock");
         match fs::read_to_string(&path) {
@@ -242,6 +258,8 @@ pub struct Add<'a> {
     pub yes: bool,
     /// Install a skill with a security finding.
     pub force: bool,
+    /// Install into the project at the current directory's git root.
+    pub project: bool,
 }
 
 impl Add<'_> {
@@ -274,8 +292,11 @@ struct Fetched<'a> {
 /// source of several skills installs the one `--skill` names, every one with
 /// `--all`, else the ones picked at a terminal ([`skills_in`]); none picked
 /// installs nothing. A refused skill leaves the rest to install; the exit
-/// code is the highest of the refusals', 0 when there were none.
+/// code is the highest of the refusals', 0 when there were none. With
+/// `--project`, outside a git repository is a usage error before anything
+/// else, and the vet sees the project's skills too.
 pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<ExitCode> {
+    let project = if args.project { Some(project_root()?) } else { None };
     let arg = args.source;
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let source = Source::parse(arg).map_err(usage)?;
@@ -326,10 +347,22 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     if caller.is_some() && args.all {
         confirm_calls(children.len(), args.consent())?;
     }
-    let mut inv = inv.clone();
+    let mut inv = match &project {
+        Some(p) => {
+            let store = p.join(PROJECT_STORE);
+            let roots: Vec<&Path> = inv.roots.iter().map(PathBuf::as_path).chain([store.as_path()]).collect();
+            let mut with = Inventory::load_roots(inv.source.as_deref(), &roots)?;
+            // `load_roots` knows no install dates: the global store's, then the project's.
+            let project_lock = Lock::load(p)?.skills.into_iter().map(|l| (l.name.clone(), l));
+            with.installed = inv.installed.clone().into_iter().chain(project_lock).collect();
+            with
+        }
+        None => inv.clone(),
+    };
+    let target = Target { data, project: project.as_deref() };
     let mut code = 0;
     for child in children {
-        if let Err(e) = install(cfg, &mut inv, data, args, caller.as_ref(), &from, child) {
+        if let Err(e) = install(cfg, &mut inv, target, args, caller.as_ref(), &from, child) {
             eprintln!("ERROR: {e}");
             code = code.max(e.exit_code());
         }
@@ -337,15 +370,24 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     Ok(ExitCode::from(code))
 }
 
+/// Where `install` puts a skill: the data directory's store, or a project's.
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    data: &'a Path,
+    /// The project's git root, for `--project`.
+    project: Option<&'a Path>,
+}
+
 /// Installs the skill of `from` in `child` (`None` for `from.root` itself)
-/// and adds it to `inv`. A bad skill or a name taken in any root is a usage
-/// error, and a refused vet or a sync that would fail with the skill
-/// installed is a refusal; either way the store and the lockfile are left as
-/// they were.
+/// and adds it to `inv`. A bad skill or a name taken in any root, or at a
+/// project link, is a usage error, and a refused vet or a sync that would
+/// fail with the skill installed is a refusal; either way the store and the
+/// lockfile are left as they were. A project skill is linked into the
+/// project skill dirs ([`PROJECT_LINKS`]), not the homes.
 fn install(
     cfg: &Config,
     inv: &mut Inventory,
-    data: &Path,
+    target: Target,
     args: &Add,
     caller: Option<&Caller>,
     from: &Fetched,
@@ -362,9 +404,14 @@ fn install(
     let name = rename.map(str::to_string).or(child).unwrap_or_else(|| from.own.clone());
     let (skill_md, files) = checked(&src, &name, rename.is_some()).map_err(usage)?;
 
-    let store = dir(data);
+    let Target { data, project } = target;
+    let project_store = project.map(|p| p.join(PROJECT_STORE));
+    let store = project_store.clone().unwrap_or_else(|| dir(data));
     let to = store.join(&name);
-    if let Some(p) = cfg.source.iter().chain([&store]).map(|r| r.join(&name)).find(|p| p.symlink_metadata().is_ok()) {
+    let links: Vec<PathBuf> = project.into_iter().flat_map(|p| PROJECT_LINKS.map(|d| p.join(d).join(&name))).collect();
+    let roots = cfg.source.iter().cloned().chain([dir(data)]).chain(project_store);
+    let taken = roots.map(|r| r.join(&name)).chain(links.iter().cloned()).find(|p| p.symlink_metadata().is_ok());
+    if let Some(p) = taken {
         return Err(Error::Usage(format!(
             "add refused: {} already exists; pass --as <name> to install it under another name",
             p.display()
@@ -377,6 +424,8 @@ fn install(
     };
 
     let installed_at = now()?;
+    // The data lock guards the project's store and `mazo.lock` too, so two
+    // adds into one project are serialized only when they share a data dir.
     let _lock = ledger::lock(data)?;
     // Copied under a hidden name, which no root lists, then renamed into place.
     let staged = store.join(format!(".add-{name}"));
@@ -387,6 +436,57 @@ fn install(
     // From here until the lockfile is written, `store/<name>` has no lock
     // entry. A crash in that window leaves it there unrecorded: a re-run of
     // `add` refuses the name as taken, and `sync` links it like any store skill.
+    let subpath = if subpath.as_os_str().is_empty() { ".".into() } else { subpath.to_string_lossy().into() };
+    let (vetted_at, r#for, r#try, verdict) = match vetted {
+        Some((vet, at)) => (Some(at), Some(vet.r#for), vet.r#try, Some(vet.verdict)),
+        None => (None, None, Vec::new(), None),
+    };
+    let locked = Locked {
+        name: name.clone(),
+        origin: from.origin.clone(),
+        subpath,
+        commit: from.commit.clone(),
+        content_hash,
+        trusted: from.trusted,
+        installed_at,
+        vetted_at,
+        r#for,
+        r#try,
+        verdict,
+    };
+    let lock_dir = project.unwrap_or(data);
+    let record = |locked| {
+        Lock::load(lock_dir).and_then(|mut lock| {
+            lock.skills.push(locked);
+            lock.save(lock_dir)
+        })
+    };
+    if project.is_some() {
+        // Relative, so that they resolve on any checkout of the project.
+        let target = Path::new("../..").join(PROJECT_STORE).join(&name);
+        let mut made = Vec::new();
+        let linked = links.iter().try_for_each(|link| {
+            let parent = link.parent().expect("a project link has a parent");
+            fs::create_dir_all(parent).map_err(|e| err(parent, e))?;
+            std::os::unix::fs::symlink(&target, link).map_err(|e| err(link, e))?;
+            made.push(link);
+            Ok(())
+        });
+        if let Err(e) = linked.and_then(|()| record(locked)) {
+            for link in &made {
+                fs::remove_file(link).map_err(|e| err(link, e))?;
+            }
+            fs::remove_dir_all(&to).map_err(|e| err(&to, e))?;
+            return Err(e);
+        }
+        inv.skills.insert(name.clone());
+        inv.origins.entry(name).or_default().push(store);
+        println!("installed {}", to.display());
+        for link in made {
+            println!("linked    {}", link.display());
+        }
+        return Ok(());
+    }
     let mut with = inv.clone();
     with.skills.insert(name.clone());
     with.known.insert(name.clone());
@@ -394,32 +494,7 @@ fn install(
     let homes: Vec<&Home> = cfg.homes.iter().collect();
     let plan = links::plan(cfg, &with, &homes, None);
     let errors = links::sync_errors(cfg, &with, &homes, &plan);
-    let recorded = if errors.is_empty() {
-        let subpath = if subpath.as_os_str().is_empty() { ".".into() } else { subpath.to_string_lossy().into() };
-        let (vetted_at, r#for, r#try, verdict) = match vetted {
-            Some((vet, at)) => (Some(at), Some(vet.r#for), vet.r#try, Some(vet.verdict)),
-            None => (None, None, Vec::new(), None),
-        };
-        let locked = Locked {
-            name,
-            origin: from.origin.clone(),
-            subpath,
-            commit: from.commit.clone(),
-            content_hash,
-            trusted: from.trusted,
-            installed_at,
-            vetted_at,
-            r#for,
-            r#try,
-            verdict,
-        };
-        Lock::load(data).and_then(|mut lock| {
-            lock.skills.push(locked);
-            lock.save(data)
-        })
-    } else {
-        Err("add refused; nothing was installed".into())
-    };
+    let recorded = if errors.is_empty() { record(locked) } else { Err("add refused; nothing was installed".into()) };
     if let Err(e) = recorded {
         fs::remove_dir_all(&to).map_err(|e| err(&to, e))?;
         for e in &errors {

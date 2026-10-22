@@ -168,6 +168,9 @@ enum Cmd {
         /// Install even when the judge reports a security issue.
         #[arg(long)]
         force: bool,
+        /// Install into the project at the current directory's git root: `.mazo/skills/`, `mazo.lock`, and links in `.claude/skills` and `.agents/skills`.
+        #[arg(long)]
+        project: bool,
     },
     /// Re-clone git-sourced store skills and install what changed; an untrusted source's change is re-vetted first.
     Update {
@@ -269,9 +272,9 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         }
         Cmd::Retire { name, force } => cmd_retire(&cfg, &inv, &data, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
-        Cmd::Add { source, name, skill, all, trust, yes, force } => {
+        Cmd::Add { source, name, skill, all, trust, yes, force, project } => {
             let (rename, pick) = (name.as_deref(), skill.as_deref());
-            let args = store::Add { source: &source, rename, pick, all, trust, yes, force };
+            let args = store::Add { source: &source, rename, pick, all, trust, yes, force, project };
             store::add(&cfg, &inv, &data, &args)
         }
         Cmd::Update { names, yes, force } => {
