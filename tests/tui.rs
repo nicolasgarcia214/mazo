@@ -773,8 +773,16 @@ impl Actions {
 
     /// Installs the skill at `url` into the store, recorded as `trusted` or not.
     fn install(&self, url: &str, trusted: bool) {
-        let args =
-            store::Add { source: url, rename: None, pick: None, all: false, trust: true, yes: false, force: false };
+        let args = store::Add {
+            source: url,
+            rename: None,
+            pick: None,
+            all: false,
+            trust: true,
+            yes: false,
+            force: false,
+            project: false,
+        };
         store::add(&self.cfg, &self.inv(), &self.data, &args).unwrap();
         if !trusted {
             let name = url.rsplit('/').next().unwrap().trim_end_matches(".git");
