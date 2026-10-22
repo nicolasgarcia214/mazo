@@ -41,8 +41,11 @@ billing = "subscription"          # subscription (default) or api
 
 ## `mazo init`
 
-`mazo init [--source <dir>]` writes the config, and refuses to overwrite an
-existing one. It writes:
+`mazo init [--source <dir>] [--no-skills]` writes the config, and refuses to
+overwrite an existing one. It then installs the bundled `grade` and `retro`
+skills from mazo's repository, which needs the network; `--no-skills` skips
+that (see [the bundled skills](installing-skills.md#the-bundled-skills)). It
+writes:
 
 - a home for each of `~/.claude`, `~/.codex` and `~/.pi/agent` that exists;
 - every policy rule off;

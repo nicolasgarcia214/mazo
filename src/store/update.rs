@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 
 use super::ask::{Consent, Question};
+use super::bundled;
 use super::lock::{checked, now, resolved, stage};
 use super::source::{Remote, Scratch};
 use super::vet::{gate, no_judge};
@@ -47,7 +48,8 @@ pub struct Update<'a> {
 /// judge and 1 for the rest. A name that is not a store skill is a usage error.
 /// With `--project` it updates the project's skills and lockfile instead, the
 /// judge seeing the project's skills too; their links, relative to the
-/// project store, need no change.
+/// project store, need no change. A bundled skill [`bundled::behind`] the
+/// running version moves to its tag, unvetted, once the remote has that tag.
 pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<ExitCode> {
     let (names, out) = (args.names, Out(args.pane));
     let project = if args.project { Some(project_root("update")?) } else { None };
@@ -77,6 +79,8 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         backend: OnceCell::new(),
     });
     let (mut updated, mut unjudged, mut code) = (false, false, 0);
+    // Whether the remote has the running version's tag, asked once.
+    let tagged = OnceCell::new();
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
         // A cancelled job starts nothing more.
         if out.cancelled() {
@@ -94,8 +98,20 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
                 continue;
             }
         };
+        let repin = bundled::behind(l)
+            && match tagged.get_or_init(|| bundled::listed(&remote, &|| out.cancelled()).map_err(|e| e.to_string())) {
+                Ok((tagged, _)) => *tagged,
+                Err(e) => {
+                    out.error(&format!("ERROR: update {}: {e}", l.name));
+                    code = code.max(1);
+                    continue;
+                }
+            };
+        if repin {
+            remote.r#ref = Some(bundled::tag());
+        }
         let vet = match &revet {
-            _ if l.trusted || remote.trusted_by(&cfg.trusted) => None,
+            _ if repin || l.trusted || remote.trusted_by(&cfg.trusted) => None,
             None => {
                 out.error(&format!(
                     "ERROR: update {}: update refused: {} is not trusted and re-vetting it needs a [judge], \
@@ -110,7 +126,8 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         remote.subpath = if l.subpath == "." { PathBuf::new() } else { l.subpath.clone().into() };
         match refresh(cfg, inv, target, l, &remote, vet, out) {
             Ok(Some(commit)) => {
-                out.line(&format!("updated {} to {commit}", target.store().join(&l.name).display()));
+                let at = if repin { format!("{} ({commit})", bundled::tag()) } else { commit };
+                out.line(&format!("updated {} to {at}", target.store().join(&l.name).display()));
                 updated = true;
             }
             Ok(None) => out.line(&format!("{}: up to date", l.name)),
@@ -141,10 +158,11 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
 }
 
 /// Clones `remote` into `<data>/.clone-<pid>` and, when the skill at its
-/// subpath hashes unlike `l`, passes it through the `vet` gate if there is
-/// one, then swaps the copy in for `<store>/<name>` of `target` under the
-/// data lock and records the commit and hash, and any new verdict, in its
-/// lockfile: the new commit, or `None` when up to date. A refused vet, a
+/// subpath hashes unlike `l` or `remote` has another ref than `l`, passes it
+/// through the `vet` gate if there is one, then swaps the copy in for
+/// `<store>/<name>` of `target` under the data lock and records the ref,
+/// commit and hash, and any new verdict, in its lockfile: the new commit, or
+/// `None` when up to date. A refused vet, a
 /// sync that would fail with the new copy (for the data directory's store),
 /// or any failed write leaves the old copy and the lockfile as they were;
 /// the sync's errors go to `out`. A cancel stops it before the swap, and a
@@ -175,7 +193,7 @@ fn refresh(
     // y/N prompt run without the data lock.
     let staged = Scratch(store.join(format!(".update-{}-{}", l.name, std::process::id())));
     let content_hash = stage(&src, &files, &skill_md, &staged.0)?;
-    if content_hash == l.content_hash {
+    if content_hash == l.content_hash && remote.r#ref == l.r#ref {
         return Ok(None);
     }
     let vetted = match vet {
@@ -207,6 +225,7 @@ fn refresh(
     let recorded = if errors.is_empty() {
         Lock::load(&lock_dir).and_then(|mut lock| {
             let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;
+            entry.r#ref.clone_from(&remote.r#ref);
             entry.commit = Some(commit.clone());
             entry.content_hash = content_hash;
             if let Some(((vet, _), at)) = vetted {

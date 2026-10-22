@@ -247,6 +247,19 @@ pub struct App {
 /// A card as the TUI draws it: its skill, its `show` lines and its activity chart.
 type Shown = (String, Vec<String>, Vec<Bucket>);
 
+/// The top bar's tabs.
+const TABS: [&str; 2] = ["usage", "unused"];
+
+/// The top bar's name.
+fn logo() -> Line<'static> {
+    Line::from(vec![Span::raw(" ♠ mazo ").fg(Color::Black).bg(theme::ACCENT).bold(), Span::raw(" ")])
+}
+
+/// `s` in the muted colour.
+fn muted(s: &str) -> Span<'static> {
+    Span::raw(s.to_string()).fg(theme::MUTED)
+}
+
 /// The next of `all` after `cur`, `None` (no filter) after the last.
 fn cycle<T: Copy + PartialEq>(all: &[T], cur: Option<T>) -> Option<T> {
     match cur {
@@ -1016,41 +1029,27 @@ impl App {
         })
     }
 
-    /// The top bar in `area`: the name, the tabs or the card's trail, then
-    /// the count of listed skills and the filter, the window, and the agent,
-    /// channel and authoring filters when set, then the tokens in context,
-    /// each agent's in the warning colour near its listing budget.
-    fn draw_top(&self, frame: &mut Frame, area: Rect) {
-        let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
-        // The first `width` columns of `area`, and the rest.
-        let split = |area, width: usize| {
-            Layout::horizontal([Constraint::Length(width as u16), Constraint::Fill(1)]).areas(area)
-        };
-        let logo = Line::from(vec![Span::raw(" ♠ mazo ").fg(Color::Black).bg(theme::ACCENT).bold(), Span::raw(" ")]);
-        let [at, area] = split(area, logo.width());
-        frame.render_widget(logo, at);
-        let area = match (self.screen, &self.card) {
-            (Screen::Card, Some((skill, ..))) => {
-                let back = if self.back == Screen::Unused { "unused" } else { "usage" };
-                let trail =
-                    Line::from(vec![muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]);
-                let [at, area] = split(area, trail.width());
-                frame.render_widget(trail, at);
-                area
-            }
-            _ => {
-                const TABS: [&str; 2] = ["usage", "unused"];
-                let tabs = Tabs::new(TABS)
-                    .select(usize::from(self.screen == Screen::Unused))
-                    .style(theme::MUTED)
-                    .highlight_style(Style::new().fg(theme::ACCENT).bold().underlined())
-                    .divider(Span::raw("│").fg(theme::MUTED));
-                // Each title is padded with a space either side, a divider between.
-                let [at, area] = split(area, TABS.iter().map(|t| t.len() + 3).sum::<usize>() - 1);
-                frame.render_widget(tabs, at);
-                area
-            }
-        };
+    /// The card's trail after the name: the list it goes back to, then its skill.
+    fn trail(&self) -> Option<Line<'static>> {
+        let (Screen::Card, Some((skill, ..))) = (self.screen, &self.card) else { return None };
+        let back = if self.back == Screen::Unused { "unused" } else { "usage" };
+        Some(Line::from(vec![muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]))
+    }
+
+    /// The columns the name and the tabs or the trail take.
+    fn lead(&self) -> usize {
+        // Each tab title is padded with a space either side, a divider between.
+        logo().width() + self.trail().map_or(TABS.iter().map(|t| t.len() + 3).sum::<usize>() - 1, |t| t.width())
+    }
+
+    /// What follows the lead in `width` columns: the count of listed skills
+    /// and the filter, the window, and the agent, channel and authoring
+    /// filters when set; the tokens in context at the right edge, each
+    /// agent's in the warning colour near its listing budget, their label
+    /// shortened where the chips would crowd them; and the bundled skills
+    /// not installed, after the chips when they fit beside the tokens, else
+    /// returned as a row of its own.
+    fn top(&self, width: usize) -> (Line<'static>, Line<'static>, Option<Line<'static>>) {
         let mut chips: Vec<(&str, String)> = Vec::new();
         if self.screen != Screen::Card {
             chips.push(("", format!("{} skills", self.listed().len())));
@@ -1076,8 +1075,7 @@ impl App {
             }
             spans.extend([muted(label), Span::raw(value).fg(theme::ACCENT)]);
         }
-        let chips = Line::from(spans);
-        // The tokens at the right edge, their label shortened where the chips would crowd them.
+        let mut chips = Line::from(spans);
         let tokens = |label: &str| {
             let total = format!("~{}", ctx::approx(self.tokens.total()));
             let mut spans = vec![Span::raw(total).fg(theme::ACCENT), muted(label)];
@@ -1089,12 +1087,50 @@ impl App {
             spans.push(Span::raw(" "));
             Line::from(spans)
         };
-        let long = tokens(" tok in context: ");
-        let line = if chips.width() + 2 + long.width() <= usize::from(area.width) { long } else { tokens(" tok: ") };
+        let (long, short) = (tokens(" tok in context: "), tokens(" tok: "));
+        let fits = |chips: usize, tokens: &Line| chips + 2 + tokens.width() <= width;
+        let missing = store::missing_bundled(&self.data.inv);
+        let mut notice = (!missing.is_empty())
+            .then(|| Span::raw(format!("{} not installed, press i", missing.join(", "))).fg(theme::WARN));
+        // Joined by ` · `, three columns.
+        if let Some(n) = notice.take_if(|n| fits(chips.width() + 3 + n.width(), &short)) {
+            chips.spans.extend([muted(" · "), n]);
+        }
+        let line = if fits(chips.width(), &long) { long } else { short };
+        (chips, line, notice.map(|n| Line::from(vec![Span::raw(" "), n])))
+    }
+
+    /// The top bar in `area`: the name, the tabs or the card's trail, then
+    /// [`App::top`]'s chips and tokens, and on a second row, when `area` has
+    /// one, its notice.
+    fn draw_top(&self, frame: &mut Frame, area: Rect) {
+        let [row, below] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+        // The first `width` columns of `area`, and the rest.
+        let split = |area, width: usize| {
+            Layout::horizontal([Constraint::Length(width as u16), Constraint::Fill(1)]).areas(area)
+        };
+        let [at, area] = split(row, logo().width());
+        frame.render_widget(logo(), at);
+        let [at, area] = split(area, self.lead() - logo().width());
+        match self.trail() {
+            Some(trail) => frame.render_widget(trail, at),
+            None => {
+                let tabs = Tabs::new(TABS)
+                    .select(usize::from(self.screen == Screen::Unused))
+                    .style(theme::MUTED)
+                    .highlight_style(Style::new().fg(theme::ACCENT).bold().underlined())
+                    .divider(Span::raw("│").fg(theme::MUTED));
+                frame.render_widget(tabs, at);
+            }
+        }
+        let (chips, line, notice) = self.top(area.width.into());
         let [at, right] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(line.width() as u16)]).areas(area);
         frame.render_widget(chips, at);
         frame.render_widget(line, right);
+        if let Some(notice) = notice {
+            frame.render_widget(notice, below);
+        }
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
@@ -1104,8 +1140,11 @@ impl App {
         };
         let height = Constraint::Length(footer_lines.len() as u16);
         let pane_height = self.job.as_ref().map_or(0, |j| j.lines.len().clamp(1, PANE_LINES) as u16 + 2);
+        // The top bar's notice takes a second row when it does not fit the first.
+        let rest = usize::from(frame.area().width).saturating_sub(self.lead());
+        let top_height = 1 + u16::from(self.top(rest).2.is_some());
         let [top, body, info, pane, footer] = Layout::vertical([
-            Constraint::Length(1),
+            Constraint::Length(top_height),
             Constraint::Fill(1),
             Constraint::Length(1),
             Constraint::Length(pane_height),

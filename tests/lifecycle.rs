@@ -591,8 +591,8 @@ fn retire_of_a_non_canonical_name_is_a_usage_error() {
     assert_eq!(homes_and_source(&fx), before);
 }
 
-/// A private `HOME` with one Claude home and a config written by `mazo init`
-/// without `--source`.
+/// A private `HOME` with one Claude home and a config written by `mazo init
+/// --no-skills` without `--source`.
 struct Sourceless {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -608,7 +608,7 @@ impl Sourceless {
         // No agent on `PATH`, so init detects no judge.
         let bin = fx.root.join("bin");
         let run = Mazo::new(&fx.root, &fx.root.join("home"), &fx.config, &fx.root.join("data"));
-        let out = run.command(&[("PATH", bin.as_os_str())], &["init"]).output().unwrap();
+        let out = run.command(&[("PATH", bin.as_os_str())], &["init", "--no-skills"]).output().unwrap();
         assert_eq!(code(&out), 0, "{}", stderr(&out));
         fx
     }

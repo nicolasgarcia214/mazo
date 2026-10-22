@@ -58,10 +58,16 @@ fn typed(app: &mut App, s: &str) {
     }
 }
 
+/// The lines of `screen` under the top bar, whose second row, when it has
+/// one, names the bundled skills not installed.
+fn under_top(screen: &[String]) -> &[String] {
+    &screen[if screen[1].ends_with(" not installed, press i") { 2 } else { 1 }..]
+}
+
 /// The table rows on `screen`: the lines after the top bar and the table
 /// header, up to the blank line or the coverage note, without the gutter.
 fn rows(screen: &[String]) -> Vec<String> {
-    screen[2..]
+    under_top(screen)[1..]
         .iter()
         .map(|l| body(l))
         .take_while(|l| !l.is_empty() && !l.starts_with("coverage:") && !l.starts_with("window:"))
@@ -283,6 +289,54 @@ fn slash_leaves_only_the_rows_whose_name_matches() {
 }
 
 #[test]
+fn the_top_bar_names_the_bundled_skills_not_installed_until_both_are() {
+    let mut golden = Golden::new();
+    for (installed, notice) in [
+        (&[][..], Some("grade, retro not installed, press i")),
+        (&["grade"], Some("retro not installed, press i")),
+        (&["retro"], Some("grade not installed, press i")),
+        (&["grade", "retro"], None),
+    ] {
+        golden.world.inv.skills.extend(installed.iter().map(|s| s.to_string()));
+        let input = golden.world.input(&golden.events);
+        let top = text(&mut app(&input), 200, 40).swap_remove(0);
+        match notice {
+            Some(notice) => assert!(top.contains(&format!(" · {notice}  ")), "{installed:?}: {top}"),
+            None => assert!(!top.contains("not installed"), "{installed:?}: {top}"),
+        }
+        golden.world.inv.skills.retain(|s| !installed.contains(&s.as_str()));
+    }
+}
+
+/// At 80 columns the notice takes a second row of the top bar, and the first
+/// keeps the window and every agent's tokens.
+#[test]
+fn at_80_columns_the_notice_takes_its_own_row_beside_the_token_split() {
+    let mut golden = Golden::new();
+    let tokens = {
+        let input = golden.world.input(&golden.events);
+        mazo::ctx::Contexts::new(input.cfg, input.inv).tokens(input.inv)
+    };
+    let approx = mazo::ctx::approx;
+    let split = format!(
+        "~{} tok: C {} · X {} · P {}",
+        approx(tokens.total()),
+        approx(tokens.claude),
+        approx(tokens.codex),
+        approx(tokens.pi)
+    );
+    let screen = text(&mut app(&golden.world.input(&golden.events)), 80, 30);
+    assert!(screen[0].contains("window 30d") && screen[0].ends_with(&split), "{screen:#?}");
+    assert_eq!(screen[1], " grade, retro not installed, press i", "{screen:#?}");
+    assert!(screen[2].split_whitespace().next() == Some("skill"), "the table follows: {screen:#?}");
+    // Installed, the row goes and the table moves up.
+    golden.world.inv.skills.extend(["grade".into(), "retro".into()]);
+    let screen = text(&mut app(&golden.world.input(&golden.events)), 80, 30);
+    assert!(screen[0].ends_with(&split) && screen.iter().all(|l| !l.contains("not installed")), "{screen:#?}");
+    assert!(screen[1].split_whitespace().next() == Some("skill"), "{screen:#?}");
+}
+
+#[test]
 fn w_a_c_and_capital_a_change_the_footer_and_counts_as_the_usage_flags_do() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
@@ -359,7 +413,7 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_30d_tr
     for width in (60..140).rev() {
         let screen = text(&mut app, width, 30);
         // The skill header may be cut with the names, so it is left out.
-        let header = screen[1].split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+        let header = under_top(&screen)[0].split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
         assert_eq!(rows(&screen).len(), all, "{width}: {screen:#?}");
         if seen.last() != Some(&header) {
             seen.push(header);
