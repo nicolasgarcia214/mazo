@@ -204,6 +204,13 @@ enum EvalsCmd {
         /// The skill whose directories to print.
         skill: String,
     },
+    /// One-time: move `<source>/.grades` and `<source>/.retros` into `evals_dir`; removed in the next release.
+    ///
+    /// Each file gets the content_hash of its skill directory as of the commit that last touched the file. A file that
+    /// is uncommitted, or whose commit or skill directory is not found, moves without one, and its line says why. An
+    /// existing destination is never overwritten: the source file stays and is listed on every run. Exits 1 when any
+    /// file stays.
+    Migrate,
 }
 
 #[derive(clap::Args)]
@@ -288,6 +295,11 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             let [grades, retros] = evals::dirs(&cfg.evals_dir, &skill);
             println!("grades\t{}\nretros\t{}", grades.display(), retros.display());
             Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Evals { cmd: EvalsCmd::Migrate } => {
+            let source = cfg.need_source("evals migrate")?;
+            let done = mazo::migrate::migrate(source, &cfg.evals_dir, &mut |line| println!("{line}"))?;
+            Ok(if done.left == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) })
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
         Cmd::Status { agent, json } => {
