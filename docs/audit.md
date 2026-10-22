@@ -14,6 +14,27 @@ Three reviews judge a skill, each at a different time:
 A retro feeds the audit rather than replacing it. The TUI's help (`H`) states
 the same roles.
 
+## Moving old grades and retros
+
+Grades and retros live under [`evals_dir`](configuration.md#evals_dir). mazo no longer
+reads `<source>/.grades/<skill>` or `<source>/.retros/<skill>`.
+`mazo evals migrate` moves their `*.md` files into `evals_dir`. It is a
+one-time command and is removed in the next release.
+
+Each moved file gets a `content_hash` in its frontmatter: the hash of the
+skill directory as of the commit that last touched the file. A grade of a
+skill unchanged since that commit is therefore not stale. Untracked or
+ignored files in the skill directory, such as `.DS_Store` or `__pycache__`,
+count in the skill's current hash but are absent from its commit, so its
+moved grades show stale. A file that is
+uncommitted, or whose commit or skill directory is not found, moves without a
+hash, and its output line says why.
+
+The command never overwrites a file in `evals_dir`. A source file whose
+destination exists stays where it is and is listed on every run, and the run
+exits 1. A run with nothing left to move prints `moved nothing`. The command
+works offline and runs only `git`.
+
 ## How an audit runs
 
 `mazo audit <skill>` sends each session not yet audited to one call of the
