@@ -72,7 +72,7 @@ each holding a `SKILL.md`. If you only install other people's skills with
 `mazo add`, you need none.
 
 ```sh
-mazo init                         # write the config; add --source <skills dir> for your own skills
+mazo init                         # write the config and install grade and retro; --source <skills dir> for your own, --no-skills to skip the install
 mazo sync                         # link every skill into every agent home
 mazo usage                        # see which skills your agents load
 mazo unused                       # list skills with no strong load in the window
@@ -84,7 +84,7 @@ mazo                              # open the terminal UI
 
 | Command | What it does |
 |---|---|
-| [`mazo init`](docs/configuration.md#mazo-init) | Write the config. |
+| [`mazo init`](docs/configuration.md#mazo-init) | Write the config and install the bundled grade and retro skills (`--no-skills` skips them). |
 | [`mazo scan`](docs/usage-tracking.md#mazo-scan) | Read new log lines into the ledger. |
 | [`mazo usage`](docs/usage-tracking.md#mazo-usage) | One row per skill with its loads, last use and audit verdict. |
 | [`mazo unused`](docs/usage-tracking.md#mazo-unused) | Skills with no strong load in the window. |

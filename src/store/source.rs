@@ -50,7 +50,7 @@ impl Source {
     }
 
     /// `arg` read as a git source, whatever the filesystem holds: [`Source::parse`] past its local check.
-    fn git(arg: &str) -> std::result::Result<Source, String> {
+    pub(super) fn git(arg: &str) -> std::result::Result<Source, String> {
         if let Some(browsed) = github_browser_url(arg) {
             return browsed;
         }
@@ -146,12 +146,10 @@ impl Remote {
     pub(super) fn resolve(&mut self, cancel: &dyn Fn() -> bool) -> Result<()> {
         let (true, Some(guess)) = (self.browsed, &self.r#ref) else { return Ok(()) };
         let tail = Path::new(guess).join(&self.subpath);
-        let listed = self.git(None, &[&"ls-remote", &"--refs", &"--heads", &"--tags", &"--", &self.url], cancel)?;
-        let listed = String::from_utf8_lossy(&listed);
-        let names = listed.lines().filter_map(|line| {
-            let name = line.split_once('\t')?.1;
-            name.strip_prefix("refs/heads/").or_else(|| name.strip_prefix("refs/tags/"))
-        });
+        let listed = self.ls_remote(&["--refs", "--heads", "--tags"], &[], cancel)?;
+        let names = listed
+            .iter()
+            .filter_map(|(_, name)| name.strip_prefix("refs/heads/").or_else(|| name.strip_prefix("refs/tags/")));
         let found = names.filter(|name| tail.starts_with(name)).max_by_key(|name| Path::new(name).components().count());
         let r#ref = match found {
             Some(name) => name.to_string(),
@@ -161,6 +159,22 @@ impl Remote {
         self.subpath = tail.strip_prefix(&r#ref).expect("the ref starts the tail").to_path_buf();
         (self.r#ref, self.browsed) = (Some(r#ref), false);
         Ok(())
+    }
+
+    /// Each `(commit, ref name)` that `git ls-remote <flags…> -- <url> <patterns…>` lists.
+    pub(super) fn ls_remote(
+        &self,
+        flags: &[&str],
+        patterns: &[&str],
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Vec<(String, String)>> {
+        let mut args: Vec<&dyn AsRef<OsStr>> = vec![&"ls-remote"];
+        args.extend(flags.iter().map(|f| f as &dyn AsRef<OsStr>));
+        args.extend([&"--" as &dyn AsRef<OsStr>, &self.url]);
+        args.extend(patterns.iter().map(|p| p as &dyn AsRef<OsStr>));
+        let listed = self.git(None, &args, cancel)?;
+        let listed = String::from_utf8_lossy(&listed);
+        Ok(listed.lines().filter_map(|l| l.split_once('\t')).map(|(c, n)| (c.into(), n.into())).collect())
     }
 
     /// The URL's host, without user or port; none for a `file://` URL.
@@ -244,7 +258,7 @@ impl Remote {
 }
 
 /// Whether `r#ref` is a full commit id: 40 hex digits.
-fn is_commit(r#ref: &str) -> bool {
+pub(super) fn is_commit(r#ref: &str) -> bool {
     r#ref.len() == 40 && r#ref.bytes().all(|b| b.is_ascii_hexdigit())
 }
 

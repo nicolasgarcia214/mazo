@@ -116,11 +116,14 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Write a config, with every rule off.
+    /// Write a config, with every rule off, then install the bundled grade and retro skills from mazo's repository.
     Init {
         /// Your own skills directory, one subdirectory per skill; needed only by `new`, `prune`, retiring its skills, `loose` and home `links`.
         #[arg(long)]
         source: Option<std::path::PathBuf>,
+        /// Skip installing grade and retro, which needs the network.
+        #[arg(long)]
+        no_skills: bool,
     },
     /// Create a skill that already satisfies the configured policy rules.
     New {
@@ -253,13 +256,20 @@ fn main() -> ExitCode {
 /// `None` is bare `mazo` on a terminal: the TUI.
 fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let path = config::path()?;
-    if let Some(Cmd::Init { source }) = &cmd {
-        let mut stdin = std::io::stdin().lock();
-        let ask = stdin.is_terminal().then_some(&mut stdin as &mut dyn std::io::BufRead);
-        let judge = config::init(&path, source.as_deref(), ask)?;
+    if let Some(Cmd::Init { source, no_skills }) = &cmd {
+        let judge = {
+            let mut stdin = std::io::stdin().lock();
+            let ask = stdin.is_terminal().then_some(&mut stdin as &mut dyn std::io::BufRead);
+            config::init(&path, source.as_deref(), ask)?
+        };
         println!("wrote {}", path.display());
         println!("{}", config::init_note(judge));
-        return Ok(ExitCode::SUCCESS);
+        if *no_skills {
+            return Ok(ExitCode::SUCCESS);
+        }
+        let cfg = config::load(&path)?.ok_or("init wrote no config")?;
+        let data = ledger::data_dir()?;
+        return store::install_bundled(&cfg, &store::inventory(cfg.source.as_deref(), &data)?, &data);
     }
     let Some(cfg) = config::load(&path)? else {
         return Err(Error::Usage(format!(

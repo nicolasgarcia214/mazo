@@ -1013,6 +1013,161 @@ fn a_github_blob_url_at_a_commit_installs_that_commit_and_stays_there() {
     assert_eq!(r.stdout(), "theirs: up to date\n");
 }
 
+/// The tag `mazo init` installs the bundled skills at.
+const TAG: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+
+/// The fixture with [`bare_repo`] `mazo`, `grade` and `retro` under
+/// `skills/`, served as `https://github.com/nicolasgarcia214/mazo.git` by an
+/// `insteadOf` rewrite, no config yet at `MAZO_CONFIG`, and no skill linked
+/// into the homes.
+fn bundled_fixture() -> Fixture {
+    let mut fx = git_fixture();
+    for dir in skills_dirs(&fx) {
+        fs::remove_dir_all(dir).unwrap();
+    }
+    let file = bare_repo(&fx, "mazo", &[("skills/grade", "grade"), ("skills/retro", "retro")]);
+    fx.set_env("GIT_CONFIG_COUNT", Some(Path::new("1")));
+    fx.set_env(
+        "GIT_CONFIG_KEY_0",
+        Some(Path::new(&format!("url.{}.insteadOf", file.strip_suffix("mazo.git").unwrap()))),
+    );
+    fx.set_env("GIT_CONFIG_VALUE_0", Some(Path::new("https://github.com/nicolasgarcia214/")));
+    let config = fx.root.join("init/config.toml");
+    fx.set_env("MAZO_CONFIG", Some(&config));
+    fx
+}
+
+/// Tags the `mazo` repository's work tree head `tag` and pushes the tag.
+fn tag_mazo(fx: &Fixture, tag: &str) {
+    let work = fx.root.join("work/mazo");
+    common::git(&work, &["tag", tag], common::NOW);
+    common::git(&work, &["push", "-q", &s(&fx.root.join("origin/mazo.git")), tag], common::NOW);
+}
+
+/// `mazo init args…` with git alone on `PATH`, so that no judge is detected.
+fn init(fx: &Fixture, args: &[&str]) -> Run {
+    let bin = fx.root.join("init-bin");
+    if !exists(&bin) {
+        let git =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|d| d.join("git")).find(|p| p.is_file());
+        fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(git.unwrap(), bin.join("git")).unwrap();
+    }
+    Run(fx.command(&[&["init"], args].concat()).env("PATH", &bin).output().unwrap())
+}
+
+/// The `(ref, origin, subpath, trusted)` of `name`'s lock entry.
+fn pin(fx: &Fixture, name: &str) -> (String, String, String, bool) {
+    let e = entry(&lock(fx), name).clone();
+    let field = |k: &str| e[k].as_str().unwrap().to_string();
+    (field("ref"), field("origin"), field("subpath"), e["trusted"].as_bool().unwrap())
+}
+
+#[test]
+fn init_installs_grade_and_retro_trusted_at_the_version_tag() {
+    let fx = bundled_fixture();
+    tag_mazo(&fx, TAG);
+    let r = init(&fx, &[]);
+    r.assert_ok();
+    for name in ["grade", "retro"] {
+        let to = store(&fx).join(name);
+        assert!(r.stdout().contains(&format!("installed {}", to.display())), "{}", r.stdout());
+        assert_eq!(fs::read_link(fx.home.join(".claude/skills").join(name)).unwrap(), to);
+        let origin = "https://github.com/nicolasgarcia214/mazo.git".to_string();
+        assert_eq!(pin(&fx, name), (TAG.into(), origin, format!("skills/{name}"), true));
+    }
+    // The trust was the install's own: the config gains no trusted entry.
+    let config: toml::Table = fs::read_to_string(fx.root.join("init/config.toml")).unwrap().parse().unwrap();
+    assert!(!config.contains_key("trusted"), "{config:?}");
+    assert!(!r.stderr().contains("warning"), "{}", r.stderr());
+}
+
+#[test]
+fn init_with_no_skills_installs_nothing() {
+    let fx = bundled_fixture();
+    let r = init(&fx, &["--no-skills"]);
+    r.assert_ok();
+    assert!(exists(&fx.root.join("init/config.toml")));
+    assert!(!exists(&store(&fx)) && !exists(&fx.data.join("mazo/mazo.lock")));
+}
+
+#[test]
+fn init_skips_a_bundled_skill_already_in_the_source() {
+    let fx = bundled_fixture();
+    tag_mazo(&fx, TAG);
+    let mine = fx.root.join("mine");
+    common::write(&mine.join("grade/SKILL.md"), "---\nname: grade\ndescription: Mine.\n---\n");
+    let r = init(&fx, &["--source", &s(&mine)]);
+    r.assert_ok();
+    assert!(r.stdout().contains("grade: already installed; skipped\n"), "{}", r.stdout());
+    assert!(!exists(&store(&fx).join("grade")));
+    assert_eq!(lock(&fx).len(), 1);
+    assert_eq!(pin(&fx, "retro").0, TAG);
+}
+
+#[test]
+fn without_the_tag_init_pins_the_head_commit_and_update_re_pins_it_once_tagged() {
+    let fx = bundled_fixture();
+    let sha = head(&format!("file://{}", fx.root.join("origin/mazo.git").display()));
+    let r = init(&fx, &[]);
+    r.assert_ok();
+    assert!(
+        r.stderr().contains(&format!("warning: https://github.com/nicolasgarcia214/mazo has no tag {TAG}")),
+        "{}",
+        r.stderr()
+    );
+    assert_eq!(pin(&fx, "grade").0, sha);
+
+    // A new commit on the default branch does not move a pinned commit.
+    push_change(&fx, "mazo", "skills/grade/SKILL.md", "---\nname: grade\ndescription: Next.\n---\n");
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert_eq!(r.stdout(), "grade: up to date\nretro: up to date\n");
+    assert_eq!(pin(&fx, "grade").0, sha);
+
+    // Once tagged, both move to the tag: grade's content with it, retro's ref alone.
+    tag_mazo(&fx, TAG);
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    let tip = head(&format!("file://{}", fx.root.join("origin/mazo.git").display()));
+    for name in ["grade", "retro"] {
+        let line = format!("updated {} to {TAG} ({tip})", store(&fx).join(name).display());
+        assert!(r.stdout().contains(&line), "{}", r.stdout());
+        assert_eq!(pin(&fx, name).0, TAG);
+        assert_eq!(entry(&lock(&fx), name)["commit"].as_str(), Some(tip.as_str()));
+    }
+    assert_eq!(
+        fs::read_to_string(store(&fx).join("grade/SKILL.md")).unwrap(),
+        "---\nname: grade\ndescription: Next.\n---\n"
+    );
+    assert_eq!(fx.mazo(&["update"]).stdout(), "grade: up to date\nretro: up to date\n");
+    assert_no_leftovers(&fx);
+}
+
+#[test]
+fn a_bundled_entry_on_a_branch_or_a_newer_tag_is_not_re_pinned() {
+    let fx = bundled_fixture();
+    tag_mazo(&fx, TAG);
+    tag_mazo(&fx, "v99.0.0");
+    init(&fx, &["--no-skills"]).assert_ok();
+    let base = "https://github.com/nicolasgarcia214/mazo/tree";
+    fx.mazo(&["add", &format!("{base}/master/skills/grade"), "--trust"]).assert_ok();
+    fx.mazo(&["add", &format!("{base}/v99.0.0/skills/retro"), "--trust"]).assert_ok();
+    fx.mazo(&["update"]).assert_ok();
+    assert_eq!((pin(&fx, "grade").0, pin(&fx, "retro").0), ("master".into(), "v99.0.0".into()));
+}
+
+#[test]
+fn a_failed_install_still_writes_the_config_and_prints_the_retry() {
+    let fx = bundled_fixture();
+    fs::remove_dir_all(fx.root.join("origin/mazo.git")).unwrap();
+    let r = init(&fx, &[]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(exists(&fx.root.join("init/config.toml")));
+    let retry = format!("mazo add https://github.com/nicolasgarcia214/mazo/tree/{TAG}/skills --all --trust\n");
+    assert!(r.stderr().ends_with(&retry), "{}", r.stderr());
+}
+
 /// The fixture of [`fixture`] with a command judge: a stub that saves each
 /// call's stdin under `calls/` and answers with the text of `answer`.
 fn judged() -> (Fixture, PathBuf) {

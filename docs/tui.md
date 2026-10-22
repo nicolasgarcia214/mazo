@@ -14,7 +14,10 @@ approximate tokens the skill descriptions in context cost each agent, such as
 `~2.5k tok in context: C 400 · X 2.1k · P 0` at the right edge, shortened to
 `~2.5k tok: …` on a narrow terminal. An agent's total turns the
 warning colour at 80% of its listing budget; the help's FAQ explains the
-budgets. The footer
+budgets. While the source and the store lack `grade` or `retro`, the bar also
+names them, such as `grade, retro not installed, press i`, after the filters,
+or on a second row when the first cannot hold it beside the tokens; see
+[the bundled skills](installing-skills.md#the-bundled-skills). The footer
 lists the keys that work on the current screen; while a dialog is open, it
 lists the dialog's keys instead.
 

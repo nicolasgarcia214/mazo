@@ -9,6 +9,35 @@ The store, the data directory and the `mazo.lock` format are in the
 Installing for one project with `--project` is in
 [project skills](project-skills.md).
 
+## The bundled skills
+
+`mazo init` installs the skills bundled with mazo, `grade` and `retro`, as it
+writes the config. It runs `mazo add
+https://github.com/nicolasgarcia214/mazo/tree/v<version>/skills --all --trust`
+in-process, `<version>` being the running mazo's, so `init` needs the network
+unless you pass `--no-skills`, which skips the install. The trust covers that
+one repository at that ref: `init` makes no judge call and adds nothing to
+`trusted`. Each skill's `mazo.lock` entry records the ref.
+
+- **No tag.** When the repository has no tag `v<version>`, `init` warns and
+  installs the commit its default branch is at, recording that 40-hex commit
+  as the ref.
+- **Already installed.** A bundled skill your source or the store already
+  holds is skipped, with a line saying so; `init` installs the other one.
+- **Failed.** `init` keeps the config it wrote, prints the `mazo add` command
+  that retries the install with the ref filled in, and exits 1.
+
+If you set mazo up before this, or skipped the install, the TUI's top bar
+names the missing ones, such as `retro not installed, press i`, until both are
+installed; `i` opens the add dialog.
+
+`mazo update` re-pins a bundled entry, one whose origin is mazo's repository
+and whose subpath starts with `skills/`, to the running version's tag once
+the repository has it, without vetting. It does so only for an entry pinned to
+a commit or to a `v<major>.<minor>.<patch>` tag older than the running
+version. A branch, a newer tag or any other tag stays, and `update` never
+moves a bundled entry to a branch head.
+
 ## `mazo add`
 
 `mazo add <source>` copies a skill into the store, records it in `mazo.lock`
@@ -118,6 +147,10 @@ subpath.
   [the add refusal](#no-judge) once, and exits 2.
 - **Not updatable.** A local-path skill. A name that is not a store skill is a
   usage error.
+- **Bundled and behind.** A [bundled skill](#the-bundled-skills) at a commit
+  or an older version tag moves to the running version's tag once the
+  repository has it. mazo records the new `ref` even when the content is the
+  same, and does not vet it.
 
 A failed clone, a refused re-vet, or an update the resulting sync would refuse
 leaves that skill and its entry as they were. The rest still run, and the

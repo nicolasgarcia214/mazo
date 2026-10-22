@@ -5,11 +5,13 @@
 //! `<git root>/mazo.lock`.
 //!
 //! Here `add`, its install into a [`Target`], and that target's removal;
-//! [`update`] re-fetches. A source is parsed, trusted and cloned in
-//! [`source`], copied, hashed and recorded in [`lock`], judged in [`vet`],
-//! asked about in [`ask`], and a project's root and links are [`project`]'s.
+//! [`update`] re-fetches, and [`bundled`] installs mazo's own skills. A
+//! source is parsed, trusted and cloned in [`source`], copied, hashed and
+//! recorded in [`lock`], judged in [`vet`], asked about in [`ask`], and a
+//! project's root and links are [`project`]'s.
 
 mod ask;
+mod bundled;
 mod lock;
 mod project;
 mod source;
@@ -29,6 +31,7 @@ use crate::{Error, Result};
 use crate::{ledger, links};
 
 pub use ask::Question;
+pub use bundled::{install as install_bundled, missing as missing_bundled};
 pub use lock::{Lock, Locked, content_hash};
 pub use project::{Project, project_dir, project_hint, project_inventory, project_root};
 pub use source::github_repo;

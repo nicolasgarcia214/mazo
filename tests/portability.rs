@@ -197,12 +197,12 @@ impl Fresh {
         run.command(env, args).output().unwrap()
     }
 
-    /// `mazo init args…` with only `~/bin`, where a test writes its stub
-    /// agents, on `PATH`.
+    /// `mazo init --no-skills args…` with only `~/bin`, where a test writes
+    /// its stub agents, on `PATH`.
     fn init(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
         let bin = self.home.join("bin");
         let env: Vec<_> = env.iter().copied().chain([("PATH", bin.as_os_str())]).collect();
-        self.mazo(&env, &[&["init"], args].concat())
+        self.mazo(&env, &[&["init", "--no-skills"], args].concat())
     }
 
     /// `~/skills/plain/SKILL.md` with `name` and `description` only.
