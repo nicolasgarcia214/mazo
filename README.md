@@ -11,12 +11,12 @@ has a judge of your choice vet it.
 
 ```console
 $ mazo usage
-skill         sess slash tool typed read ref agents last   30d                            grade quality
+skill         sess slash tool typed read ref agents last   30d                            grade audit
 release-notes    3     3    0     0    0   0 C      1d ago ······················█··█··█·     - not judged
 triage           1     1    0     0    0   0 C      4d ago ·························█····     - not judged
 tidy-imports     0     0    0     0    0   0        -      ······························     - not judged
 coverage: claude since 2026-10-14
-legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade
+legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade; (project) a project skill, counted apart
 ```
 
 ## What it does
@@ -86,7 +86,7 @@ mazo                              # open the terminal UI
 |---|---|
 | [`mazo init`](docs/configuration.md#mazo-init) | Write the config. |
 | [`mazo scan`](docs/usage-tracking.md#mazo-scan) | Read new log lines into the ledger. |
-| [`mazo usage`](docs/usage-tracking.md#mazo-usage) | One row per skill with its loads, last use and quality. |
+| [`mazo usage`](docs/usage-tracking.md#mazo-usage) | One row per skill with its loads, last use and audit verdict. |
 | [`mazo unused`](docs/usage-tracking.md#mazo-unused) | Skills with no strong load in the window. |
 | [`mazo show <skill>`](docs/usage-tracking.md#mazo-show) | Everything mazo knows about one skill. |
 | [`mazo report`](docs/usage-tracking.md#mazo-report) | One self-contained HTML page of usage and cards. |

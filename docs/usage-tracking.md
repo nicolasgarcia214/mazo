@@ -49,8 +49,8 @@ for what a scan can miss.
 ## `mazo usage`
 
 One row per skill: sessions, loads per channel, agents, last use, a 30-day
-sparkline, the latest grade, and quality. Quality is the first of these that
-exists, cut to 40 characters with `…`:
+sparkline, the latest grade, and the audit column. That column is the first of
+these that exists, cut to 40 characters with `…`:
 
 1. the latest audit's verdict, labelled `audit:`;
 2. the verdict `mazo add` recorded when it vetted the skill, labelled `vet:` and
@@ -115,7 +115,7 @@ After the manual come:
 ## `mazo report`
 
 Writes one self-contained HTML page: the `usage --all` table with each skill's
-quality verdict in full, the grades to run as `/grade <skill>`, and every
+audit verdict in full, the grades to run as `/grade <skill>`, and every
 skill's card. The page goes to `report.html` in the data directory with mode
 `0600`, and each run overwrites it. `--out <path>` writes it elsewhere and
 warns inside a git worktree, because the page shows cwds. `--open` opens it.

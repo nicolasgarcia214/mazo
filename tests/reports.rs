@@ -15,8 +15,10 @@ use mazo::report::{self, Since, UsageArgs};
 use mazo::{evals, render};
 use serde_json::Value;
 
+/// The last line of `usage` and `unused`: the help's marks and glyphs.
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
-                      +N commits since the grade; +wip uncommitted changes since the grade";
+                      +N commits since the grade; +wip uncommitted changes since the grade; \
+                      (project) a project skill, counted apart";
 
 fn args() -> UsageArgs {
     UsageArgs { since: Since::Days(30), agent: None, channel: None, all: false, authoring: false }
@@ -372,7 +374,7 @@ fn usage_collapses_and_applies_default_filters() {
     let text = report::usage(&input, &args(), false, false);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
-        lines[0].starts_with("skill") && lines[0].ends_with(&format!("30d{}grade quality", " ".repeat(28))),
+        lines[0].starts_with("skill") && lines[0].ends_with(&format!("30d{}grade audit", " ".repeat(28))),
         "{text}"
     );
     assert!(lines[1].starts_with("unslop "), "highest sess first: {text}");
@@ -527,7 +529,10 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     let rows = serde_json::from_str::<Value>(&outside).unwrap()["rows"].as_array().unwrap().clone();
     assert!(rows.iter().all(|r| r["scope"] == "global"), "{outside}");
     assert_eq!(counts(&row(&outside, "unslop")), [1, 0, 1, 0, 0, 0]);
-    assert!(!outside_text.contains("(project)"), "{outside_text}");
+    assert!(
+        !outside_text.lines().any(|l| !l.starts_with("legend: ") && l.contains("(project)")),
+        "the legend alone explains the mark: {outside_text}"
+    );
 }
 
 /// The text and JSON grade of `skill` in a fresh report, which reads the history again.

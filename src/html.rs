@@ -11,6 +11,7 @@ use jiff::tz::TimeZone;
 
 use crate::audit::SkillRecord;
 use crate::examples::Examples;
+use crate::help;
 use crate::ledger::name;
 use crate::render::{self, Align, DAY, MINUTE};
 use crate::report::{self, AUDIT_IMPROVEMENTS, Card, Day, GradeOut, Link, Report, tilde};
@@ -43,9 +44,6 @@ dd { margin: 0; }
 blockquote { margin: 2px 0 8px; padding-left: 8px; border-left: 2px solid var(--line); white-space: pre-wrap; }
 ul, ol { margin: 0; padding-left: 18px; }
 ";
-
-const LEGEND: &str = "agents C Claude, X Codex, P Pi · the 30d chart has one bar per day, a grey tick for none · \
-                      +N commits since the grade · +wip uncommitted changes since the grade";
 
 /// Escapes text for an element body or a quoted attribute.
 fn esc(s: &str) -> String {
@@ -173,7 +171,11 @@ fn usage(model: &Report) -> String {
 
 fn coverage(model: &Report) -> String {
     let parts: Vec<String> = model.usage.coverage.iter().map(|(home, c)| format!("{} {}", esc(home), esc(c))).collect();
-    format!("<p class=\"muted\">coverage: {}</p><p class=\"muted\">legend: {LEGEND}</p>", parts.join(" · "))
+    format!(
+        "<p class=\"muted\">coverage: {}</p><p class=\"muted\">legend: {}</p>",
+        parts.join(" · "),
+        esc(&help::legend(true))
+    )
 }
 
 fn grades_due(model: &Report) -> String {

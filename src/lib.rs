@@ -13,6 +13,7 @@ pub mod classify;
 pub mod config;
 pub mod evals;
 pub mod examples;
+pub mod help;
 pub mod history;
 pub mod html;
 pub mod inventory;

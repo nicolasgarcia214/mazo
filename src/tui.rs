@@ -27,6 +27,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Scrollbar, 
 
 use crate::audit::{self, SkillRecord};
 use crate::config::{Config, Home};
+use crate::help;
 use crate::inventory::Inventory;
 use crate::ledger::{self, Agent, Channel, Coverage, Ledger, name};
 use crate::lifecycle::{self, Retired};
@@ -59,7 +60,7 @@ enum On {
 }
 
 /// The keys, as the footer lists them.
-const KEYS: [(&str, On); 15] = [
+const KEYS: [(&str, On); 16] = [
     ("↑↓←→/hjkl move", On::All),
     ("Enter card/retire", On::Lists),
     ("Esc back", On::All),
@@ -74,6 +75,7 @@ const KEYS: [(&str, On); 15] = [
     ("i add", On::All),
     ("u/U update one/all", On::All),
     ("x audit", On::All),
+    ("H help", On::All),
     ("q quit", On::All),
 ];
 
@@ -166,6 +168,9 @@ enum Ask {
     /// The add job's y/N question and its default: Enter takes it, `y` and
     /// `n` answer, and Esc or quitting is No.
     Answer(mpsc::Sender<bool>, bool),
+    /// The help overlay, its lines scrolled to this first one: `j`/`k` and
+    /// `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it.
+    Help(usize),
 }
 
 /// A background add, audit or update and what its pane shows.
@@ -188,7 +193,8 @@ struct Job {
 }
 
 /// Lines over the screen that take the next key: `y` does `ask`, any other
-/// key closes it; a source, a picker or an answer takes keys of its own.
+/// key closes it; a source, a picker, an answer or the help takes keys of
+/// its own.
 struct Dialog {
     lines: Vec<String>,
     ask: Option<Ask>,
@@ -211,7 +217,7 @@ pub struct App {
     /// Whether `/` is still taking the filter.
     typing: bool,
     selected: usize,
-    /// Rows a page move skips: the list rows or card lines the last draw showed.
+    /// Rows a page move skips: the list rows, card lines or help lines the last draw showed.
     page: usize,
     usage: Usage,
     unused: Unused,
@@ -285,7 +291,7 @@ fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
             let score = if high { Span::raw(score.to_string()).fg(theme::GOOD) } else { Span::raw(score.to_string()) };
             [score].into_iter().chain((!mark.is_empty()).then(|| token(mark))).collect()
         }
-        ("quality", _) => match cell.split_once(": ") {
+        ("audit", _) => match cell.split_once(": ") {
             Some((judge, verdict)) => vec![muted(&format!("{judge}: ")), Span::raw(verdict.to_string())],
             None => vec![Span::raw(cell.to_string())],
         },
@@ -474,6 +480,17 @@ impl App {
                     KeyCode::Char('q') => return self.quit(),
                     _ => self.dialog = Some(Dialog { lines, ask: Some(Ask::Answer(reply, default)) }),
                 },
+                Some(Ask::Help(scroll)) => {
+                    let scroll = match key.code {
+                        KeyCode::Esc | KeyCode::Char('H') => return true,
+                        KeyCode::Down | KeyCode::Char('j') => scroll + 1,
+                        KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
+                        KeyCode::PageDown => scroll + self.page,
+                        KeyCode::PageUp => scroll.saturating_sub(self.page),
+                        _ => scroll,
+                    };
+                    self.dialog = Some(Dialog { lines, ask: Some(Ask::Help(scroll)) });
+                }
                 Some(Ask::Act(act)) if y => {
                     let lines = self.act(act);
                     self.dialog = Some(Dialog { lines, ask: None });
@@ -575,6 +592,10 @@ impl App {
                 if let Some(skill) = self.chosen() {
                     self.dialog = Some(self.audit(skill));
                 }
+            }
+            KeyCode::Char('H') => {
+                let lines = help::lines(self.list() == Screen::Unused);
+                self.dialog = Some(Dialog { lines, ask: Some(Ask::Help(0)) });
             }
             _ => {}
         }
@@ -900,6 +921,7 @@ impl App {
                 let default = if *default { "yes" } else { "no" };
                 format!("Enter {default} · y yes · n/Esc no · q quit")
             }
+            Some(Dialog { ask: Some(Ask::Help(_)), .. }) => "j/k scroll · PgUp/PgDn page · Esc/H closes".into(),
             Some(Dialog { ask: Some(_), .. }) => "y apply · any other key cancels".into(),
             Some(_) => "any key closes".into(),
             None if self.typing => "Enter keep · Esc clear".into(),
@@ -987,11 +1009,14 @@ impl App {
             }
             _ => self.draw_list(frame, body, info),
         }
-        if let Some(dialog) = &self.dialog {
+        if let Some(dialog) = &mut self.dialog {
             let area = body.union(info);
             // The screen behind stays in view, dimmed.
             frame.buffer_mut().set_style(area, Style::new().add_modifier(Modifier::DIM));
-            draw_dialog(frame, dialog, area);
+            match &mut dialog.ask {
+                Some(Ask::Help(scroll)) => self.page = draw_help(frame, &dialog.lines, scroll, area),
+                _ => draw_dialog(frame, dialog, area),
+            }
         }
     }
 
@@ -1062,6 +1087,7 @@ impl Dialog {
             Some(Ask::Quit) => ("quit", theme::BAD),
             Some(Ask::Source(_) | Ask::Pick(..)) => ("add", theme::ACCENT),
             Some(Ask::Answer(..)) => ("confirm", theme::WARN),
+            Some(Ask::Help(_)) => ("help", theme::ACCENT),
             None if self.lines.iter().any(|l| l.contains("ERROR:") || l.contains(" refused")) => ("error", theme::BAD),
             None => ("mazo", theme::ACCENT),
         }
@@ -1127,6 +1153,66 @@ fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
     let modal = area.centered(Constraint::Length(width), Constraint::Length(lines.len() as u16 + 4));
     frame.render_widget(Clear, modal);
     frame.render_widget(Paragraph::new(lines).block(block), modal);
+}
+
+/// The help `lines` in a rounded box over `area` less a margin, wrapped to
+/// its width from the line `scroll`, which is clamped to the last page; the
+/// page's height is returned. A heading is bold in the accent, an entry's
+/// name before its two spaces is in the accent, and a question is bold.
+fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize, area: Rect) -> usize {
+    let modal = area.inner(Margin::new(2, 1));
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(theme::ACCENT))
+        .title(Span::raw(" help ").fg(theme::ACCENT).bold())
+        .padding(Padding::new(2, 2, 1, 1));
+    let inner = block.inner(modal);
+    let mut text: Vec<Line> = Vec::new();
+    for line in lines {
+        let indent = line.len() - line.trim_start().len();
+        let term = line[indent..].find("  ").map(|at| indent + at);
+        for (i, piece) in wrap(line, inner.width.saturating_sub(1).into()).into_iter().enumerate() {
+            text.push(match term {
+                Some(at) if i == 0 && at < piece.len() => Line::from(vec![
+                    Span::raw(piece[..at].to_string()).fg(theme::ACCENT),
+                    Span::raw(piece[at..].to_string()),
+                ]),
+                Some(_) => Line::raw(piece),
+                None if indent == 0 => Line::raw(piece).fg(theme::ACCENT).bold(),
+                None if indent == 2 => Line::raw(piece).bold(),
+                None => Line::raw(piece),
+            });
+        }
+    }
+    let page = usize::from(inner.height).max(1);
+    *scroll = (*scroll).min(text.len().saturating_sub(page));
+    frame.render_widget(Clear, modal);
+    frame.render_widget(block, modal);
+    let total = text.len();
+    frame.render_widget(Paragraph::new(text.into_iter().skip(*scroll).collect::<Vec<_>>()), inner);
+    scrollbar(frame, modal.inner(Margin::new(0, 1)), total, *scroll, page);
+    page
+}
+
+/// `line` broken at spaces into lines of at most `width` columns, each
+/// continuation indented two columns past its leading spaces.
+fn wrap(line: &str, width: usize) -> Vec<String> {
+    let body = line.trim_start();
+    let indent = line.len() - body.len();
+    let mut out = vec![" ".repeat(indent)];
+    for (i, word) in body.split(' ').enumerate() {
+        let cur = out.last_mut().unwrap();
+        let fits = cur.chars().count() + 1 + word.chars().count() <= width;
+        if i == 0 || fits || word.is_empty() {
+            if i > 0 {
+                cur.push(' ');
+            }
+            cur.push_str(word);
+        } else {
+            out.push(format!("{}{word}", " ".repeat(indent + 2)));
+        }
+    }
+    out
 }
 
 /// The job pane: a spinner and the running time while the job runs, then a
