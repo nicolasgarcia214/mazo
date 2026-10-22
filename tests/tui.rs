@@ -250,8 +250,9 @@ fn q_and_ctrl_c_quit() {
     assert!(!app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
 }
 
-/// A source of `idle`, `busy` used 3 days ago and `held` cited by `busy`;
-/// the store skill `stored`; one Claude home with every skill linked into it.
+/// A source of `idle`, `busy` used 3 days ago and `held` cited by `busy`,
+/// unless `source` is false; the store skill `stored`; one Claude home with
+/// every skill linked into it.
 struct Actions {
     _temp: tempfile::TempDir,
     source: PathBuf,
@@ -261,29 +262,27 @@ struct Actions {
 }
 
 impl Actions {
-    fn new() -> Actions {
+    fn new(source: bool) -> Actions {
         let temp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(temp.path()).unwrap();
-        let (source, home, data) = (root.join("skills"), root.join("home/.claude"), root.join("data"));
+        let (dir, home, data) = (root.join("skills"), root.join("home/.claude"), root.join("data"));
         for (name, body) in [("idle", ""), ("held", ""), ("busy", "Run the held skill.\n")] {
             common::write(
-                &source.join(name).join("SKILL.md"),
+                &dir.join(name).join("SKILL.md"),
                 &format!("---\nname: {name}\ndescription: X.\n---\n\n{body}"),
             );
         }
         common::write(&root.join("in/stored/SKILL.md"), "---\nname: stored\ndescription: X.\n---\n");
-        let toml = format!(
-            "source = \"{}\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"{}\"\n",
-            source.display(),
-            home.display()
-        );
+        let source_line = if source { format!("source = \"{}\"\n\n", dir.display()) } else { String::new() };
+        let toml =
+            format!("{source_line}[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"{}\"\n", home.display());
         common::write(&root.join("mazo.toml"), &toml);
         common::write(&home.join("settings.json"), "{}\n");
         let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(72)).unwrap().to_string();
         let e = Event { cwd: None, ..common::event("e1", "busy", Channel::Slash, "s1", &ts) };
         common::write(&data.join("events.jsonl"), &(serde_json::to_string(&e).unwrap() + "\n"));
         let cfg = config::load(&root.join("mazo.toml")).unwrap().unwrap();
-        let fx = Actions { _temp: temp, skills: home.join("skills"), source, data, cfg };
+        let fx = Actions { _temp: temp, skills: home.join("skills"), source: dir, data, cfg };
         // `add` links every skill.
         let stored = root.join("in/stored");
         store::add(&fx.cfg, &fx.inv(), &fx.data, &stored.to_string_lossy(), None, None, true).unwrap();
@@ -291,7 +290,7 @@ impl Actions {
     }
 
     fn inv(&self) -> Inventory {
-        Inventory::load_roots(&self.source, &[&self.source, &store::dir(&self.data)]).unwrap()
+        store::inventory(self.cfg.source.as_deref(), &self.data).unwrap()
     }
 
     /// The app over what is on disk now.
@@ -329,7 +328,7 @@ fn select(app: &mut App, skill: &str) {
 
 #[test]
 fn r_retires_a_source_skill_from_usage_after_y_and_the_list_drops_it() {
-    let fx = Actions::new();
+    let fx = Actions::new(true);
     assert!(fx.linked("idle"));
     let mut app = fx.app();
     select(&mut app, "idle");
@@ -352,7 +351,7 @@ fn r_retires_a_source_skill_from_usage_after_y_and_the_list_drops_it() {
 
 #[test]
 fn r_retires_a_store_skill_from_its_card() {
-    let fx = Actions::new();
+    let fx = Actions::new(true);
     assert!(fx.linked("stored"));
     let mut app = fx.app();
     select(&mut app, "stored");
@@ -370,8 +369,25 @@ fn r_retires_a_store_skill_from_its_card() {
 }
 
 #[test]
+fn with_no_source_r_removes_a_store_skill_and_s_is_in_sync() {
+    let fx = Actions::new(false);
+    assert!(fx.linked("stored") && !fx.linked("idle"));
+    let mut app = fx.app();
+    select(&mut app, "stored");
+    press(&mut app, KeyCode::Char('r'));
+    assert!(text(&mut app, 200, 20).iter().any(|l| l.contains("retire stored: remove it from the store")));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(!store::dir(&fx.data).join("stored").exists());
+    assert!(!fx.linked("stored"));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('s'));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("in sync: nothing to apply")), "{screen:#?}");
+}
+
+#[test]
 fn any_key_but_y_cancels_a_retire() {
-    let fx = Actions::new();
+    let fx = Actions::new(true);
     let before = fx.disk();
     let mut app = fx.app();
     press(&mut app, KeyCode::Tab);
@@ -388,7 +404,7 @@ fn any_key_but_y_cancels_a_retire() {
 
 #[test]
 fn a_blocked_retire_shows_its_blockers_and_changes_nothing() {
-    let fx = Actions::new();
+    let fx = Actions::new(true);
     let before = fx.disk();
     let mut app = fx.app();
     for (skill, why) in [("busy", "busy has a strong event in the last 30 days"), ("held", "held is held by busy")] {
@@ -405,8 +421,29 @@ fn a_blocked_retire_shows_its_blockers_and_changes_nothing() {
 }
 
 #[test]
+fn a_store_skill_installed_long_ago_is_not_new_after_an_action() {
+    let fx = Actions::new(true);
+    let lock = fx.data.join("mazo.lock");
+    let toml = std::fs::read_to_string(&lock).unwrap();
+    let at = toml.lines().find(|l| l.starts_with("installed_at")).unwrap();
+    let long_ago = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(24 * 100)).unwrap();
+    std::fs::write(&lock, toml.replace(at, &format!("installed_at = \"{long_ago}\""))).unwrap();
+    let mut app = fx.app();
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(row(&text(&mut app, 200, 20), "stored")[1], "unused");
+    select(&mut app, "idle");
+    press(&mut app, KeyCode::Char('r'));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(fx.source.join(".archive/idle").is_dir());
+    press(&mut app, KeyCode::Esc);
+    typed(&mut app, "/");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(row(&text(&mut app, 200, 20), "stored")[1], "unused");
+}
+
+#[test]
 fn s_shows_the_dry_run_plan_and_y_applies_it() {
-    let fx = Actions::new();
+    let fx = Actions::new(true);
     std::fs::remove_file(fx.skills.join("idle")).unwrap();
     let homes: Vec<_> = fx.cfg.homes.iter().collect();
     let plan = links::planned(&links::checked(&fx.cfg, &fx.inv(), &homes).unwrap());

@@ -246,13 +246,9 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
         Cmd::New { name, description } => lifecycle::new(&cfg, &inv, &name, &description),
-        Cmd::Prune { name, yes, force } => lifecycle::prune(
-            cfg.need_source("prune")?,
-            name.as_deref(),
-            yes,
-            force,
-            std::io::stdin().is_terminal(),
-        ),
+        Cmd::Prune { name, yes, force } => {
+            lifecycle::prune(cfg.need_source("prune")?, name.as_deref(), yes, force, std::io::stdin().is_terminal())
+        }
         Cmd::Retire { name, force } => cmd_retire(&cfg, &inv, &data, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Add { source, name, skill, trust } => {
@@ -504,11 +500,12 @@ fn cmd_retire(
     name: &str,
     force: bool,
 ) -> mazo::Result<ExitCode> {
-    let (warnings, retired) = lifecycle::retire(cfg, inv, data, name, force)?;
+    let mut warnings = Vec::new();
+    let retired = lifecycle::retire(cfg, inv, data, name, force, &mut warnings);
     for w in &warnings {
         eprintln!("{w}");
     }
-    match retired {
+    match retired? {
         Retired::Blocked(blockers) => {
             for b in &blockers {
                 eprintln!("{b}");

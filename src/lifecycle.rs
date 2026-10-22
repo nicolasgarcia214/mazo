@@ -252,8 +252,16 @@ pub enum Retired {
 /// moves a source skill `<source>/<name>` to `<source>/.archive/<name>` (`git
 /// mv` when tracked) and applies that plan; or, for a store skill, applies
 /// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never
-/// commits. Returns the scan's warnings and the outcome; it prints nothing.
-pub fn retire(cfg: &Config, inv: &Inventory, data: &Path, name: &str, force: bool) -> Result<(Vec<String>, Retired)> {
+/// commits. Prints nothing: the scan's warnings go to `warnings`, kept even
+/// when a later step fails.
+pub fn retire(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &Path,
+    name: &str,
+    force: bool,
+    warnings: &mut Vec<String>,
+) -> Result<Retired> {
     let Some(root) = inv.root(name) else {
         // Only a store skill retires without a source.
         cfg.need_source(&format!("retire {name}"))?;
@@ -265,7 +273,7 @@ pub fn retire(cfg: &Config, inv: &Inventory, data: &Path, name: &str, force: boo
     if let Some(to) = to.as_ref().filter(|t| t.symlink_metadata().is_ok()) {
         return Err(format!("retire refused: {} already exists", to.display()).into());
     }
-    let warnings = scan::scan(cfg, inv, data, false)?.warnings();
+    warnings.extend(scan::scan(cfg, inv, data, false)?.warnings());
     if !force {
         let ledger = Ledger::load(data)?;
         let coverage = ledger::load_coverage(data)?;
@@ -275,7 +283,7 @@ pub fn retire(cfg: &Config, inv: &Inventory, data: &Path, name: &str, force: boo
             report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &BTreeMap::new(), now, tz };
         let blockers = report::retire_blockers(&input, name, RETIRE_DAYS);
         if !blockers.is_empty() {
-            return Ok((warnings, Retired::Blocked(blockers)));
+            return Ok(Retired::Blocked(blockers));
         }
     }
     // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
@@ -287,7 +295,7 @@ pub fn retire(cfg: &Config, inv: &Inventory, data: &Path, name: &str, force: boo
     let plan = links::plan(cfg, &rest, &homes, Some(&from));
     let errors = links::sync_errors(cfg, &rest, &homes, &plan);
     if !errors.is_empty() {
-        return Ok((warnings, Retired::Refused(errors)));
+        return Ok(Retired::Refused(errors));
     }
 
     let mut out = Vec::new();
@@ -317,5 +325,5 @@ pub fn retire(cfg: &Config, inv: &Inventory, data: &Path, name: &str, force: boo
             }
         }
     }
-    Ok((warnings, Retired::Done(out)))
+    Ok(Retired::Done(out))
 }

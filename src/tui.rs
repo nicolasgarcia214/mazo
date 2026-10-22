@@ -22,6 +22,7 @@ use crate::lifecycle::{self, Retired};
 use crate::links::{self, Plan};
 use crate::render::{self, Align, Colour};
 use crate::report::{self, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
+use crate::store;
 
 /// The windows `w` cycles through.
 const WINDOWS: [Since; 3] = [Since::Days(30), Since::Days(60), Since::All];
@@ -87,11 +88,10 @@ impl Data {
         }
     }
 
-    /// Re-reads the inventory over the same roots, the ledger, the coverage
+    /// Re-reads the inventory as `mazo` loads it, the ledger, the coverage
     /// and the audits, as of now.
     fn reload(&mut self) -> crate::Result<()> {
-        let roots: Vec<&Path> = self.inv.roots.iter().map(PathBuf::as_path).collect();
-        self.inv = Inventory::load_roots(self.inv.source.as_deref(), &roots)?;
+        self.inv = store::inventory(self.cfg.source.as_deref(), &self.dir)?;
         self.events = Ledger::load(&self.dir)?.events().to_vec();
         self.coverage = ledger::load_coverage(&self.dir)?;
         self.audits = audit::latest(&self.dir)?;
@@ -420,20 +420,19 @@ impl App {
     fn act(&mut self, act: Act) -> Vec<String> {
         self.clear = true;
         let d = &self.data;
+        let mut out = Vec::new();
         let ran = match act {
-            Act::Retire(skill) => lifecycle::retire(&d.cfg, &d.inv, &d.dir, &skill, false).map(|(mut out, retired)| {
-                match retired {
+            Act::Retire(skill) => {
+                lifecycle::retire(&d.cfg, &d.inv, &d.dir, &skill, false, &mut out).map(|retired| match retired {
                     Retired::Blocked(lines) | Retired::Refused(lines) => {
-                        out.push(format!("retire {skill} refused:"));
-                        out.extend(lines);
+                        [vec![format!("retire {skill} refused:")], lines].concat()
                     }
-                    Retired::Done(lines) => out.extend(lines),
-                }
-                out
-            }),
+                    Retired::Done(lines) => lines,
+                })
+            }
             Act::Sync(plan) => links::apply(&plan),
         };
-        let mut out = ran.unwrap_or_else(|e| vec![format!("ERROR: {e}")]);
+        out.extend(ran.unwrap_or_else(|e| vec![format!("ERROR: {e}")]));
         if let Err(e) = self.reload() {
             out.push(format!("ERROR: {e}"));
         }
