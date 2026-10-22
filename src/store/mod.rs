@@ -33,7 +33,7 @@ pub use lock::{Lock, Locked, content_hash};
 pub use project::{Project, project_dir, project_hint, project_inventory, project_root};
 pub use update::{Update, update};
 
-use ask::{Consent, confirm_calls, skills_in};
+use ask::{Consent, confirm_calls, name as skill_name, skills_in};
 use lock::{checked, now, resolved, stage};
 use project::{project_links, unlink_project};
 use source::{Scratch, Source, local};
@@ -266,8 +266,9 @@ fn unclaimed(paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
     }
 }
 
-/// Installs the skill of `from` in `child` (`None` for `from.root` itself)
-/// and adds it to `inv`. A bad skill or a name taken in any root, or at a
+/// Installs the skill of `from` at the path `child` below its root (`None`
+/// for `from.root` itself), named for its last segment, and adds it to
+/// `inv`. A bad skill or a name taken in any root, or at a
 /// project link, is a usage error, and a refused vet or a sync that would
 /// fail with the skill installed is a refusal; either way the store and the
 /// lockfile are left as they were. A project skill is linked into the
@@ -288,7 +289,7 @@ fn install(
         None => (from.root.clone(), from.subpath.clone()),
     };
     let src = resolved(&src, from.clone).map_err(usage)?;
-    let name = rename.map(str::to_string).or(child).unwrap_or_else(|| from.own.clone());
+    let name = rename.or(child.as_deref().map(skill_name)).unwrap_or(&from.own).to_string();
     let (skill_md, files) = checked(&src, &name, rename.is_some()).map_err(usage)?;
 
     let Target { data, project } = target;

@@ -539,6 +539,97 @@ fn cancelling_or_selecting_nothing_in_the_picker_installs_nothing() {
     }
 }
 
+/// A repository whose skills sit two and three levels deep: a same-name
+/// pair `foo`, a skill inside a skill, and skills in a dot directory and in
+/// `node_modules` that the search skips. Its URL at its root.
+fn nested() -> (Fixture, String) {
+    let mut fx = git_fixture();
+    for n in ["foo", "one", "two", "foo2"] {
+        fx.allow(n);
+    }
+    let skills = [
+        ("skills/a/foo", "foo"),
+        ("skills/b/foo", "foo"),
+        ("skills/g/one", "one"),
+        ("skills/g/one/inner", "inner"),
+        ("top/two", "two"),
+        (".hidden/three", "three"),
+        ("node_modules/pkg/four", "four"),
+    ];
+    let url = bare_repo(&fx, "nested", &skills);
+    (fx, url)
+}
+
+/// The skills [`nested`] lists, in order.
+const NESTED: &str = "skills/a/foo, skills/b/foo, skills/g/one, top/two";
+
+#[test]
+fn a_repo_root_lists_its_skills_at_any_depth_by_path() {
+    let (fx, url) = nested();
+    let before = fx.snapshot();
+    let r = add_at_terminal(&fx, &[&url, "--trust"], "");
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains(&format!("pass --skill with one of: {NESTED}, or --all")), "{}", r.stderr());
+
+    let r = add(&fx, &[&url, "--skill", "foo", "--trust"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    let both = "several skills named foo, at: skills/a/foo, skills/b/foo; pass --skill with one of those paths";
+    assert!(r.stderr().contains(both), "{}", r.stderr());
+    for hidden in ["three", "four", "inner"] {
+        let r = add(&fx, &[&url, "--skill", hidden, "--trust"]);
+        assert_eq!(r.code(), 2, "{}", r.stderr());
+        assert!(r.stderr().contains(&format!("the skills here are: {NESTED}")), "{}", r.stderr());
+    }
+    assert_eq!(fx.snapshot(), before);
+}
+
+#[test]
+fn a_nested_skill_installs_by_path_or_unique_name_and_records_its_own_subpath_for_update() {
+    let (fx, url) = nested();
+    add(&fx, &[&url, "--skill", "skills/b/foo", "--trust"]).assert_ok();
+    add(&fx, &[&url, "--skill", "skills/a/foo", "--as", "foo2", "--trust"]).assert_ok();
+    add(&fx, &[&url, "--skill", "one", "--trust"]).assert_ok();
+    let entries = lock(&fx);
+    let got: Vec<(&str, &str)> =
+        entries.iter().map(|e| (e["name"].as_str().unwrap(), e["subpath"].as_str().unwrap())).collect();
+    assert_eq!(got, [("foo", "skills/b/foo"), ("foo2", "skills/a/foo"), ("one", "skills/g/one")]);
+
+    let skill_md = "---\nname: one\ndescription: From a repo, v2.\n---\n\n# one\n";
+    push_change(&fx, "nested", "skills/g/one/SKILL.md", skill_md);
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert!(r.stdout().contains("foo: up to date"), "{}", r.stdout());
+    assert!(r.stdout().contains(&format!("updated {}", store(&fx).join("one").display())), "{}", r.stdout());
+    assert_eq!(fs::read_to_string(store(&fx).join("one/SKILL.md")).unwrap(), skill_md);
+    assert_no_leftovers(&fx);
+}
+
+#[test]
+fn all_of_a_same_name_pair_installs_the_first_path_and_refuses_the_second() {
+    let (fx, url) = nested();
+    let r = add(&fx, &[&url, "--all", "--trust"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    let taken = store(&fx).join("foo");
+    let refused = format!("ERROR: add refused: {} already exists; pass --as <name>", taken.display());
+    assert!(r.stderr().contains(&refused), "{}", r.stderr());
+    assert_eq!(lock_names(&fx), ["foo", "one", "two"]);
+    assert_eq!(entry(&lock(&fx), "foo")["subpath"].as_str(), Some("skills/a/foo"));
+}
+
+#[test]
+fn the_picker_shows_each_nested_skill_by_path_and_refuses_the_second_of_a_same_name_pair() {
+    let (fx, url) = nested();
+    let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], &[("selected", "a\r")]);
+    assert_eq!(code, 2, "{screen}");
+    for path in NESTED.split(", ") {
+        assert!(screen.contains(path), "{path}: {screen}");
+    }
+    assert!(!screen.contains(".hidden") && !screen.contains("node_modules"), "{screen}");
+    assert!(screen.contains("already exists; pass --as <name>"), "{screen}");
+    assert_eq!(lock_names(&fx), ["foo", "one", "two"]);
+    assert_eq!(entry(&lock(&fx), "foo")["subpath"].as_str(), Some("skills/a/foo"));
+}
+
 #[test]
 fn a_repo_on_the_trust_list_installs_without_trust() {
     let mut fx = git_fixture();

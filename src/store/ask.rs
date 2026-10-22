@@ -7,13 +7,13 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use super::{Add, Out};
-use crate::inventory::Inventory;
+use crate::inventory::description;
 use crate::{Error, Result};
 
 /// A question the TUI's add job puts to the main loop, which answers it in a
 /// dialog. A dialog closed without a reply is No, or nothing picked.
 pub enum Question {
-    /// The skills picked from each one's name and description.
+    /// The skills picked from each one's path and description.
     Pick(Vec<(String, String)>, mpsc::Sender<Vec<String>>),
     /// `lines`, then `prompt` ending in `[Y/n]` or `[y/N]`: Enter takes `default`.
     YesNo { lines: Vec<String>, prompt: String, default: bool, reply: mpsc::Sender<bool> },
@@ -90,11 +90,12 @@ pub(super) fn confirm_calls(n: usize, consent: Consent, out: Out) -> Result<()> 
     Ok(())
 }
 
-/// The skills under `root` to install, each by the child it is in: `root`
+/// The skills under `root` to install, each by its path below it: `root`
 /// itself (`None`), named `own`, when it holds a `SKILL.md`; else its one
-/// child skill, the one `--skill` names, every one with `--all`, or those
-/// picked in the TUI's picker or when stdin and stdout are a terminal. Off
-/// both, several skills and neither flag is a usage error listing them.
+/// skill ([`skill_dirs`]), the one `--skill` names by path or by a name no
+/// other skill shares, every one with `--all`, or those picked in the TUI's
+/// picker or when stdin and stdout are a terminal. Off both, several skills
+/// and neither flag is a usage error listing them.
 pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option<String>>> {
     let usage = |e: String| Error::Usage(format!("add {}: {e}", args.source));
     if root.join("SKILL.md").is_file() {
@@ -103,18 +104,25 @@ pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option
             _ => Ok(vec![None]),
         };
     }
-    let found = Inventory::load_roots(None, &[root]).map_err(|e| usage(e.to_string()))?;
-    let list = found.skills.iter().map(String::as_str).collect::<Vec<_>>().join(", ");
+    let found = skill_dirs(root).map_err(usage)?;
+    let list = found.join(", ");
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let names: Vec<String> = match args.pick {
-        Some(p) if found.skills.contains(p) => vec![p.to_string()],
-        Some(p) => return Err(usage(format!("no skill named {p}; the skills here are: {list}"))),
-        None if found.skills.is_empty() => return Err(usage("no SKILL.md here or in any child directory".into())),
-        None if args.all || found.skills.len() == 1 => found.skills.iter().cloned().collect(),
+    let paths: Vec<String> = match args.pick {
+        Some(p) if found.iter().any(|f| f == p) => vec![p.to_string()],
+        Some(p) => match found.iter().filter(|f| name(f) == p).collect::<Vec<_>>()[..] {
+            [] => return Err(usage(format!("no skill named {p}; the skills here are: {list}"))),
+            [one] => vec![one.clone()],
+            ref several => {
+                let at = several.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(", ");
+                return Err(usage(format!("several skills named {p}, at: {at}; pass --skill with one of those paths")));
+            }
+        },
+        None if found.is_empty() => return Err(usage("no SKILL.md here or in any directory below".into())),
+        None if args.all || found.len() == 1 => found,
         None if tty || args.asks.is_some() => {
             // One line each: a folded description keeps its words, not its breaks.
             let line = |d: String| d.split_whitespace().collect::<Vec<_>>().join(" ");
-            let items = found.skills.iter().map(|s| (s.clone(), found.description(s).map(line).unwrap_or_default()));
+            let items = found.iter().map(|f| (f.clone(), description(&root.join(f)).map(line).unwrap_or_default()));
             match args.asks {
                 Some(asks) => {
                     let (reply, picked) = mpsc::channel();
@@ -126,8 +134,40 @@ pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option
         }
         None => return Err(usage(format!("several skills here; pass --skill with one of: {list}, or --all"))),
     };
-    if args.rename.is_some() && names.len() > 1 {
+    if args.rename.is_some() && paths.len() > 1 {
         return Err(usage("--as names one skill; pick one with --skill".into()));
     }
-    Ok(names.into_iter().map(Some).collect())
+    Ok(paths.into_iter().map(Some).collect())
+}
+
+/// The name of the skill at `path` below a source: its last segment.
+pub(super) fn name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The directories below `root` holding a `SKILL.md`, at any depth, as
+/// sorted `/`-joined paths relative to it. The search skips `.git`,
+/// `node_modules` and every dot directory, follows no symlinked directory,
+/// and does not descend into a skill.
+fn skill_dirs(root: &Path) -> std::result::Result<Vec<String>, String> {
+    fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> std::result::Result<(), String> {
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for e in entries.flatten() {
+            let child = e.file_name().to_string_lossy().into_owned();
+            if child.starts_with('.') || child == "node_modules" {
+                continue;
+            }
+            let (path, rel) = (e.path(), if rel.is_empty() { child } else { format!("{rel}/{child}") });
+            if path.join("SKILL.md").is_file() {
+                out.push(rel);
+            } else if e.file_type().is_ok_and(|t| t.is_dir()) {
+                walk(&path, &rel, out)?;
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(root, "", &mut out)?;
+    out.sort();
+    Ok(out)
 }

@@ -157,8 +157,8 @@ enum Cmd {
         /// Install under this name; rewrites the SKILL.md `name:` field.
         #[arg(long = "as", value_name = "NAME")]
         name: Option<String>,
-        /// The skill to install from a source holding several; at a terminal, without it or --all, a picker asks.
-        #[arg(long, value_name = "NAME")]
+        /// The skill to install from a source holding several, by name or by its path in the source; at a terminal, without it or --all, a picker asks.
+        #[arg(long, value_name = "NAME|PATH")]
         skill: Option<String>,
         /// Install every skill of a source holding several.
         #[arg(long, conflicts_with_all = ["skill", "name"])]
