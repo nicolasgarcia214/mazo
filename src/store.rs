@@ -2,6 +2,7 @@
 //! lockfile `<data dir>/mazo.lock`: `mazo add`, `mazo update`, and the entry
 //! `mazo retire` drops.
 
+use std::cell::OnceCell;
 use std::fs;
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -9,8 +10,8 @@ use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
 
-use crate::audit::{self, Caller, Vet, VetVerdict};
-use crate::config::{Config, Home};
+use crate::audit::{self, Backend, Caller, Vet, VetVerdict};
+use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
 use crate::{Error, Result};
 use crate::{ledger, links, policy, yaml};
@@ -363,9 +364,9 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
     if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
         return Err(Error::Usage(format!("update: not a store skill: {n}")));
     }
-    let backend = cfg.judge.as_ref().map(|judge| audit::backend(judge, &cfg.homes).map(|b| (judge, b))).transpose()?;
-    let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: None });
     let consent = Consent { update: true, yes: args.yes, force: args.force };
+    let revet =
+        cfg.judge.as_ref().map(|judge| Revet { data, judge, homes: &cfg.homes, consent, backend: OnceCell::new() });
     let clone = Scratch(data.join(format!(".clone-{}", std::process::id())));
     let (mut updated, mut failed) = (false, false);
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
@@ -381,7 +382,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
                 continue;
             }
         };
-        let vet = match &caller {
+        let vet = match &revet {
             _ if l.trusted || remote.trusted_by(&cfg.trusted) => None,
             None => {
                 println!(
@@ -390,7 +391,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
                 );
                 continue;
             }
-            Some(c) => Some((c, consent)),
+            Some(r) => Some(r),
         };
         remote.subpath = if l.subpath == "." { PathBuf::new() } else { l.subpath.clone().into() };
         match refresh(cfg, inv, data, l, &remote, &clone.0, vet) {
@@ -435,7 +436,7 @@ fn refresh(
     l: &Locked,
     remote: &Remote,
     clone: &Path,
-    vet: Option<(&Caller, Consent)>,
+    vet: Option<&Revet>,
 ) -> Result<Option<String>> {
     let _ = fs::remove_dir_all(clone);
     let commit = remote.clone_into(clone)?;
@@ -453,11 +454,21 @@ fn refresh(
         return Ok(None);
     }
     let vetted = match vet {
-        Some((c, consent)) => Some((revet(c, inv, consent, &l.name, &skill_md, &store, &staged.0)?, now()?)),
+        Some(r) => Some((r.vet(inv, &l.name, &skill_md, &store, &staged.0)?, now()?)),
         None => None,
     };
 
     let _lock = ledger::lock(data)?;
+    // The judge saw the diff from the copy then installed, and ran unlocked.
+    if let Some(((_, diffed), _)) = &vetted
+        && self::content_hash(&to)? != *diffed
+    {
+        return Err(format!(
+            "update refused: {} changed while it was vetted; the skill was left as it was",
+            to.display()
+        )
+        .into());
+    }
     let _ = fs::remove_dir_all(&old);
     let swapped = fs::rename(&to, &old).map_err(|e| err(&to, e)).and_then(|()| {
         fs::rename(&staged.0, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to)))
@@ -471,7 +482,7 @@ fn refresh(
             let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;
             entry.commit = Some(commit.clone());
             entry.content_hash = content_hash;
-            if let Some((vet, at)) = vetted {
+            if let Some(((vet, _), at)) = vetted {
                 (entry.vetted_at, entry.r#for, entry.r#try) = (Some(at), Some(vet.r#for), vet.r#try);
                 entry.verdict = Some(vet.verdict);
             }
@@ -492,33 +503,71 @@ fn refresh(
     Ok(Some(commit))
 }
 
-/// The vet gate on an update of the store skill `name` to the copy staged in
-/// `staged`: its new `skill_md` and the `git diff --no-index` from
-/// `store/<name>`, run in `store` so that the diff's paths are short. Binary
-/// files are diffed as text, so that none hides behind "Binary files differ":
-/// a diff that is not text is withheld whole.
-fn revet(
-    c: &Caller,
-    inv: &Inventory,
+/// `update`'s re-vets: the judge, set up and its login checked the first
+/// time a changed untrusted skill needs it, so that an update of trusted
+/// skills alone never touches it.
+struct Revet<'a> {
+    data: &'a Path,
+    judge: &'a Judge,
+    homes: &'a [Home],
     consent: Consent,
-    name: &str,
-    skill_md: &str,
-    store: &Path,
-    staged: &Path,
-) -> Result<Vet> {
-    consent.answerable()?;
-    c.login()?;
-    let out = std::process::Command::new("git")
-        .current_dir(store)
-        .args(["diff", "--no-index", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "--", name])
-        .arg(staged.file_name().ok_or("no staged copy")?)
-        .output()
-        .map_err(|e| format!("git: {e}"))?;
-    // 1 means the copies differ, which the hash already said.
-    if !matches!(out.status.code(), Some(0 | 1)) {
-        return Err(format!("git diff: {}", String::from_utf8_lossy(&out.stderr).trim()).into());
+    backend: OnceCell<Box<dyn Backend>>,
+}
+
+impl Revet<'_> {
+    fn caller(&self) -> Result<Caller<'_>> {
+        if self.backend.get().is_none() {
+            let backend = audit::backend(self.judge, self.homes)?;
+            self.with(backend.as_ref()).login()?;
+            let _ = self.backend.set(backend);
+        }
+        Ok(self.with(self.backend.get().expect("set above").as_ref()))
     }
-    gate(c, inv, consent, name, vec![("SKILL.md".into(), skill_md.as_bytes().to_vec())], Some(out.stdout))
+
+    fn with<'s>(&'s self, backend: &'s dyn Backend) -> Caller<'s> {
+        Caller { data: self.data, judge: self.judge, backend, pane: None }
+    }
+
+    /// The vet gate on an update of the store skill `name` to the copy
+    /// staged in `staged`: its new `skill_md` and the `git diff --no-index`
+    /// from `store/<name>`, with the staged copy's paths shown as the
+    /// installed one's. Binary files are diffed as text, so that none hides
+    /// behind "Binary files differ": a diff that is not text is withheld
+    /// whole. The verdict, and the [`content_hash`] of the copy diffed from.
+    fn vet(&self, inv: &Inventory, name: &str, skill_md: &str, store: &Path, staged: &Path) -> Result<(Vet, String)> {
+        self.consent.answerable()?;
+        let c = self.caller()?;
+        let diffed = content_hash(&store.join(name))?;
+        let staged = staged.file_name().ok_or("no staged copy")?.to_string_lossy().into_owned();
+        // Every flag that user config could otherwise change is set.
+        let out = std::process::Command::new("git")
+            .current_dir(store)
+            .args(["diff", "--no-index", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"])
+            .args(["--src-prefix=a/", "--dst-prefix=b/", "--", name, &staged])
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        // 1 means the copies differ, which the hash already said.
+        if !matches!(out.status.code(), Some(0 | 1)) {
+            return Err(format!("git diff: {}", String::from_utf8_lossy(&out.stderr).trim()).into());
+        }
+        let (from, to) = (format!("/{staged}/"), format!("/{name}/"));
+        let diff = out.stdout.split_inclusive(|b| *b == b'\n').flat_map(|line| {
+            let header = [&b"diff --git "[..], b"--- ", b"+++ "].iter().any(|h| line.starts_with(h));
+            match std::str::from_utf8(line) {
+                Ok(text) if header => text.replace(&from, &to).into_bytes(),
+                _ => line.to_vec(),
+            }
+        });
+        let vet = gate(
+            &c,
+            inv,
+            self.consent,
+            name,
+            vec![("SKILL.md".into(), skill_md.as_bytes().to_vec())],
+            Some(diff.collect()),
+        )?;
+        Ok((vet, diffed))
+    }
 }
 
 /// `src` resolved; inside `clone` when there is one, so that a symlink in the

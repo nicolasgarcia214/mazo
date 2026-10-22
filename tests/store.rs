@@ -977,11 +977,13 @@ fn an_untrusted_update_sends_one_vet_call_with_the_diff_and_records_the_new_verd
     assert!(stdin.contains(&format!("<file path=\"SKILL.md\">\n{}\n</file>\n", skill_md.trim_end())), "{stdin}");
     assert!(!stdin.contains("<file path=\"agents/openai.yaml\">"), "only the new SKILL.md is sent whole: {stdin}");
     let diff = stdin.split("<diff>\n").nth(1).and_then(|d| d.split("\n</diff>").next()).expect("a diff frame");
-    assert!(diff.starts_with("diff --git a/theirs/SKILL.md b/.update-theirs-"), "{diff}");
+    assert!(diff.starts_with("diff --git a/theirs/SKILL.md b/theirs/SKILL.md\n"), "{diff}");
+    assert!(!stdin.contains(".update-"), "the staged copy's name is not shown: {stdin}");
     for line in ["-description: From a repo.", "+description: From a repo, v2.", "+Run the steps.", "+new"] {
         assert!(diff.lines().any(|l| l == line), "{line}: {diff}");
     }
-    assert!(diff.contains("/references/new.md\nnew file mode"), "{diff}");
+    assert!(diff.contains("diff --git a/theirs/references/new.md b/theirs/references/new.md\nnew file mode"), "{diff}");
+    assert!(diff.contains("+++ b/theirs/references/new.md\n"), "{diff}");
     let existing: String = fx.skills.iter().map(|n| format!("- {n}: Test skill.\n")).collect();
     assert!(stdin.contains(&format!("<existing-skills>\n{existing}</existing-skills>")), "not itself: {stdin}");
 
@@ -1056,4 +1058,64 @@ fn a_trusted_update_and_an_unchanged_untrusted_skill_call_no_judge() {
     assert!(r.stdout().contains(&format!("updated {} to {}", store(&fx).join("one").display(), head(&one))));
     assert_eq!(calls(&fx).len(), 1, "only the add was vetted");
     assert!(!entry(&lock(&fx), "one").contains_key("verdict"));
+}
+
+#[test]
+fn a_diff_past_the_byte_cap_refuses_the_update_unless_force() {
+    let (fx, url) = judged_repo();
+    let was = entry(&lock(&fx), "theirs").clone();
+    push_change(&fx, "theirs", "references/big.md", &"b\n".repeat(40 * 1024));
+    answer(&fx, None, "good", "worth trying");
+    let r = fx.mazo(&["update", "--yes"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    let refused = "ERROR: update theirs: update refused: not sent to the judge in full: the diff (";
+    assert!(r.stderr().contains(refused), "{}", r.stderr());
+    assert!(r.stderr().contains("bytes, over the per-file cap); pass --force to update it anyway"), "{}", r.stderr());
+    assert_eq!(calls(&fx).len(), 1, "refused before the judge is called");
+    assert_eq!(entry(&lock(&fx), "theirs"), &was);
+    assert!(!exists(&store(&fx).join("theirs/references/big.md")));
+
+    fx.mazo(&["update", "--force", "--yes"]).assert_ok();
+    assert!(calls(&fx)[1].contains("<diff>\n(withheld: "), "{}", calls(&fx)[1]);
+    let e = entry(&lock(&fx), "theirs").clone();
+    assert_eq!(e["commit"].as_str(), Some(head(&url).as_str()));
+    assert!(e["verdict"]["security"].as_str().unwrap().starts_with("not sent to the judge in full: the diff ("));
+}
+
+#[test]
+fn an_installed_copy_changed_while_vetted_refuses_the_update() {
+    let (fx, _) = judged_repo();
+    let was = entry(&lock(&fx), "theirs").clone();
+    push_change(&fx, "theirs", "references/new.md", "new\n");
+    answer(&fx, None, "good", "worth trying");
+    // The judge's call outlasts a change to the installed copy.
+    let bin = fx.root.join("bin/judge");
+    let stub = fs::read_to_string(&bin).unwrap();
+    let edit = format!("echo late >> '{}'\n", store(&fx).join("theirs/late.md").display());
+    fs::write(&bin, stub.replacen("\n", &format!("\n{edit}"), 1)).unwrap();
+    let r = fx.mazo(&["update", "--yes"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    let refused = format!(
+        "ERROR: update theirs: update refused: {} changed while it was vetted; the skill was left as it was",
+        store(&fx).join("theirs").display()
+    );
+    assert!(r.stderr().contains(&refused), "{}", r.stderr());
+    assert_eq!(entry(&lock(&fx), "theirs"), &was);
+    assert!(!exists(&store(&fx).join("theirs/references/new.md")));
+    assert_no_leftovers(&fx);
+}
+
+#[test]
+fn a_trusted_update_needs_no_usable_judge() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    let config = fx.source.join("mazo.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let judge = "[judge]\nagent = \"http\"\nurl = \"http://127.0.0.1:9\"\nmodel = \"m\"\napi_key_env = \"MAZO_TEST_UNSET_KEY\"\n";
+    fs::write(&config, format!("{text}\n{judge}")).unwrap();
+    push_change(&fx, "theirs", "references/new.md", "new\n");
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert!(r.stdout().contains(&format!("updated {} to {}", store(&fx).join("theirs").display(), head(&url))));
 }
