@@ -308,7 +308,8 @@ impl Actions {
         // `add` links every skill.
         let stored = root.join("in/stored");
         let stored = stored.to_string_lossy();
-        let args = store::Add { source: &stored, rename: None, pick: None, trust: true, yes: false, force: false };
+        let args =
+            store::Add { source: &stored, rename: None, pick: None, all: false, trust: true, yes: false, force: false };
         store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
         fx
     }

@@ -16,6 +16,7 @@ pub mod inventory;
 pub mod ledger;
 pub mod lifecycle;
 pub mod links;
+pub mod pick;
 pub mod policy;
 pub mod readcmd;
 pub mod render;
