@@ -27,7 +27,7 @@ fn home(path: &Path) -> Home {
 
 fn roots() -> SkillRoots {
     SkillRoots {
-        source: "/nonexistent/dotfiles/skills".into(),
+        source: Some("/nonexistent/dotfiles/skills".into()),
         home_skills: vec![HOME_SKILLS.into()],
         known: BTreeSet::new(),
     }
@@ -433,7 +433,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     std::fs::copy(fixture("history.jsonl"), claude_home.join("history.jsonl")).unwrap();
     let data = dir.path().join("data");
     let cfg = Config {
-        source: source.clone(),
+        source: Some(source.clone()),
         loose: vec![],
         trusted: vec![],
         homes: vec![home(&claude_home)],
@@ -442,7 +442,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     };
     // `argus` is a known name from git history but not canonical today.
     let inv = Inventory {
-        source: source.clone(),
+        source: Some(source.clone()),
         skills: ["grade".to_string()].into(),
         known: ["grade".to_string(), "argus".to_string(), "gitmoji-conventional-commit".to_string()].into(),
         worktree: None,
@@ -515,7 +515,7 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
     common::write(&claude_home.join("projects/p/2e112b1e-0233-4375-99fd-cd21d2102ac1.jsonl"), &transcript);
 
     let cfg = Config {
-        source,
+        source: Some(source),
         loose: vec![],
         trusted: vec![],
         homes: vec![home(&claude_home)],

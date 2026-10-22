@@ -17,7 +17,7 @@ fetches it with your git credentials when `CARGO_NET_GIT_FETCH_WITH_CLI=true`.
 ```
 CARGO_NET_GIT_FETCH_WITH_CLI=true \
   cargo install --locked --git https://github.com/nicolasgarcia214/mazo
-mazo init --source <skills dir>   # write the config
+mazo init                         # write the config; add --source <skills dir> for your own skills
 mazo sync                         # link every skill into every agent home
 mazo usage                        # see which skills your agents load
 ```
@@ -27,10 +27,17 @@ mazo usage                        # see which skills your agents load
 mazo reads `$MAZO_CONFIG`, else `$XDG_CONFIG_HOME/mazo/config.toml`
 (`~/.config/mazo/config.toml` when `XDG_CONFIG_HOME` is unset). Without one, or
 with one that does not parse, every command but `init` exits 2.
-`mazo init --source <skills dir>` writes it: a home for each of `~/.claude`,
+`mazo init` writes it: a home for each of `~/.claude`,
 `~/.codex` and `~/.pi/agent` that exists, and every policy rule off. It never overwrites an
 existing file. A config can be a symlink; `source` and a relative home `path`
 are resolved against the directory of the file it points to.
+
+`source` is optional: it names a directory of skills you write yourself, and
+`mazo init --source <skills dir>` sets it. Without it your own skill set is
+empty, and `usage`, `unused`, `status`, `sync`, `scan`, `add` and retiring a
+store skill work on store skills alone. `new`, `prune`, retiring a skill of
+`source`, `loose` and home `links` need it; the commands exit 2 without it,
+and a config with `loose` or `links` but no `source` does not load.
 
 A config without a `[judge]` table has no judge, and `mazo audit` exits 2.
 mazo once assumed Claude when the table was missing; a config that relied on
@@ -42,7 +49,7 @@ agent = "claude"
 ```
 
 ```toml
-source = "."                      # the skills directory, relative to this file
+source = "."                      # your skills directory, relative to this file; optional
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
 trusted = ["owner", "owner/repo"] # sources whose skills install without vetting
 
@@ -131,7 +138,7 @@ The vetting `verdict` is optional and not written yet.
 | `mazo report` | Writes one self-contained HTML page: the `usage --all` table with each skill's latest audit verdict, the grades to run as `/grade <skill>`, and every skill's card. It goes to `report.html` in the data directory with mode `0600` and is overwritten on each run. `--out <path>` writes elsewhere and warns inside a git worktree, because the page shows cwds; `--open` opens it. |
 | `mazo status` | Drift and policy for every home. Writes nothing. |
 | `mazo sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
-| `mazo init --source <dir>` | Writes the config for a skills directory: one home per existing agent directory, every policy rule off. Refuses to overwrite. |
+| `mazo init [--source <dir>]` | Writes the config, naming the skills directory when given: one home per existing agent directory, every policy rule off. Refuses to overwrite. |
 | `mazo new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry or a store skill of that name. Does not sync. |
 | `mazo add <source>` | Copies a skill into the store, records it in `mazo.lock` and links it into every home. `<source>` is a local path (one that exists, or starts with `.`, `/` or `~`); a git URL (`https://…`, `ssh://…`, `git@host:owner/repo.git`, `file://…`), where a path after the segment ending in `.git` is the subpath (`https://host/owner/repo.git/skills/x`); or GitHub shorthand `owner/repo[/path/to/skill]`, cloned from `https://github.com/owner/repo.git`. The recorded origin drops a trailing `/` and ends in `.git` (except a `file://` URL), so `https://github.com/owner/repo` and `owner/repo` record the same one. A repository is shallow-cloned with the system `git` into the data directory, without prompting (ssh runs with `BatchMode=yes` unless `GIT_SSH_COMMAND` is set), and the clone removed afterwards; a failed clone exits 1 with git's error and installs nothing. The source (at its subpath) is the skill when it holds a `SKILL.md`; otherwise its child directories holding one are its skills, and with several `--skill <name>` picks one (without it, exit 2 lists them). Refuses (exit 2, writing nothing) a name already in `source` or the store; `--as <name>` installs it under another name and rewrites its `SKILL.md` `name:`. A skill containing a symlink, or one a symlink leads outside the clone, is refused. A source not on the `trusted` list needs `--trust`, since vetting is not available yet; local paths are never on it. Installs nothing if the resulting sync would fail. |
 | `mazo retire <name>` | Moves a skill of `source` to `.archive/` (`git mv` when tracked) and prunes its links. A store skill is removed instead: its links, its `mazo.lock` entry and its store directory are deleted. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |

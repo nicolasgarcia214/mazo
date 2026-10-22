@@ -305,7 +305,7 @@ fn card(c: &Card, tz: &TimeZone) -> String {
         total = c.total_events,
         events = table(&["ts", "agent", "channel", "actor", "cwd", "src"], &events),
         desc = or_dash(c.description.as_deref()),
-        path = esc(&tilde(&c.path.to_string_lossy())),
+        path = or_dash(c.path.as_ref().map(|p| tilde(&p.to_string_lossy())).as_deref()),
         cites = links(&c.cites),
         cited_by = links(&c.cited_by),
         strong = esc(&c.strong_line()),

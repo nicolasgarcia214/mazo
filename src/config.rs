@@ -13,8 +13,8 @@ use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// The physical skills source directory.
-    pub source: PathBuf,
+    /// The physical skills source directory; `None` for a user with no skills of their own.
+    pub source: Option<PathBuf>,
     pub loose: Vec<String>,
     /// Owners (`owner`) and repositories (`owner/repo`) whose skills install
     /// without vetting.
@@ -103,6 +103,13 @@ pub struct Policy {
     pub authoring_skills: Vec<String>,
 }
 
+impl Config {
+    /// The source, or a usage error saying `what` needs it.
+    pub fn need_source(&self, what: &str) -> Result<&Path> {
+        self.source.as_deref().ok_or_else(|| Error::Usage(format!("{what} needs `source` in the config")))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Home {
     pub name: String,
@@ -137,7 +144,8 @@ impl Home {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
-    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
     #[serde(default)]
     loose: Vec<String>,
     /// Owners (`owner`) and repositories (`owner/repo`) whose skills install
@@ -194,8 +202,16 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     let base = path.parent().unwrap_or(Path::new("/"));
     // `source` is relative to the config file and resolved physically, as
     // install.sh's `pwd -P` did (test_install.py:130).
-    let joined = base.join(&raw.source);
-    let source = fs::canonicalize(&joined).map_err(|e| Error::Usage(format!("{}: {e}", joined.display())))?;
+    let source = match &raw.source {
+        Some(s) => {
+            let joined = base.join(s);
+            Some(fs::canonicalize(&joined).map_err(|e| Error::Usage(format!("{}: {e}", joined.display())))?)
+        }
+        None if !raw.loose.is_empty() || raw.homes.iter().any(|h| !h.links.is_empty()) => {
+            return Err(Error::Usage(format!("{}: loose and links are relative to source; set it", path.display())));
+        }
+        None => None,
+    };
     let home = home_dir()?;
     let mut homes: Vec<Home> = Vec::new();
     for h in raw.homes {
@@ -217,12 +233,17 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     Ok(Some(Config { source, loose: raw.loose, trusted: raw.trusted, homes, policy: raw.policy, judge: raw.judge }))
 }
 
-/// `mazo init`: a config at `path` naming `source` absolutely, a
+/// `mazo init`: a config at `path` naming `source`, if given, absolutely, a
 /// home for each agent directory under `~` that exists, and every rule off.
 /// Refuses to overwrite.
-pub fn init(path: &Path, source: &Path) -> Result<()> {
-    let abs = fs::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
-    let source = abs.to_str().ok_or_else(|| format!("{}: not UTF-8", abs.display()))?.to_string();
+pub fn init(path: &Path, source: Option<&Path>) -> Result<()> {
+    let source = match source {
+        Some(source) => {
+            let abs = fs::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
+            Some(abs.to_str().ok_or_else(|| format!("{}: not UTF-8", abs.display()))?.to_string())
+        }
+        None => None,
+    };
     let home = PathBuf::from(home_dir()?);
     let homes =
         [("claude", Agent::Claude, ".claude"), ("codex", Agent::Codex, ".codex"), ("pi", Agent::Pi, ".pi/agent")]

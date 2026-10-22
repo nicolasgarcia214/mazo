@@ -51,19 +51,19 @@ fn invocation(agent: Agent, skill: &str) -> String {
     }
 }
 
-/// The examples of `skill`, whose directory is `dir`, from its ledger
+/// The examples of `skill`, whose directory is `dir` if any, from its ledger
 /// `events` newest first; only strong `main` events are read.
 pub fn examples<'e>(
     agents: impl IntoIterator<Item = Agent>,
-    dir: &Path,
+    dir: Option<&Path>,
     skill: &str,
     events: impl IntoIterator<Item = &'e Event>,
 ) -> Examples {
     let mut agents: Vec<Agent> = agents.into_iter().collect();
     agents.sort();
     agents.dedup();
-    let default_prompt = std::fs::read_to_string(dir.join("agents/openai.yaml"))
-        .ok()
+    let default_prompt = dir
+        .and_then(|d| std::fs::read_to_string(d.join("agents/openai.yaml")).ok())
         .and_then(|text| yaml::load(&text).ok())
         .and_then(|m| {
             yaml::get(&m, "interface")

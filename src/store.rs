@@ -20,11 +20,12 @@ pub fn dir(data: &Path) -> PathBuf {
 
 /// The inventory over the source and the store, with each store skill's
 /// install date from the lockfile.
-pub fn inventory(source: &Path, data: &Path) -> Result<Inventory> {
+pub fn inventory(source: Option<&Path>, data: &Path) -> Result<Inventory> {
     let store = dir(data);
     // Like the source, canonical: event paths are compared resolved.
     let store = fs::canonicalize(&store).unwrap_or(store);
-    let mut inv = Inventory::load_roots(source, &[source, &store])?;
+    let roots: Vec<&Path> = source.into_iter().chain([store.as_path()]).collect();
+    let mut inv = Inventory::load_roots(source, &roots)?;
     inv.installed = Lock::load(data)?.skills.into_iter().map(|l| (l.name, l.installed_at)).collect();
     Ok(inv)
 }
@@ -244,7 +245,7 @@ pub fn add(
 
     let store = dir(data);
     let to = store.join(&name);
-    if let Some(p) = [&cfg.source, &store].map(|r| r.join(&name)).into_iter().find(|p| p.symlink_metadata().is_ok()) {
+    if let Some(p) = cfg.source.iter().chain([&store]).map(|r| r.join(&name)).find(|p| p.symlink_metadata().is_ok()) {
         return Err(Error::Usage(format!(
             "add refused: {} already exists; pass --as <name> to install it under another name",
             p.display()

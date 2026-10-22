@@ -110,11 +110,11 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Write a config for a skills directory, with every rule off.
+    /// Write a config, with every rule off.
     Init {
-        /// The skills directory: one subdirectory per skill.
+        /// Your own skills directory, one subdirectory per skill; needed only by `new`, `prune` and retiring its skills.
         #[arg(long)]
-        source: std::path::PathBuf,
+        source: Option<std::path::PathBuf>,
     },
     /// Create a skill that already satisfies the configured policy rules.
     New {
@@ -202,7 +202,7 @@ fn main() -> ExitCode {
 fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let path = config::path()?;
     if let Some(Cmd::Init { source }) = &cmd {
-        config::init(&path, source)?;
+        config::init(&path, source.as_deref())?;
         println!("wrote {}", path.display());
         return Ok(ExitCode::SUCCESS);
     }
@@ -210,7 +210,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         return Err(Error::Usage(format!("no config at {}; run mazo init --source <skills dir>", path.display())));
     };
     let data = ledger::data_dir()?;
-    let inv = store::inventory(&cfg.source, &data)?;
+    let inv = store::inventory(cfg.source.as_deref(), &data)?;
     let Some(cmd) = cmd else {
         return scanned(&cfg, &inv, |_, input| {
             tui::run(input).map_err(|e| e.to_string())?;
@@ -237,9 +237,13 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
         Cmd::New { name, description } => mazo::lifecycle::new(&cfg, &inv, &name, &description),
-        Cmd::Prune { name, yes, force } => {
-            mazo::lifecycle::prune(&cfg.source, name.as_deref(), yes, force, std::io::stdin().is_terminal())
-        }
+        Cmd::Prune { name, yes, force } => mazo::lifecycle::prune(
+            cfg.need_source("prune")?,
+            name.as_deref(),
+            yes,
+            force,
+            std::io::stdin().is_terminal(),
+        ),
         Cmd::Retire { name, force } => mazo::lifecycle::retire(&cfg, &inv, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Add { source, name, skill, trust } => {
@@ -284,9 +288,9 @@ fn with_scanned(
 /// login check before any judge call.
 fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo::Result<ExitCode> {
     let (skill, budget) = (args.skill.as_str(), args.max_budget_usd);
-    if !inv.skills.contains(skill) {
+    let Some(root) = inv.root(skill) else {
         return Err(Error::Usage(format!("not a skill in the source: {skill}")));
-    }
+    };
     let Some(judge) = &cfg.judge else {
         return Err(Error::Usage(
             "no judge configured; add one to the config, for example:\n[judge]\nagent = \"claude\"".into(),
@@ -312,7 +316,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
         let candidates = audit::select(input.events, skill, &audit::audited(data, skill)?, limit);
         let a = audit::Audit {
             skill,
-            source: inv.root(skill),
+            source: root,
             data,
             judge,
             backend: backend.as_ref(),

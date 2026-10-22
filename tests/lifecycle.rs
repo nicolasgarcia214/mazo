@@ -291,7 +291,7 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
         authoring_skills: vec![],
     };
     let cfg = mazo::config::Config {
-        source: hs.source.clone(),
+        source: Some(hs.source.clone()),
         loose: vec![],
         trusted: vec![],
         homes: vec![],
@@ -587,4 +587,106 @@ fn retire_of_a_non_canonical_name_is_a_usage_error() {
         assert_eq!(fx.mazo(&["retire", name]).code(), 2);
     }
     assert_eq!(homes_and_source(&fx), before);
+}
+
+/// A private `HOME` with one Claude home and a config written by `mazo init`
+/// without `--source`.
+struct Sourceless {
+    _temp: tempfile::TempDir,
+    root: PathBuf,
+    config: PathBuf,
+}
+
+impl Sourceless {
+    fn new() -> Sourceless {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        common::write(&root.join("home/.claude/settings.json"), "{}\n");
+        let fx = Sourceless { config: root.join("config/mazo.toml"), root, _temp: temp };
+        let out = fx.mazo(&["init"]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        fx
+    }
+
+    fn mazo(&self, args: &[&str]) -> Output {
+        Mazo::new(&self.root, &self.root.join("home"), &self.config, &self.root.join("data")).output(args)
+    }
+
+    fn link(&self, name: &str) -> PathBuf {
+        self.root.join("home/.claude/skills").join(name)
+    }
+}
+
+#[test]
+fn init_without_source_writes_no_source_and_every_read_command_sees_no_skills() {
+    let fx = Sourceless::new();
+    let v: toml::Table = fs::read_to_string(&fx.config).unwrap().parse().unwrap();
+    assert_eq!(v.keys().collect::<Vec<_>>(), ["home", "loose", "policy"]);
+    for cmd in ["usage", "unused", "status", "sync", "scan"] {
+        let out = fx.mazo(&[cmd]);
+        assert_eq!(code(&out), 0, "{cmd}: {}", stderr(&out));
+    }
+    assert!(stdout(&fx.mazo(&["status"])).contains("claude: in sync (0 skills)"));
+    assert_eq!(fs::read_dir(fx.root.join("home/.claude/skills")).unwrap().count(), 0);
+}
+
+#[test]
+fn new_prune_and_retiring_a_source_skill_need_source() {
+    let fx = Sourceless::new();
+    for (args, want) in [
+        (&["new", "fresh", "--description", "D."][..], "new needs `source` in the config"),
+        (&["retire", "mine"], "retire mine needs `source` in the config"),
+        (&["prune"], "prune needs `source` in the config"),
+    ] {
+        let out = fx.mazo(args);
+        assert_eq!(code(&out), 2, "{args:?}");
+        assert!(stderr(&out).contains(want), "{args:?}: {}", stderr(&out));
+    }
+    assert!(!fx.root.join("fresh").exists());
+}
+
+#[test]
+fn a_store_skill_is_added_synced_used_and_retired_without_source() {
+    let fx = Sourceless::new();
+    let incoming = fx.root.join("incoming/theirs");
+    common::write(&incoming.join("SKILL.md"), "---\nname: theirs\ndescription: From elsewhere.\n---\n\n# theirs\n");
+    let out = fx.mazo(&["add", incoming.to_str().unwrap(), "--trust"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let store = fx.root.join("data/mazo/store/theirs");
+    assert_eq!(fs::read_link(fx.link("theirs")).unwrap(), store);
+
+    fs::remove_file(fx.link("theirs")).unwrap();
+    let out = fx.mazo(&["sync"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(fs::read_link(fx.link("theirs")).unwrap(), store);
+    assert!(stdout(&fx.mazo(&["status"])).contains("claude: in sync (1 skills)"));
+    for cmd in ["usage", "unused"] {
+        let out = fx.mazo(&[cmd]);
+        assert!(stdout(&out).lines().any(|l| l.starts_with("theirs ")), "{cmd}: {}", stdout(&out));
+    }
+
+    let out = fx.mazo(&["retire", "theirs"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(!store.exists());
+    assert!(fx.link("theirs").symlink_metadata().is_err());
+}
+
+#[test]
+fn a_missing_source_still_fails_and_loose_or_links_need_one() {
+    let fx = Sourceless::new();
+    let missing = format!("{}: No such file", fx.root.join("config/missing").display());
+    let unanchored = "loose and links are relative to source; set it";
+    for (config, want) in [
+        ("source = \"missing\"\n", missing.as_str()),
+        ("loose = [\"AGENTS.md\"]\n", unanchored),
+        (
+            "[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\nlinks = { \"CLAUDE.md\" = \"AGENTS.md\" }\n",
+            unanchored,
+        ),
+    ] {
+        fs::write(&fx.config, config).unwrap();
+        let out = fx.mazo(&["status"]);
+        assert_eq!(code(&out), 2, "{config}: {}", stderr(&out));
+        assert!(stderr(&out).contains(want), "{config}: {}", stderr(&out));
+    }
 }

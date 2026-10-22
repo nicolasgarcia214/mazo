@@ -455,7 +455,7 @@ fn unused_of(view: &View, since: Since) -> Unused {
         .map(|skill| {
             // A store skill's first date is its install; a source skill's is its
             // first commit, and outside a git worktree no source skill is new.
-            let first = if input.inv.root(skill) == input.inv.source {
+            let first = if input.inv.root(skill) == input.inv.source.as_deref() {
                 input.inv.history.as_ref().map(|h| h.first(skill).map(|c| c.date.as_str()))
             } else {
                 Some(input.inv.installed.get(skill).map(String::as_str))
@@ -593,7 +593,8 @@ pub struct Card<'a> {
     pub events: Vec<ShownEvent<'a>>,
     pub total_events: usize,
     pub description: Option<String>,
-    pub path: PathBuf,
+    /// None for a name in no root without a source.
+    pub path: Option<PathBuf>,
     /// None outside a git worktree.
     pub history: Option<CardHistory<'a>>,
     /// Newest first.
@@ -693,9 +694,11 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         })
         .collect();
 
-    let path = inv.root(skill).join(skill);
-    let description = std::fs::read_to_string(path.join("SKILL.md"))
-        .ok()
+    // A name only in history keeps its place in the source.
+    let path = inv.root(skill).or(inv.source.as_deref()).map(|r| r.join(skill));
+    let description = path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p.join("SKILL.md")).ok())
         .and_then(|text| yaml::frontmatter(&text).ok())
         .and_then(|fm| yaml::get(&fm, "description").and_then(yaml::text).map(str::to_string));
     let history = inv.history.as_ref().map(|h| CardHistory {
@@ -725,7 +728,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
     let mut ledger: Vec<_> = view.select(&f, Some(skill), None).collect();
     ledger.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
     let agents = view.input.cfg.homes.iter().map(|h| h.agent);
-    let mut examples = examples::examples(agents, &path, skill, ledger.iter().map(|(e, _)| *e));
+    let mut examples = examples::examples(agents, path.as_deref(), skill, ledger.iter().map(|(e, _)| *e));
     let audit = view.input.audits.get(skill);
     examples.curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
 
@@ -839,7 +842,7 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
 
     out.push('\n');
     out.push_str(&format!("description: {}\n", card.description.as_deref().unwrap_or("-")));
-    out.push_str(&format!("path: {}\n", tilde(&card.path.to_string_lossy())));
+    out.push_str(&format!("path: {}\n", card.path.as_ref().map_or("-".into(), |p| tilde(&p.to_string_lossy()))));
     if let Some(line) = card.history_line() {
         out.push_str(&format!("history: {line}\n"));
     }

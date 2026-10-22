@@ -87,7 +87,7 @@ impl Env {
         fs::copy(fixture("history.jsonl"), homes[0].path.join("history.jsonl")).unwrap();
         let skills: BTreeSet<String> = ["unslop", "gitmoji-conventional-commit", "grade"].map(String::from).into();
         let inv = Inventory {
-            source: source.clone(),
+            source: Some(source.clone()),
             skills: skills.clone(),
             known: skills,
             worktree: None,
@@ -95,7 +95,7 @@ impl Env {
             ..Default::default()
         };
         let cfg = Config {
-            source,
+            source: Some(source),
             loose: vec![],
             trusted: vec![],
             homes,
@@ -711,7 +711,7 @@ fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
             homes.push(home);
         }
         let cfg = Config {
-            source: tmp.path().join("skills"),
+            source: Some(tmp.path().join("skills")),
             loose: vec![],
             trusted: vec![],
             homes,

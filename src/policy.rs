@@ -12,13 +12,14 @@ use crate::yaml::{self, Yaml};
 /// Per-skill rules, always-on then the configured ones: run on every `sync`
 /// and `status`, whatever `--agent` says. Returns `ERROR: …` lines.
 pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
-    if inv.skills.is_empty() {
-        return vec![format!("ERROR: no canonical skills found in {}", cfg.source.display())];
+    // Without a source the user's own skill set is empty by design.
+    if let (true, Some(source)) = (inv.skills.is_empty(), &cfg.source) {
+        return vec![format!("ERROR: no canonical skills found in {}", source.display())];
     }
-    inv.skills
+    inv.origins
         .iter()
-        .filter_map(|name| {
-            let dir = inv.root(name).join(name);
+        .filter_map(|(name, roots)| {
+            let dir = roots[0].join(name);
             check_skill(&cfg.policy, &dir, name).err().map(|e| format!("ERROR: {}: {e}", dir.display()))
         })
         .collect()
