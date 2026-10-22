@@ -868,7 +868,7 @@ fn u_updates_a_trusted_skill_without_the_judge_and_re_vets_an_untrusted_one_in_t
     select(&mut app, "ours");
     press(&mut app, KeyCode::Char('u'));
     let screen = text(&mut app, 200, 30);
-    assert!(screen.iter().any(|l| l.contains("update ours and accept judge verdicts?")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("update ours and ask about each judge verdict?")), "{screen:#?}");
     let revet = "an untrusted skill that changed is re-vetted with one command judge call; \
                  the command judge reports no cost";
     assert!(screen.iter().any(|l| l.contains(revet)), "{screen:#?}");
@@ -885,7 +885,12 @@ fn u_updates_a_trusted_skill_without_the_judge_and_re_vets_an_untrusted_one_in_t
 
     let was = fx.commit("theirs");
     select(&mut app, "theirs");
-    let screen = update(&mut app, 'u');
+    press(&mut app, KeyCode::Char('u'));
+    press(&mut app, KeyCode::Char('y'));
+    shown(&mut app, "update theirs? [Y/n]");
+    press(&mut app, KeyCode::Enter);
+    until(&mut app, |app| !app.busy());
+    let screen = text(&mut app, 200, 30);
     assert_eq!(fx.pids().len(), 1, "one re-vet");
     assert!(screen.iter().any(|l| l.contains(" update theirs · done · Esc closes ")), "{screen:#?}");
     for line in ["vetting theirs", "vet theirs: quality good, value worth trying", "for: Tidies notes."] {
@@ -905,6 +910,46 @@ fn u_updates_a_trusted_skill_without_the_judge_and_re_vets_an_untrusted_one_in_t
         assert!(screen.iter().any(|l| l.contains(line)), "{line}: {screen:#?}");
     }
     assert_eq!(fx.pids().len(), 1);
+}
+
+#[test]
+fn a_poor_re_vet_asks_before_the_update_is_applied() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let verdict = fx.data.parent().unwrap().join("verdict.json");
+    let poor = std::fs::read_to_string(&verdict).unwrap().replace(r#""quality":"good""#, r#""quality":"poor""#);
+    common::write(&verdict, &poor);
+    let theirs = fx.repo("theirs");
+    fx.install(&theirs, false);
+    fx.push("theirs", "v2\n");
+    let before = fx.disk();
+    let mut app = fx.app();
+    select(&mut app, "theirs");
+
+    press(&mut app, KeyCode::Char('u'));
+    press(&mut app, KeyCode::Char('y'));
+    let screen = shown(&mut app, "update theirs? [y/N]");
+    assert!(screen.iter().any(|l| l.contains("vet theirs: quality poor, value worth trying")), "{screen:#?}");
+    press(&mut app, KeyCode::Char('n'));
+    until(&mut app, |app| !app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(" update theirs · failed · Esc closes ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("update declined; the skill was left as it was")), "{screen:#?}");
+    assert_eq!(fx.disk(), before);
+
+    press(&mut app, KeyCode::Esc);
+    let was = fx.commit("theirs");
+    press(&mut app, KeyCode::Char('u'));
+    press(&mut app, KeyCode::Char('y'));
+    shown(&mut app, "update theirs? [y/N]");
+    press(&mut app, KeyCode::Char('y'));
+    until(&mut app, |app| !app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(" update theirs · done · Esc closes ")), "{screen:#?}");
+    assert_eq!(fx.pids().len(), 2, "one re-vet per update");
+    assert_ne!(fx.commit("theirs"), was);
+    let to = store::dir(&fx.data).join("theirs");
+    assert!(std::fs::read_to_string(to.join("SKILL.md")).unwrap().ends_with("v2\n"));
 }
 
 #[test]

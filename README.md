@@ -241,12 +241,13 @@ no `--force`. On the unused list, `Enter` on a store skill whose status is
 `unused` (its `new` window since install has ended) asks to retire it instead
 of opening its card. `s` shows the actions `mazo sync --dry-run` would print, or says
 the homes are in sync. `u` updates the selected store skill, or the card's, and
-`U` every store skill, as `mazo update --yes` does; a source skill or one
-installed from a local path shows that it is not updatable. The update runs
-in the background pane, where no y/N can be answered, so its dialog names the
-judge and its cap and asks "update and accept judge verdicts?": `y` accepts
-the verdict of each re-vet of an untrusted skill that changed. There is no
-`--force`, so a security finding still refuses that skill's update. An
+`U` every store skill, as `mazo update` does; a source skill or one
+installed from a local path shows that it is not updatable. Its dialog names
+the judge and its cap and asks "update and ask about each judge verdict?";
+the update runs in the background pane, and each re-vet of an untrusted skill
+that changed opens the y/N dialog an add uses, Enter taking the gate's
+default and Esc or `q` answering No. There is no `--force`, so a security
+finding still refuses that skill's update. An
 up-to-date skill is reported without a judge call. `i` asks for a source
 (Enter adds, Esc cancels) and adds it as `mazo add <source>` does, in the
 background pane. A source that is not trusted with no `[judge]` shows the
