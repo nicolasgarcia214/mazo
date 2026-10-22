@@ -706,6 +706,9 @@ pub struct Update<'a> {
     pub pane: Option<&'a Pane>,
     /// Update the project skills at the current directory's git root.
     pub project: bool,
+    /// The TUI's dialogs, which take each re-vet's y/N in place of the
+    /// terminal.
+    pub asks: Option<&'a mpsc::Sender<Question>>,
 }
 
 /// Where an update reports: the TUI's job pane, else stdout, or stderr for
@@ -765,7 +768,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             None => format!("update: not a store skill: {n}{}", project_hint(n)),
         }));
     }
-    let consent = Consent { update: true, yes: args.yes, force: args.force, asks: None };
+    let consent = Consent { update: true, yes: args.yes, force: args.force, asks: args.asks };
     let revet = cfg.judge.as_ref().map(|judge| Revet {
         data,
         judge,

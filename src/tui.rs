@@ -158,7 +158,7 @@ struct Job {
     /// What the run reported, then what its CLI command prints.
     lines: Vec<String>,
     rx: mpsc::Receiver<String>,
-    /// What an add asks, each opened as a dialog once none is open.
+    /// What an add or update asks, each opened as a dialog once none is open.
     asks: Option<mpsc::Receiver<Question>>,
     cancel: Arc<AtomicBool>,
     /// The thread until it ends; it returns whether the run succeeded.
@@ -573,9 +573,9 @@ impl App {
     }
 
     /// The dialog that asks to update `skill`, or every store skill, as
-    /// `mazo update --yes` does, or shows why `skill` is not updatable. The
-    /// job cannot answer a y/N, so `y` here accepts each re-vet's verdict;
-    /// with no `--force`, a security finding still refuses.
+    /// `mazo update` does, or shows why `skill` is not updatable. Each
+    /// re-vet's verdict is asked in a dialog; with no `--force`, a security
+    /// finding still refuses.
     fn update(&self, skill: Option<String>) -> Dialog {
         if let Some(busy) = self.one_job() {
             return busy;
@@ -604,7 +604,7 @@ impl App {
                     Ok(_) => format!("the {judge_name} judge reports no cost"),
                 };
                 vec![
-                    format!("update {what} and accept judge verdicts?"),
+                    format!("update {what} and ask about each judge verdict?"),
                     format!("an untrusted skill that changed is re-vetted with one {judge_name} judge call; {cap}"),
                     "a security finding still refuses its update".into(),
                 ]
@@ -679,12 +679,15 @@ impl App {
     }
 
     /// Updates `skill`, or every store skill, in the background as `mazo
-    /// update [skill] --yes` does.
+    /// update [skill]` does, each re-vet's y/N answered in a dialog.
     fn run_update(&mut self, skill: Option<String>) {
         let target = skill.clone().unwrap_or_else(|| "every store skill".into());
-        self.start("update", target, None, move |data, pane| {
+        let (tx, rx) = mpsc::channel();
+        self.start("update", target, Some(rx), move |data, pane| {
             let names = Vec::from_iter(skill);
-            let args = store::Update { names: &names, yes: true, force: false, pane: Some(pane), project: false };
+            let asks = Some(&tx);
+            let args =
+                store::Update { names: &names, yes: false, force: false, pane: Some(pane), project: false, asks };
             match store::update(&data.cfg, &data.inv, &data.dir, &args) {
                 Ok(code) => (String::new(), code == ExitCode::SUCCESS),
                 Err(e) => (format!("ERROR: {e}"), false),
