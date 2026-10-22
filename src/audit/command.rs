@@ -81,7 +81,7 @@ pub fn command(
         judge: p.judge,
         backend: p.backend.as_ref(),
         budget: p.budget,
-        evals: &evals::load(input.inv, p.skill),
+        evals: &evals::load(&input.cfg.evals_dir, input.inv, p.skill),
         usage: &report::usage_section(input, p.skill),
         pane,
     };

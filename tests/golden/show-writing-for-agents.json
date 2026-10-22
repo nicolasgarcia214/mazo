@@ -12,6 +12,7 @@
       "skill": "wfa-helper"
     }
   ],
+  "content_hash": "ec569061a8db94f03793d35c30a438d936dcbe86",
   "description": "Writes agent-facing documents. Prose polish is the unslop skill.",
   "events": [
     {
@@ -50,13 +51,12 @@
   },
   "grades": [
     {
+      "content_hash": "ec569061a8db94f03793d35c30a438d936dcbe86",
       "date": "2026-05-01",
-      "file": "<skills>/.grades/writing-for-agents/2026-05-01.md",
+      "file": "<skills>/.evals/grades/writing-for-agents/2026-05-01.md",
       "mark": "",
       "score": "8",
-      "since": 0,
-      "stale": false,
-      "wip": false
+      "stale": false
     }
   ],
   "histogram": [

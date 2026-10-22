@@ -64,11 +64,11 @@ fn anchor(skill: &str) -> String {
     format!("skill-{}", esc(skill))
 }
 
-/// The score as written, then `+N` or `+wip`.
+/// The score as written, then ` stale` for a stale grade.
 fn grade(g: Option<&GradeOut>) -> String {
     let Some(g) = g else { return "-".into() };
-    let score = format!("{}{}", esc(g.grade.eval.score.as_deref().unwrap_or("?")), esc(&g.mark));
-    if g.stale { format!("<span class=\"stale\">{score}</span>") } else { score }
+    let score = esc(g.grade.eval.score.as_deref().unwrap_or("?"));
+    if g.grade.stale { format!("<span class=\"stale\">{score} {}</span>", g.mark) } else { score }
 }
 
 /// The 30-day sparkline: one bar per day, a tick for a day with no event.

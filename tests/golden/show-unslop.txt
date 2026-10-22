@@ -23,9 +23,9 @@ description: Removes slop from prose.
 path: <skills>/unslop
 history: first 2026-01-01 skills, last 2026-04-01 tighten unslop, uncommitted changes
 grades:
-date       score since
-2026-03-01     7 +1
-2026-02-01     6 +1
+date       score mark
+2026-03-01     7 stale
+2026-02-01     6 stale
 retros: 4 strong since the latest
 date       score verdict
 2026-10-05     8 holds up

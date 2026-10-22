@@ -39,13 +39,12 @@
       ],
       "agents": "C",
       "grade": {
+        "content_hash": "cf2447f6a26b5133ff5d91c09b35f484731a856a",
         "date": "2026-03-01",
-        "file": "<skills>/.grades/unslop/2026-03-01.md",
-        "mark": "+1",
+        "file": "<skills>/.evals/grades/unslop/2026-03-01.md",
+        "mark": "stale",
         "score": "7",
-        "since": 1,
-        "stale": true,
-        "wip": true
+        "stale": true
       },
       "last": "2026-10-12T12:00:00Z",
       "read": 1,
@@ -94,13 +93,12 @@
       ],
       "agents": "CX",
       "grade": {
+        "content_hash": "ec569061a8db94f03793d35c30a438d936dcbe86",
         "date": "2026-05-01",
-        "file": "<skills>/.grades/writing-for-agents/2026-05-01.md",
+        "file": "<skills>/.evals/grades/writing-for-agents/2026-05-01.md",
         "mark": "",
         "score": "8",
-        "since": 0,
-        "stale": false,
-        "wip": false
+        "stale": false
       },
       "last": "2026-10-07T12:00:00Z",
       "read": 1,

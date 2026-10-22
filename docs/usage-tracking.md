@@ -29,7 +29,7 @@ numbers are current. Every report prints how far back each home's logs go:
 
 On a terminal, `usage`, `unused` and `status` colour their status tokens:
 `unused` and `ERROR:` in red; `held`, `new`, the `named by` note, `warning:`
-and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
+and a stale grade's `stale` mark in yellow. Piped output, or any output with
 `NO_COLOR` set to a non-empty value, has no colour.
 
 ### Actors
@@ -62,12 +62,10 @@ or null when not judged). `usage` leaves out `probe` sessions unless `--all`
 (see [actors](#actors)). Project skills get their own rows; see
 [project skills](project-skills.md#status-and-usage-in-a-project).
 
-A grade cell in `usage` is the score as written, then:
-
-| Suffix | Meaning |
-|---|---|
-| `+N` | `N` commits changed the skill after the grade. |
-| `+wip` | No such commit, but the skill has uncommitted changes. |
+A grade cell in `usage` is the score as written, then ` stale` when the
+skill's content changed after the grade, such as `8.6 stale`: the grade's
+frontmatter `content_hash` differs from the skill's, or the grade has none.
+Grades live under [`evals_dir`](configuration.md#evals_dir).
 
 ## `mazo unused`
 

@@ -19,6 +19,7 @@ against the directory of the file it points to.
 source = "."                      # your skills directory, relative to this file; optional
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
 trusted = ["owner", "owner/repo"] # sources whose skills install without vetting
+evals_dir = "~/evals"             # where grades and retros live; <data dir>/evals by default
 
 [[home]]
 name  = "claude"
@@ -110,6 +111,24 @@ trusts no source other than `source`.
 - An entry never trusts a `file://` or local source.
 - An entry with an empty segment, or with more than owner/repo after an
   optional host, is a usage error.
+
+## `evals_dir`
+
+Optional. It names the directory that holds grades and retros, and defaults
+to `evals` under the [data directory](#the-data-directory-and-the-store). A
+relative `evals_dir` resolves against the config's directory, and a leading `~`
+is your home directory. Point it at a versioned repository to keep grades in
+git.
+
+mazo reads a skill's grades from `<evals_dir>/grades/<skill>/*.md` and its
+retros from `<evals_dir>/retros/<skill>/*.md`, for the skills of `source` and
+the store alike. A project skill has no grade. `mazo evals dir <skill>` prints
+both directories, one per line, as `grades` or `retros`, a tab, and the
+absolute path; it exits 2 for a skill mazo does not know.
+
+A grade whose frontmatter `content_hash` is not the skill's current one, the
+`content_hash` that `mazo show <skill> --json` prints, is stale. A grade
+without one is stale too.
 
 ## `[policy]`
 

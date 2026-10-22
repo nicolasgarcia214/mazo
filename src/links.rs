@@ -332,6 +332,7 @@ mod tests {
             source: Some(source.clone()),
             loose: vec![],
             trusted: vec![],
+            evals_dir: Default::default(),
             homes: vec![home],
             policy: Default::default(),
             judge: None,

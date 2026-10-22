@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use common::{
-    CLAUDE_FIRST, CODEX_FIRST, NOW, ago, copy_tree, event, git, report_repo, report_world, skill_record, write,
+    CLAUDE_FIRST, CODEX_FIRST, NOW, ago, copy_tree, event, git, grade, report_repo, report_world, skill_record, write,
 };
 use mazo::inventory::{self, Inventory};
 use mazo::ledger::{Actor, Agent, Channel, Event, Origin};
@@ -17,7 +17,7 @@ use serde_json::Value;
 
 /// The last line of `usage` and `unused`: the help's marks and glyphs.
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
-                      +N commits since the grade; +wip uncommitted changes since the grade; \
+                      stale the skill changed since the grade; \
                       (project) a project skill, counted apart";
 
 fn args() -> UsageArgs {
@@ -260,8 +260,8 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
         &repo.path().join("router/SKILL.md"),
         "---\nname: router\ndescription: Routes.\n---\n\n| Need | Skill |\n|---|---|\n| Pi helpers | wfa-helper |\n",
     );
-    write(&repo.path().join(".grades/unslop/g.md"), "---\ntarget: unslop\ndate: 2026-09-01\nscore: 9.1\n---\n");
-    git(repo.path(), &["add", "router", ".grades"], NOW);
+    grade(&repo.path().join(".evals"), "unslop", "2026-09-01", "9.1", Some(&repo.path().join("unslop")));
+    git(repo.path(), &["add", "router"], NOW);
     git(repo.path(), &["commit", "-q", "-m", "router"], "2026-01-01T00:00:00Z");
     let skill_md = repo.path().join("unslop/SKILL.md");
     write(&skill_md, &(std::fs::read_to_string(&skill_md).unwrap() + "\nEdited.\n"));
@@ -281,7 +281,7 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     assert!(line("goal-smart").ends_with(&format!("{reset} cluster: goal-execute, goal-plan")), "{text}");
     let usage = report::usage(&input, &args(), false, on);
     let unslop = usage.lines().find(|l| l.starts_with("unslop ")).unwrap();
-    assert!(unslop.ends_with(&format!("9.1{yellow}+wip{reset} not judged")), "{usage}");
+    assert!(unslop.ends_with(&format!("9.1 {yellow}stale{reset} not judged")), "{usage}");
     assert_eq!(usage.lines().skip(1).map(|l| l.matches('\x1b').count()).sum::<usize>(), 2, "only the mark: {usage}");
 
     let off = render::colour(true, Some(std::ffi::OsStr::new("1")));
@@ -495,6 +495,8 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     std::os::unix::fs::symlink(p, alias.path().join("p")).unwrap();
     let through = alias.path().join("p/.mazo/skills/unslop/SKILL.md").display().to_string();
     events.push(other(event("pa", "unslop", Channel::Read, "s6", &ago(1)), Some(through)));
+    // AC10: the global skill's grade is not the project skill's.
+    grade(&repo.path().join(".evals"), "unslop", "2026-09-01", "9", None);
     let mut w = report_world(repo.path());
     let outside = report::usage(&w.input(&events), &args(), true, false);
     let outside_text = report::usage(&w.input(&events), &args(), false, false);
@@ -504,6 +506,7 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     let json = report::usage(&input, &args(), true, false);
     let global = scoped(&json, "unslop", "global").unwrap();
     assert_eq!(counts(&global), [1, 0, 1, 0, 0, 0], "the project's load is not the global skill's: {global}");
+    assert_eq!(global["grade"]["score"], "9");
     let own = scoped(&json, "unslop", "project").unwrap();
     assert_eq!(counts(&own), [1, 0, 1, 0, 1, 0], "the read through the symlink counts: {own}");
     assert_eq!((&own["grade"], &own["verdict"]), (&Value::Null, &Value::Null));
@@ -535,43 +538,70 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     );
 }
 
-/// The text and JSON grade of `skill` in a fresh report, which reads the history again.
+/// The text and JSON grade of `skill` in a fresh report, which hashes the skill again.
 fn grade_of(source: &Path, skill: &str) -> (String, Value) {
     let w = report_world(source);
     let input = w.input(&[]);
-    let text = report::usage(&input, &args(), false, false);
-    let line = text.lines().find(|l| l.starts_with(&format!("{skill} "))).unwrap();
-    let cell = line.strip_suffix(" not judged").unwrap().rsplit(' ').next().unwrap().to_string();
-    (cell, row(&report::usage(&input, &args(), true, false), skill)["grade"].clone())
+    let rows = report::usage_table(&input, &args()).rows;
+    let r = rows.iter().find(|r| r.skill == skill).unwrap();
+    (
+        report::usage_cells(&input, r, false)[10].clone(),
+        row(&report::usage(&input, &args(), true, false), skill)["grade"].clone(),
+    )
 }
 
+/// AC6, AC11: the score alone while the grade's `content_hash` is the
+/// skill's, then `stale` once the skill changes; a grade with no hash is stale.
 #[test]
-fn usage_grade_shows_the_score_then_commits_or_wip_since() {
+fn usage_grade_shows_the_score_then_stale_when_the_skill_changed() {
     let repo = report_repo();
     let src = repo.path();
-    write(&src.join(".grades/unslop/g.md"), "---\ntarget: unslop\ndate: 2026-09-01\nscore: 9.1\n---\n");
-    git(src, &["add", "."], NOW);
-    git(src, &["commit", "-q", "-m", "grade"], "2026-09-01T00:00:00Z");
-    let edit = |d: &str| write(&src.join("unslop/SKILL.md"), &format!("---\nname: unslop\ndescription: {d}.\n---\n"));
-    let summary =
-        |g: &Value| (g["stale"].as_bool().unwrap(), g["since"].as_u64().unwrap(), g["wip"].as_bool().unwrap());
+    let evals = src.join(".evals");
+    let summary = |g: &Value| (g["stale"].clone(), g["mark"].clone(), g["content_hash"].clone());
+    let keys = |g: &Value| g.as_object().unwrap().keys().cloned().collect::<BTreeSet<String>>();
 
     assert_eq!(grade_of(src, "goal-plan").0, "-", "no grade");
+    grade(&evals, "unslop", "2026-09-01", "9.1", None);
     let (cell, g) = grade_of(src, "unslop");
-    assert_eq!((cell.as_str(), summary(&g)), ("9.1", (false, 0, false)));
+    assert_eq!((cell.as_str(), summary(&g)), ("9.1 stale", (true.into(), "stale".into(), Value::Null)), "no hash");
+    assert_eq!(keys(&g), BTreeSet::from(["content_hash", "date", "file", "mark", "score", "stale"].map(String::from)));
 
-    edit("One");
+    grade(&evals, "unslop", "2026-09-02", "9.1", Some(&src.join("unslop")));
+    let hash = mazo::store::content_hash(&src.join("unslop")).unwrap();
     let (cell, g) = grade_of(src, "unslop");
-    assert_eq!((cell.as_str(), summary(&g)), ("9.1+wip", (true, 0, true)), "only uncommitted changes");
+    assert_eq!((cell.as_str(), summary(&g)), ("9.1", (false.into(), "".into(), hash.clone().into())), "current");
 
-    git(src, &["commit", "-q", "-am", "one"], "2026-09-02T00:00:00Z");
-    assert_eq!(grade_of(src, "unslop").0, "9.1+1");
-
-    edit("Two");
-    git(src, &["commit", "-q", "-am", "two"], "2026-09-03T00:00:00Z");
-    edit("Three");
+    write(&src.join("unslop/notes.md"), "edited\n");
     let (cell, g) = grade_of(src, "unslop");
-    assert_eq!((cell.as_str(), summary(&g)), ("9.1+2", (true, 2, true)), "commits win over uncommitted changes");
+    assert_eq!((cell.as_str(), summary(&g)), ("9.1 stale", (true.into(), "stale".into(), hash.into())), "edited");
+}
+
+/// AC2, AC3: a store skill's grade comes from `evals_dir`, as a source
+/// skill's does, and `<source>/.grades` is not read.
+#[test]
+fn grades_come_from_evals_dir_for_source_and_store_skills_only() {
+    let repo = report_repo();
+    let src = repo.path();
+    let data = tempfile::tempdir().unwrap();
+    common::vetted(data.path());
+    let evals = src.join(".evals");
+    grade(&evals, "vetted", "2026-09-01", "8.6", Some(&data.path().join("store/vetted")));
+    grade(&src.join(".grades"), "unslop", "2026-09-01", "9", Some(&src.join("unslop")));
+    let mut w = report_world(src);
+    w.inv = mazo::store::inventory(Some(src), data.path()).unwrap();
+    let input = w.input(&[]);
+    let usage = report::usage(&input, &args(), true, false);
+    assert_eq!(row(&usage, "vetted")["grade"]["score"], "8.6");
+    assert_eq!(row(&usage, "vetted")["grade"]["stale"], false);
+    assert_eq!(row(&usage, "unslop")["grade"], Value::Null, "<source>/.grades is not read");
+
+    let card: Value =
+        serde_json::from_str(&report::show(&input, "vetted", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    assert_eq!(card["grades"][0]["score"], "8.6");
+    let hash = mazo::store::content_hash(&data.path().join("store/vetted")).unwrap();
+    assert_eq!(card["content_hash"], hash.as_str(), "the hash mazo.lock records for the same tree");
+    let text = report::show(&input, "vetted", Since::Days(30), 20, false, false).unwrap();
+    assert!(text.contains("grades:\ndate       score mark\n2026-09-01   8.6\n"), "{text}");
 }
 
 // ---------------------------------------------------------------- show
@@ -581,7 +611,7 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
     let repo = report_repo();
     let transcript = repo.path().join("t.jsonl");
     write(&transcript, "{}\n");
-    write(&repo.path().join(".retros/unslop/r.md"), "---\nskill: unslop\ndate: \"2026-10-05\"\nscore: 7\n---\n");
+    write(&repo.path().join(".evals/retros/unslop/r.md"), "---\nskill: unslop\ndate: \"2026-10-05\"\nscore: 7\n---\n");
     let w = report_world(repo.path());
     let mut live = event("live", "unslop", Channel::Tool, "A", &ago(1));
     live.src = format!("{}:1", transcript.display());
@@ -621,21 +651,22 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
 fn show_prints_the_card() {
     let repo = report_repo();
     let src = repo.path();
-    for (date, score) in [("2026-02-01", "6"), ("2026-03-01", "7")] {
-        write(&src.join(format!(".grades/unslop/{date}.md")), &format!("---\ndate: {date}\nscore: {score}\n---\n"));
-        git(src, &["add", "."], NOW);
-        git(src, &["commit", "-q", "-m", &format!("grade {date}")], &format!("{date}T00:00:00Z"));
-    }
+    let evals = src.join(".evals");
+    grade(&evals, "unslop", "2026-02-01", "6", None);
+    grade(&evals, "unslop", "2026-03-01", "7", Some(&src.join("unslop")));
     write(&src.join("unslop/notes.md"), "edit\n");
     git(src, &["add", "."], NOW);
     git(src, &["commit", "-q", "-m", "tighten unslop"], "2026-04-01T00:00:00Z");
-    write(&src.join(".grades/unslop/2026-05-01.md"), "---\ndate: 2026-05-01\nscore: 9\n---\n");
+    write(&src.join("unslop/notes.md"), "edit, uncommitted\n");
+    grade(&evals, "unslop", "2026-05-01", "9", Some(&src.join("unslop")));
     write(
-        &src.join(".retros/unslop/a.md"),
+        &evals.join("retros/unslop/a.md"),
         "---\nskill: unslop\ndate: 2026-04-02\nscore: 5\nverdict: too eager\n---\n",
     );
-    write(&src.join(".retros/unslop/b.md"), "---\nskill: unslop\ndate: 2026-10-05\nscore: 8\nverdict: holds up\n---\n");
-    write(&src.join("unslop/notes.md"), "edit, uncommitted\n");
+    write(
+        &evals.join("retros/unslop/b.md"),
+        "---\nskill: unslop\ndate: 2026-10-05\nscore: 8\nverdict: holds up\n---\n",
+    );
     write(&src.join("citer/SKILL.md"), "---\nname: citer\ndescription: Cites.\n---\n\nUse the unslop skill.\n");
 
     let home = std::env::var("HOME").unwrap();
@@ -670,10 +701,10 @@ fn show_prints_the_card() {
         path,
         "history: first 2026-01-01 skills, last 2026-04-01 tighten unslop, uncommitted changes\n".into(),
         "grades:\n".into(),
-        "date       score since\n".into(),
-        "2026-05-01     9 +wip\n".into(),
-        "2026-03-01     7 +1\n".into(),
-        "2026-02-01     6 +1\n".into(),
+        "date       score mark\n".into(),
+        "2026-05-01     9\n".into(),
+        "2026-03-01     7 stale\n".into(),
+        "2026-02-01     6 stale\n".into(),
         "retros: 5 strong since the latest\n".into(),
         "date       score verdict\n".into(),
         "2026-10-05     8 holds up\n".into(),
@@ -704,6 +735,7 @@ fn show_prints_the_card() {
         "description",
         "path",
         "origin",
+        "content_hash",
         "history",
         "grades",
         "retros",
@@ -720,13 +752,20 @@ fn show_prints_the_card() {
     assert_eq!(v["events"][0]["cwd"], format!("{home}/work"));
     assert_eq!(v["history"]["last"]["subject"], "tighten unslop");
     assert_eq!(v["history"]["uncommitted"], true);
-    let grades: Vec<(&str, u64)> = v["grades"]
+    let hash = mazo::store::content_hash(&src.join("unslop")).unwrap();
+    assert_eq!(v["content_hash"], hash.as_str());
+    let grades: Vec<(&str, bool)> = v["grades"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|g| (g["date"].as_str().unwrap(), g["since"].as_u64().unwrap()))
+        .map(|g| (g["date"].as_str().unwrap(), g["stale"].as_bool().unwrap()))
         .collect();
-    assert_eq!(grades, [("2026-05-01", 0), ("2026-03-01", 1), ("2026-02-01", 1)], "every grade, newest first");
+    assert_eq!(
+        grades,
+        [("2026-05-01", false), ("2026-03-01", true), ("2026-02-01", true)],
+        "every grade, newest first"
+    );
+    assert_eq!(v["grades"][0]["content_hash"], hash.as_str());
     assert_eq!(v["retros"][1]["verdict"], "too eager");
     assert_eq!(v["cited_by"], serde_json::json!([{"skill": "citer", "held": false}]));
     assert_eq!(v["usage"]["last_use"], ago(1));
@@ -735,22 +774,21 @@ fn show_prints_the_card() {
     assert_eq!(v["audit"], Value::Null);
 }
 
-/// Not a repository: no history section, no `+N`.
+/// Not a repository: no history section, and the grade still reads.
 #[test]
 fn show_outside_a_git_worktree_omits_history() {
     let dir = tempfile::tempdir().unwrap();
     copy_tree(&common::fixture("reports/skills"), dir.path(), &|s| s);
-    write(&dir.path().join(".grades/unslop/g.md"), "---\ndate: 2026-05-01\nscore: 9\n---\n");
+    grade(&dir.path().join(".evals"), "unslop", "2026-05-01", "9", Some(&dir.path().join("unslop")));
     let w = report_world(dir.path());
     assert!(w.inv.history.is_none());
     let input = w.input(&[]);
     let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
     assert!(!text.contains("history:"), "{text}");
-    assert!(text.contains("grades:\ndate       score since\n2026-05-01     9\n"), "{text}");
+    assert!(text.contains("grades:\ndate       score mark\n2026-05-01     9\n"), "{text}");
     let v: Value =
         serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
     assert_eq!(v["history"], Value::Null);
-    assert_eq!(v["grades"][0]["since"], 0);
     assert_eq!(v["grades"][0]["stale"], false);
 }
 
@@ -1014,45 +1052,41 @@ fn a_full_manual_fits_fifteen_lines_at_eighty_columns() {
 #[test]
 fn evals_latest_date_and_staleness() {
     let dir = tempfile::tempdir().unwrap();
-    let src = dir.path();
-    git(src, &["init", "-q"], NOW);
+    let (src, evals) = (dir.path().join("skills"), dir.path().join("evals"));
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v1\n---\n");
-    write(&src.join(".grades/GRADES.md"), "---\ntarget: s\ndate: 2027-01-01\nscore: 1\n---\n");
-    write(&src.join(".grades/s/notes.md"), "# no frontmatter\n");
-    write(&src.join(".grades/s/bad.md"), "---\ndate: 2027-01-01\ndate: 2027-01-02\n---\n");
-    write(&src.join(".grades/s/a.md"), "---\ntarget: s\ndate: 2026-01-15\nscore: 7\n---\n");
-    write(&src.join(".grades/s/b.md"), "---\ntarget: s\ndate: \"2026-02-01\"\nscore: 8.5\n---\n");
-    write(&src.join(".retros/s/r0.md"), "---\nskill: s\ndate: 2026-03-05\n---\n");
-    write(&src.join(".retros/s/r1.md"), "---\nskill: s\ndate: \"2026-03-05\"\n---\n");
-    write(&src.join(".retros/s/r2.md"), "---\nskill: s\ndate: 2026-03-04\n---\n");
-    write(&src.join(".retros/s/r3.md"), "---\nskill: s\ndate: 2026-03-06T09:00:00Z\n---\n");
-    write(&src.join(".retros/s/r4.md"), "---\nskill: s\ndate: 20260307\n---\n");
-    git(src, &["add", "."], NOW);
-    git(src, &["commit", "-q", "-m", "skill and grades"], "2026-02-01T00:00:00Z");
+    let hash = mazo::store::content_hash(&src.join("s")).unwrap();
+    write(&evals.join("grades/GRADES.md"), "---\ntarget: s\ndate: 2027-01-01\nscore: 1\n---\n");
+    write(&evals.join("grades/s/notes.md"), "# no frontmatter\n");
+    write(&evals.join("grades/s/bad.md"), "---\ndate: 2027-01-01\ndate: 2027-01-02\n---\n");
+    write(&evals.join("grades/s/a.md"), "---\ntarget: s\ndate: 2026-01-15\nscore: 7\n---\n");
+    write(&evals.join("grades/s/b.md"), &format!("---\ndate: \"2026-02-01\"\nscore: 8.5\ncontent_hash: {hash}\n---\n"));
+    write(&evals.join("retros/s/r0.md"), "---\nskill: s\ndate: 2026-03-05\n---\n");
+    write(&evals.join("retros/s/r1.md"), "---\nskill: s\ndate: \"2026-03-05\"\n---\n");
+    write(&evals.join("retros/s/r2.md"), "---\nskill: s\ndate: 2026-03-04\n---\n");
+    write(&evals.join("retros/s/r3.md"), "---\nskill: s\ndate: 2026-03-06T09:00:00Z\n---\n");
+    write(&evals.join("retros/s/r4.md"), "---\nskill: s\ndate: 20260307\n---\n");
 
-    let load = || evals::load(&Inventory::load(src).unwrap(), "s");
-    let e = load();
+    let load = |skill| evals::load(&evals, &Inventory::load(&src).unwrap(), skill);
+    let e = load("s");
+    assert_eq!(e.content_hash.as_deref(), Some(hash.as_str()));
     let g = e.grades.last().unwrap();
     assert!(
         g.eval.file.ends_with("b.md"),
         "quoted 2026-02-01 beats unquoted 2026-01-15; GRADES.md, notes.md, bad.md skipped"
     );
     assert_eq!(g.eval.score.as_deref(), Some("8.5"));
-    assert!(!g.stale(), "a grade committed together with the skill edit is not stale");
+    assert!(!g.stale && g.mark().is_empty(), "the grade's content_hash is the skill's");
+    assert!(e.grades[0].stale && e.grades[0].content_hash.is_none(), "a grade with no content_hash is stale");
     let retros: Vec<&str> = e.retros.iter().map(|r| r.file.file_name().unwrap().to_str().unwrap()).collect();
     assert_eq!(retros, ["r2.md", "r0.md", "r1.md", "r3.md"], "by date, ties by filename; r4.md has no YYYY-MM-DD");
     assert_eq!(e.retros[3].date, "2026-03-06", "a timestamp is read as a string, its first 10 characters the date");
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
-    git(src, &["commit", "-q", "-am", "edit skill"], "2026-03-01T00:00:00Z");
-    assert!(load().grades.pop().unwrap().stale(), "a later skill commit makes it stale");
+    let g = load("s").grades.pop().unwrap();
+    assert!(g.stale && g.mark() == "stale", "a changed skill makes its grade stale");
 
-    write(&src.join(".grades/s/c.md"), "---\ntarget: s\ndate: 2026-04-01\nscore: 9\n---\n");
-    let g = load().grades.pop().unwrap();
-    assert!(g.eval.file.ends_with("c.md") && !g.stale(), "an uncommitted grade is not stale");
-
-    write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v3\n---\n");
-    assert!(load().grades.pop().unwrap().stale(), "uncommitted skill changes make any grade stale");
+    write(&evals.join("grades/gone/g.md"), "---\ndate: 2026-01-01\nscore: 9\n---\n");
+    assert_eq!(load("gone"), evals::Evals { content_hash: None, grades: vec![], retros: vec![] }, "a name in no root");
 }
 
 /// `show --json`'s origin (D24): a store skill's lockfile entry when its

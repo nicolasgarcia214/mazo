@@ -9,7 +9,7 @@ use mazo::inventory::{Inventory, Scope};
 use mazo::ledger::{self, Agent, Channel, Ledger};
 use mazo::lifecycle::{self, Retired};
 use mazo::report::{self, Since, UsageArgs};
-use mazo::{Error, audit, html, links, policy, render, scan, store, tui};
+use mazo::{Error, audit, evals, html, links, policy, render, scan, store, tui};
 
 #[derive(Parser)]
 #[command(
@@ -80,6 +80,11 @@ enum Cmd {
         /// Print the whole card as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Where grades and retros live.
+    Evals {
+        #[command(subcommand)]
+        cmd: EvalsCmd,
     },
     /// Write the HTML report: usage, grades to run, and every skill's card.
     Report {
@@ -192,6 +197,15 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum EvalsCmd {
+    /// Print the skill's grade and retro directories under `evals_dir`.
+    Dir {
+        /// The skill whose directories to print.
+        skill: String,
+    },
+}
+
 #[derive(clap::Args)]
 struct AuditArgs {
     /// The skill to audit.
@@ -268,6 +282,12 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             // Before paying for a scan.
             report::check_skill(&inv, &skill)?;
             with_scanned(&cfg, &inv, |input| report::show(input, &skill, since, limit, json, tty))
+        }
+        Cmd::Evals { cmd: EvalsCmd::Dir { skill } } => {
+            report::check_skill(&inv, &skill)?;
+            let [grades, retros] = evals::dirs(&cfg.evals_dir, &skill);
+            println!("grades\t{}\nretros\t{}", grades.display(), retros.display());
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
         Cmd::Status { agent, json } => {

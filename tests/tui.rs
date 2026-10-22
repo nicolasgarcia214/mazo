@@ -117,8 +117,8 @@ fn usage_row_shows_its_sessions_and_its_grade_mark_in_the_status_colour() {
     assert_eq!(row(&lines, "unslop")[1], sess.to_string());
     let words = row(&lines, "unslop");
     let quality = words.iter().position(|w| w == "audit:").unwrap();
-    assert!(words[quality - 1].ends_with("+1"), "{lines:#?}");
-    assert_eq!(colour_of(&screen, "unslop", "+1"), ratatui_colour("+1"));
+    assert_eq!(words[quality - 2..quality], ["7", "stale"], "{lines:#?}");
+    assert_eq!(colour_of(&screen, "unslop", "stale"), mazo::theme::WARN);
     assert_eq!(colour_of(&screen, "unslop", "unslop"), Color::Reset);
 }
 
@@ -136,6 +136,21 @@ fn usage_rows_show_the_audit_else_the_vet_else_not_judged() {
     assert!(tail("unslop").ends_with(" audit: Good on <short> texts"), "{lines:#?}");
     assert!(tail("vetted").ends_with(" vet: quality weak, value low value"), "{lines:#?}");
     assert!(tail("goal-plan").ends_with(" not judged"), "{lines:#?}");
+}
+
+/// AC3: a store skill's grade, read from `evals_dir`, fills its grade cell.
+#[test]
+fn a_store_skills_grade_shows_in_the_grade_column() {
+    let mut golden = Golden::new();
+    let data = tempfile::tempdir().unwrap();
+    common::vetted(data.path());
+    common::grade(&golden.repo.path().join(".evals"), "vetted", "2026-09-01", "8.6", None);
+    golden.world.inv = store::inventory(Some(golden.repo.path()), data.path()).unwrap();
+    let input = golden.world.input(&golden.events);
+    let screen = draw(&mut app(&input), 200, 40);
+    let lines: Vec<String> = screen.iter().map(|(t, _)| t.clone()).collect();
+    assert!(row(&lines, "vetted").join(" ").ends_with(" 8.6 stale vet: quality weak, value low value"), "{lines:#?}");
+    assert_eq!(colour_of(&screen, "vetted", "stale"), mazo::theme::WARN);
 }
 
 #[test]

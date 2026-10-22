@@ -101,6 +101,7 @@
       "skill": "writing-for-agents"
     }
   ],
+  "content_hash": "55bc33ceeaff50b1d7d6c643b5b06f102beac490",
   "description": "Removes slop from prose.",
   "events": [
     {
@@ -199,22 +200,20 @@
   },
   "grades": [
     {
+      "content_hash": "cf2447f6a26b5133ff5d91c09b35f484731a856a",
       "date": "2026-03-01",
-      "file": "<skills>/.grades/unslop/2026-03-01.md",
-      "mark": "+1",
+      "file": "<skills>/.evals/grades/unslop/2026-03-01.md",
+      "mark": "stale",
       "score": "7",
-      "since": 1,
-      "stale": true,
-      "wip": true
+      "stale": true
     },
     {
+      "content_hash": null,
       "date": "2026-02-01",
-      "file": "<skills>/.grades/unslop/2026-02-01.md",
-      "mark": "+1",
+      "file": "<skills>/.evals/grades/unslop/2026-02-01.md",
+      "mark": "stale",
       "score": "6",
-      "since": 1,
-      "stale": true,
-      "wip": true
+      "stale": true
     }
   ],
   "histogram": [
@@ -247,7 +246,7 @@
     },
     "last": {
       "date": "2026-04-01T00:00:00Z",
-      "hash": "5cb347747aca7b947118286c2289c534d7f3c11c",
+      "hash": "e0db099e5ebcc45330b7ba8ca9edf721ea021d3a",
       "subject": "tighten unslop"
     },
     "uncommitted": true
@@ -264,13 +263,13 @@
   "retros": [
     {
       "date": "2026-10-05",
-      "file": "<skills>/.retros/unslop/b.md",
+      "file": "<skills>/.evals/retros/unslop/b.md",
       "score": "8",
       "verdict": "holds up"
     },
     {
       "date": "2026-04-02",
-      "file": "<skills>/.retros/unslop/a.md",
+      "file": "<skills>/.evals/retros/unslop/a.md",
       "score": "5",
       "verdict": "too eager"
     }

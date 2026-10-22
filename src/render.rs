@@ -27,16 +27,13 @@ pub enum Colour {
 }
 
 /// The colour of a status token: red for `unused` and `ERROR:`, yellow for
-/// `held`, `new`, `warning:`, a `named by` note and a stale grade's `+N` or
-/// `+wip`; `None` for any other token.
+/// `held`, `new`, `warning:`, a `named by` note and a grade's `stale` mark;
+/// `None` for any other token.
 pub fn status_colour(token: &str) -> Option<Colour> {
     match token {
         "unused" | "ERROR:" => Some(Colour::Red),
-        "held" | "new" | "warning:" | "+wip" => Some(Colour::Yellow),
+        "held" | "new" | "warning:" | "stale" => Some(Colour::Yellow),
         t if t.starts_with("named by ") => Some(Colour::Yellow),
-        t if t.strip_prefix('+').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) => {
-            Some(Colour::Yellow)
-        }
         _ => None,
     }
 }
@@ -162,13 +159,11 @@ mod tests {
     fn paint_colours_only_status_tokens() {
         assert_eq!(paint("unused", true), "\x1b[31munused\x1b[0m");
         assert_eq!(paint("held", true), "\x1b[33mheld\x1b[0m");
-        assert_eq!(paint("+wip", true), "\x1b[33m+wip\x1b[0m");
-        assert_eq!(paint("+12", true), "\x1b[33m+12\x1b[0m");
-        assert_eq!(paint("+x", true), "+x");
-        assert_eq!(paint("+", true), "+");
+        assert_eq!(paint("stale", true), "\x1b[33mstale\x1b[0m");
+        assert_eq!(paint("+12", true), "+12");
         assert_eq!(status_colour("ERROR:"), Some(Colour::Red));
         assert_eq!(status_colour("named by a"), Some(Colour::Yellow));
-        assert_eq!(status_colour("+x"), None);
+        assert_eq!(status_colour("+wip"), None);
         assert_eq!(paint("cluster: a", true), "cluster: a");
         assert_eq!(paint("unused", false), "unused");
         assert_eq!(paint_prefix("ERROR: x: y", true), "\x1b[31mERROR:\x1b[0m x: y");

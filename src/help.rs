@@ -37,11 +37,10 @@ pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
 
 /// The marks and glyphs in the cells, what each means, and how the HTML
 /// report says it when it draws the mark otherwise.
-pub const MARKS: [(&str, &str, Option<&str>); 5] = [
+pub const MARKS: [(&str, &str, Option<&str>); 4] = [
     ("agents", "C Claude, X Codex, P Pi", None),
     ("·", "no events that day", Some("a grey tick for a day with no events")),
-    ("+N", "commits since the grade", None),
-    ("+wip", "uncommitted changes since the grade", None),
+    ("stale", "the skill changed since the grade", None),
     ("(project)", "a project skill, counted apart", None),
 ];
 
@@ -60,8 +59,10 @@ pub const FAQ: [(&str, &[&str]); 6] = [
         ],
     ),
     (
-        "What does +N or +wip after a grade mean?",
-        &["The grade is stale: N commits changed the skill after it, or the skill has uncommitted changes."],
+        "What does stale after a grade mean?",
+        &[
+            "The skill's content changed after the grade: the content_hash the grade recorded differs from the skill's, or the grade recorded none.",
+        ],
     ),
     (
         "Why does a skill say not judged?",

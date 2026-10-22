@@ -1,5 +1,5 @@
 //! Cost and not a repository: one `git log` and one `git status` per
-//! report give every skill's first and last commit, `+N` and `+wip`.
+//! report give every skill's first and last commit and its uncommitted changes.
 
 mod common;
 
@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use common::{Mazo, World, git, stderr, write};
-use mazo::evals;
 use mazo::inventory::Inventory;
 use mazo::report::{self, Since};
 
@@ -30,7 +29,6 @@ fn known_repo() -> (tempfile::TempDir, PathBuf) {
     git(tmp.path(), &["init", "-q", "repo"], "2026-01-01T00:00:00Z");
     skill(&src, "a");
     skill(&src, "b");
-    write(&src.join(".grades/a/g.md"), "---\ndate: 2026-01-01\nscore: 7\n---\n");
     commit(&repo, "add a and b", "2026-01-01T00:00:00Z");
     write(&src.join("a/notes.md"), "one");
     write(&repo.join("other/a/f"), "outside the source");
@@ -43,7 +41,7 @@ fn known_repo() -> (tempfile::TempDir, PathBuf) {
 }
 
 #[test]
-fn first_last_since_and_wip_from_one_pass() {
+fn first_last_and_wip_from_one_pass() {
     let (_tmp, src) = known_repo();
     let inv = Inventory::load(&src).unwrap();
     let h = inv.history.as_ref().expect("the source is in a git worktree");
@@ -57,10 +55,6 @@ fn first_last_since_and_wip_from_one_pass() {
     assert!(h.first("other").is_none(), "paths outside the source are not the source's");
     assert!(h.first("fresh").is_none());
 
-    let grade = Path::new(".grades/a/g.md");
-    assert_eq!(h.since("a", grade), 2, "two later commits touched a");
-    assert_eq!(h.since("b", grade), 0);
-    assert_eq!(h.since("a", Path::new(".grades/a/uncommitted.md")), 0);
     assert!(inv.known.contains("nested"), "known names come from the same log");
     assert!(!h.wip("a") && !h.wip("b"));
 
@@ -74,98 +68,13 @@ fn first_last_since_and_wip_from_one_pass() {
     assert!(!h.wip("a"));
 }
 
-const GRADE: &str = ".grades/s/g.md";
-
-/// A repository with skills `s` and `t` committed on 2026-01-01.
-fn merge_repo() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    git(tmp.path(), &["init", "-q"], "2026-01-01T00:00:00Z");
-    skill(tmp.path(), "s");
-    skill(tmp.path(), "t");
-    commit(tmp.path(), "init", "2026-01-01T00:00:00Z");
-    tmp
-}
-
-/// Commits `path` with `text` on the current branch.
-fn edit(src: &Path, path: &str, text: &str, date: &str) {
-    write(&src.join(path), text);
-    commit(src, path, date);
-}
-
-/// `(mazo's +N, git rev-list --count G..HEAD -- <skill>)` for each skill,
-/// with whether the grade of `s` is stale.
-fn parity(src: &Path, skills: &[&str]) -> (Vec<(usize, usize)>, bool) {
-    let inv = Inventory::load(src).unwrap();
-    let h = inv.history.as_ref().unwrap();
-    let g = h.last(".grades").unwrap().hash.clone();
-    let rev_list = |skill: &str| {
-        let range = format!("{g}..HEAD");
-        let out = Command::new("git").arg("-C").arg(src).args(["rev-list", "--count", &range, "--", skill]).output();
-        let out = out.unwrap();
-        String::from_utf8(out.stdout).unwrap().trim().parse::<usize>().unwrap()
-    };
-    let counts = skills.iter().map(|s| (h.since(s, Path::new(GRADE)), rev_list(s))).collect();
-    (counts, evals::load(&inv, "s").grades.pop().unwrap().stale())
-}
-
-/// `+N` counts by ancestry. A side branch edits the skill before
-/// the grade is committed on the main line, then merges: the edit is newer
-/// than `G` by ancestry, not by date. `t`, edited in G itself, is not.
 #[test]
-fn since_counts_skill_commits_that_are_not_ancestors_of_the_grade() {
-    let tmp = merge_repo();
-    let src = tmp.path();
-    git(src, &["checkout", "-q", "-b", "side"], "2026-01-02T00:00:00Z");
-    edit(src, "s/SKILL.md", "side edit", "2026-01-02T00:00:00Z");
-    git(src, &["checkout", "-q", "-"], "2026-01-03T00:00:00Z");
-    write(&src.join("t/notes.md"), "with the grade");
-    edit(src, GRADE, "---\ndate: 2026-01-03\nscore: 7\n---\n", "2026-01-03T00:00:00Z");
-    git(src, &["merge", "-q", "--no-edit", "side"], "2026-01-04T00:00:00Z");
-    assert_eq!(parity(src, &["s", "t"]), (vec![(1, 1), (0, 0)], true));
-}
-
-/// An evil merge edits the skill after the grade while merging a branch that
-/// never touched it: the merge alone makes the grade stale.
-#[test]
-fn an_evil_merge_after_the_grade_counts() {
-    let tmp = merge_repo();
-    let src = tmp.path();
-    edit(src, GRADE, "---\ndate: 2026-01-02\nscore: 7\n---\n", "2026-01-02T00:00:00Z");
-    git(src, &["checkout", "-q", "-b", "side"], "2026-01-03T00:00:00Z");
-    edit(src, "t/notes.md", "side", "2026-01-03T00:00:00Z");
-    git(src, &["checkout", "-q", "-"], "2026-01-04T00:00:00Z");
-    edit(src, "t/other.md", "main", "2026-01-04T00:00:00Z");
-    git(src, &["merge", "-q", "--no-commit", "side"], "2026-01-05T00:00:00Z");
-    write(&src.join("s/SKILL.md"), "edited in the merge");
-    commit(src, "evil merge", "2026-01-05T00:00:00Z");
-    assert_eq!(parity(src, &["s", "t"]), (vec![(1, 1), (3, 3)], true));
-}
-
-/// Both branches edit the skill after the grade and merge cleanly: the two
-/// edits and the merge, which differs from each parent in the skill, count.
-#[test]
-fn both_branches_touching_the_skill_then_a_merge_count_three() {
-    let tmp = merge_repo();
-    let src = tmp.path();
-    edit(src, GRADE, "---\ndate: 2026-01-02\nscore: 7\n---\n", "2026-01-02T00:00:00Z");
-    git(src, &["checkout", "-q", "-b", "side"], "2026-01-03T00:00:00Z");
-    edit(src, "s/a.md", "side", "2026-01-03T00:00:00Z");
-    git(src, &["checkout", "-q", "-"], "2026-01-04T00:00:00Z");
-    edit(src, "s/b.md", "main", "2026-01-04T00:00:00Z");
-    git(src, &["merge", "-q", "--no-edit", "side"], "2026-01-05T00:00:00Z");
-    assert_eq!(parity(src, &["s", "t"]), (vec![(3, 3), (0, 0)], true));
-}
-
-#[test]
-fn outside_a_worktree_history_is_absent_and_no_grade_is_stale() {
+fn outside_a_worktree_history_is_absent() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path();
     skill(src, "s");
-    write(&src.join(".grades/s/g.md"), "---\ndate: 2026-01-01\nscore: 7\n---\n");
     let w = World::new(src, &[]);
     assert!(w.inv.history.is_none() && w.inv.worktree.is_none());
-    let g = evals::load(&w.inv, "s").grades.pop().unwrap();
-    assert!(!g.stale());
 
     let v: serde_json::Value =
         serde_json::from_str(&report::unused(&w.input(&[]), Since::Days(60), true, false)).unwrap();
@@ -189,8 +98,11 @@ fn a_report_runs_one_log_and_one_status_whatever_the_skill_count() {
         let src = root.join("repo/skills");
         git(&root, &["init", "-q", "repo"], "2026-01-01T00:00:00Z");
         for i in 0..n {
-            skill(&src, &format!("s{i}"));
-            write(&src.join(format!(".grades/s{i}/g.md")), "---\ndate: 2026-01-01\nscore: 7\n---\n");
+            let name = format!("s{i}");
+            skill(&src, &name);
+            let hash = mazo::store::content_hash(&src.join(&name)).unwrap();
+            let grade = format!("---\ndate: 2026-01-01\nscore: 7\ncontent_hash: {hash}\n---\n");
+            write(&root.join(format!("xdg/mazo/evals/grades/{name}/g.md")), &grade);
         }
         commit(&root.join("repo"), "skills", "2026-01-01T00:00:00Z");
         write(&src.join("s0/notes.md"), "later");

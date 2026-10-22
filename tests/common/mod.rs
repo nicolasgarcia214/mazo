@@ -73,12 +73,14 @@ pub struct World {
 
 impl World {
     /// The inventory of `source` and one home per `(name, agent, first)` at
-    /// `<source>/<name>`, covered from `first` to NOW, under the default policy.
+    /// `<source>/<name>`, covered from `first` to NOW, under the default
+    /// policy, with grades and retros under `<source>/.evals`.
     pub fn new(source: &Path, homes: &[(&str, Agent, &str)]) -> World {
         let cfg = Config {
             source: Some(source.into()),
             loose: vec![],
             trusted: vec![],
+            evals_dir: source.join(".evals"),
             homes: homes.iter().map(|&(name, agent, _)| home(name, agent, &source.join(name))).collect(),
             policy: Default::default(),
             judge: None,
@@ -272,6 +274,13 @@ pub fn copy_tree(from: &Path, to: &Path, edit: &dyn Fn(String) -> String) {
 }
 
 /// Writes `text`, creating parent directories.
+/// The grade `<evals>/grades/<skill>/<date>.md` of `score`, recording the
+/// current content hash of `dir` when given.
+pub fn grade(evals: &Path, skill: &str, date: &str, score: &str, dir: Option<&Path>) {
+    let hash = dir.map_or(String::new(), |d| format!("content_hash: {}\n", mazo::store::content_hash(d).unwrap()));
+    write(&evals.join(format!("grades/{skill}/{date}.md")), &format!("---\ndate: {date}\nscore: {score}\n{hash}---\n"));
+}
+
 pub fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();

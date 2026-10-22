@@ -1,8 +1,7 @@
 //! One-pass git history of the source: one `git log` and one
-//! `git status` per report, from which every skill's first and last commit,
-//! `+N` and `+wip` are derived.
+//! `git status` per report, from which every skill's first and last commit
+//! and uncommitted changes are derived.
 
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -16,9 +15,6 @@ pub struct Commit {
     /// The committer date, strict ISO 8601 (`%cI`).
     pub date: String,
     pub subject: String,
-    /// Parents rewritten to the nearest commits in the log (`--parents`).
-    #[serde(skip)]
-    parents: Vec<String>,
     /// Source-relative paths changed against each parent (`-m`): one list for
     /// a plain commit, one per parent for a merge.
     #[serde(skip)]
@@ -48,10 +44,7 @@ impl History {
         let prefix = source.canonicalize().ok()?.strip_prefix(worktree).ok()?.to_path_buf();
         // Porcelain paths are relative to the worktree whatever the working directory.
         let status = git(source, &["status", "--porcelain", "-z", "--untracked-files=all", "--", "."])?;
-        let log = git(
-            source,
-            &["log", "--parents", "-m", "--relative", "--name-only", "--format=%H%x00%P%x00%cI%x00%s", "--", "."],
-        );
+        let log = git(source, &["log", "-m", "--relative", "--name-only", "--format=%H%x00%cI%x00%s", "--", "."]);
         Some(History { commits: parse_log(&log.unwrap_or_default()), dirty: parse_status(&status, &prefix) })
     }
 
@@ -75,46 +68,25 @@ impl History {
         self.commits.iter().find(|c| c.touches(Path::new(skill)))
     }
 
-    /// `+N`: commits and merges that touched `skill` and are not ancestors of
-    /// `G`, the last commit that touched `file` (source-relative), in the
-    /// source-wide rewritten graph. 0 when `file` was never committed.
-    pub fn since(&self, skill: &str, file: &Path) -> usize {
-        let Some(g) = self.commits.iter().find(|c| c.touches(file)) else {
-            return 0;
-        };
-        let by_hash: HashMap<&str, &Commit> = self.commits.iter().map(|c| (c.hash.as_str(), c)).collect();
-        let mut ancestors = HashSet::from([g.hash.as_str()]);
-        let mut stack = vec![g];
-        while let Some(c) = stack.pop() {
-            for p in &c.parents {
-                if ancestors.insert(p) {
-                    stack.extend(by_hash.get(p.as_str()));
-                }
-            }
-        }
-        self.commits.iter().filter(|c| !ancestors.contains(c.hash.as_str()) && c.touches(Path::new(skill))).count()
-    }
-
-    /// `+wip`: `skill` has uncommitted changes.
+    /// `skill` has uncommitted changes.
     pub fn wip(&self, skill: &str) -> bool {
         self.dirty.iter().any(|f| f.starts_with(skill))
     }
 }
 
-/// `%H%x00%P%x00%cI%x00%s` header lines, each followed by the file names of
+/// `%H%x00%cI%x00%s` header lines, each followed by the file names of
 /// one diff. `-m` repeats a merge's header once per parent.
 fn parse_log(log: &str) -> Vec<Commit> {
     let mut commits: Vec<Commit> = Vec::new();
     for line in log.lines().filter(|l| !l.is_empty()) {
         match line.split('\0').collect::<Vec<_>>()[..] {
-            [hash, _, _, _] if commits.last().is_some_and(|c| c.hash == hash) => {
+            [hash, _, _] if commits.last().is_some_and(|c| c.hash == hash) => {
                 commits.last_mut().unwrap().files.push(Vec::new());
             }
-            [hash, parents, date, subject] => commits.push(Commit {
+            [hash, date, subject] => commits.push(Commit {
                 hash: hash.into(),
                 date: date.into(),
                 subject: subject.into(),
-                parents: parents.split_whitespace().map(String::from).collect(),
                 files: vec![Vec::new()],
             }),
             _ => commits.last_mut().into_iter().filter_map(|c| c.files.last_mut()).for_each(|f| f.push(line.into())),
