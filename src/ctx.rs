@@ -252,9 +252,10 @@ mod tests {
         let (cfg, inv) = setup(tmp.path());
         write(&tmp.path().join("a/settings.json"), "{");
         write(&tmp.path().join("b/settings.json"), r#"{"skillOverrides": ["named"]}"#);
-        let ctx = Contexts::new(&cfg, &inv);
-        assert_eq!(ctx.of(&inv, "named", Scope::Global).cell(), "C●X●P●");
-        assert_eq!(ctx.of(&inv, "local", Scope::Global).cell(), "C×X●P●", "settings.local.json still reads");
+        assert_eq!(Contexts::new(&cfg, &inv).of(&inv, "named", Scope::Global).cell(), "C●X●P●");
+        let only_a = Config { homes: cfg.homes.into_iter().filter(|h| h.name != "b").collect(), ..cfg };
+        let local = Contexts::new(&only_a, &inv).of(&inv, "local", Scope::Global);
+        assert_eq!(local.cell(), "C×X●P●", "settings.local.json still reads");
     }
 
     #[test]
