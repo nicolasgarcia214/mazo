@@ -18,6 +18,10 @@ pub const USAGE_COLUMNS: [(&str, &str); 12] = [
     ("audit", "the latest audit's verdict, else the vet mazo add recorded, else not judged"),
 ];
 
+/// What the TUI's usage table does on a narrow terminal, said under its columns.
+pub const NARROW: &str = "on a narrow terminal some columns hide in priority order, 30d first, \
+    and slash and tool fold into via, shown as slash/tool such as 4/78";
+
 /// What each column of the unused list means, in its order.
 pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
     ("skill", "a skill with no strong load in the window"),
@@ -94,7 +98,7 @@ pub fn legend(html: bool) -> String {
 }
 
 /// The help as lines: Columns, the unused list's first when `unused_first`,
-/// then Marks and glyphs, then the FAQ. A heading has no indent, an entry two
+/// the usage list's followed by the [`NARROW`] note, then Marks and glyphs, then the FAQ. A heading has no indent, an entry two
 /// spaces, an answer four.
 pub fn lines(unused_first: bool) -> Vec<String> {
     let mut tables = [("usage", &USAGE_COLUMNS[..]), ("unused", &UNUSED_COLUMNS[..])];
@@ -105,6 +109,9 @@ pub fn lines(unused_first: bool) -> Vec<String> {
     for (table, columns) in tables {
         out.push(format!("  {table}"));
         out.extend(columns.iter().map(|(name, meaning)| format!("    {name}  {meaning}")));
+        if table == "usage" {
+            out.push(format!("    {NARROW}"));
+        }
     }
     out.extend(["".into(), "Marks and glyphs".into()]);
     out.extend(MARKS.iter().map(|(mark, meaning, _)| format!("  {mark}  {meaning}")));
@@ -134,5 +141,14 @@ mod tests {
         let first_table = |unused_first| lines(unused_first)[1].clone();
         assert_eq!(first_table(false), "  usage");
         assert_eq!(first_table(true), "  unused");
+    }
+
+    #[test]
+    fn the_narrow_note_follows_the_usage_columns() {
+        for unused_first in [false, true] {
+            let lines = lines(unused_first);
+            let audit = lines.iter().position(|l| l.starts_with("    audit  ")).unwrap();
+            assert_eq!(lines[audit + 1], format!("    {NARROW}"));
+        }
     }
 }
