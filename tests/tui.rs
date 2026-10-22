@@ -245,11 +245,12 @@ fn the_top_bar_shows_each_agents_tokens_in_context_and_warns_near_its_budget() {
     let (c, x, p) = (approx(tokens.claude), approx(tokens.codex), approx(tokens.pi));
     let bar = format!("~{} tok in context: C {c} · X {x} · P {p}", approx(tokens.total()));
     // The top bar's text, and the colour of the value after `letter `.
-    let top = |golden: &Golden| {
-        let (text, colours) = draw(&mut app(&golden.world.input(&golden.events)), 250, 30).swap_remove(0);
+    let top_at = |golden: &Golden, width| {
+        let (text, colours) = draw(&mut app(&golden.world.input(&golden.events)), width, 30).swap_remove(0);
         let at = |letter: &str| colours[text[..text.rfind(&format!("{letter} ")).unwrap()].chars().count() + 2];
         (text.clone(), [at("C"), at("X"), at("P")])
     };
+    let top = |golden: &Golden| top_at(golden, 250);
     let (text, colours) = top(&golden);
     assert!(text.ends_with(&bar), "{text:?}");
     assert_eq!(colours, [mazo::theme::ACCENT; 3]);
@@ -257,6 +258,11 @@ fn the_top_bar_shows_each_agents_tokens_in_context_and_warns_near_its_budget() {
     golden.world.cfg.context_window = tokens.claude * 125;
     assert!(tokens.codex * 125 < golden.world.cfg.context_window * 2);
     assert_eq!(top(&golden).1, [mazo::theme::WARN, mazo::theme::ACCENT, mazo::theme::ACCENT]);
+    // At 80 columns the label shortens and every agent's value and colour stay in view.
+    let (text, colours) = top_at(&golden, 80);
+    assert!(text.ends_with(&format!("~{} tok: C {c} · X {x} · P {p}", approx(tokens.total()))), "{text:?}");
+    assert!(text.contains("window 30d"), "{text:?}");
+    assert_eq!(colours, [mazo::theme::WARN, mazo::theme::ACCENT, mazo::theme::ACCENT]);
     golden.world.cfg.context_window = 1;
     assert_eq!(top(&golden).1, [mazo::theme::WARN, mazo::theme::WARN, mazo::theme::ACCENT], "Pi never warns");
 }

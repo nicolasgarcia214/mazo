@@ -11,7 +11,8 @@ but what an action writes, and it re-reads the data after each action.
 The top bar shows the view, the number of listed skills, the name filter, the
 window, any agent, channel or authoring filter that is set, and the
 approximate tokens the skill descriptions in context cost each agent, such as
-`~2.5k tok in context: C 400 · X 2.1k · P 0`. An agent's total turns the
+`~2.5k tok in context: C 400 · X 2.1k · P 0` at the right edge, shortened to
+`~2.5k tok: …` on a narrow terminal. An agent's total turns the
 warning colour at 80% of its listing budget; the help's FAQ explains the
 budgets. The footer
 lists the keys that work on the current screen; while a dialog is open, it

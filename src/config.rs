@@ -217,6 +217,9 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
             path.display()
         )));
     }
+    if raw.context_window == Some(0) {
+        return Err(Error::Usage(format!("{}: context_window must be a positive number of tokens", path.display())));
+    }
     if let Some(judge) = &raw.judge {
         judge.check().map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
     }
@@ -542,6 +545,9 @@ mod tests {
         };
         assert_eq!(window(""), 200_000);
         assert_eq!(window("context_window = 1000000\n"), 1_000_000);
+        fs::write(&path, "evals_dir = \".\"\ncontext_window = 0\n").unwrap();
+        let err = load(&path).unwrap_err().to_string();
+        assert!(err.ends_with("context_window must be a positive number of tokens"), "{err}");
     }
 
     fn judge(table: &str) -> std::result::Result<Option<Judge>, String> {

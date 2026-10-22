@@ -140,7 +140,7 @@ description counts its name and description, a name-only one its name. Claude
 lists skills within 1% of the window and Codex within 2%, and past that
 budget an agent trims the descriptions without saying so. An agent's total
 turns the warning colour at 80% of its budget. Pi has no budget. One window
-covers every agent.
+covers every agent. A `context_window` of 0 is a usage error.
 
 ## `[policy]`
 

@@ -98,7 +98,8 @@ impl Tokens {
     /// out of `context_window`: 1% for Claude, 2% for Codex, none for Pi.
     pub fn agents(&self, context_window: usize) -> [(Agent, usize, bool); 3] {
         // 80% of `percent`% of the window.
-        let near = |tokens: usize, percent: usize| 100 * 5 * tokens >= context_window * percent * 4;
+        let near =
+            |tokens: usize, percent: usize| tokens.saturating_mul(500) >= context_window.saturating_mul(percent * 4);
         [
             (Agent::Claude, self.claude, near(self.claude, 1)),
             (Agent::Codex, self.codex, near(self.codex, 2)),
@@ -108,9 +109,10 @@ impl Tokens {
 }
 
 /// `n` tokens as the top bar shows them: whole under 1000, else thousands
-/// to one decimal, `2.5k`.
+/// to the nearest tenth, halves up, `2.5k`.
 pub fn approx(n: usize) -> String {
-    if n < 1000 { n.to_string() } else { format!("{:.1}k", n as f64 / 1000.0) }
+    let tenths = n.saturating_add(50) / 100;
+    if n < 1000 { n.to_string() } else { format!("{}.{}k", tenths / 10, tenths % 10) }
 }
 
 /// What every skill's [`Ctx`] reads, read once: the homes each skill is
@@ -361,10 +363,13 @@ mod tests {
         assert_eq!(near(1599, 3199, 1_000_000), [false, false, false]);
         assert_eq!(near(1600, 3200, 0), [true, true, false]);
         assert_eq!(Tokens { claude: 8, codex: 0, pi: 0 }.agents(1000)[0], (Agent::Claude, 8, true));
+        let huge = Tokens { claude: usize::MAX, codex: 1, pi: 0 }.agents(usize::MAX);
+        assert_eq!(huge.map(|(_, _, near)| near), [true, false, false], "saturates instead of overflowing");
     }
 
     #[test]
     fn approx_shows_whole_tokens_under_1000_and_thousands_to_one_decimal_from_it() {
-        assert_eq!([0, 400, 999, 1000, 2460, 12_345].map(approx), ["0", "400", "999", "1.0k", "2.5k", "12.3k"]);
+        let shown = [0, 400, 999, 1000, 1049, 1050, 1150, 2460, 12_345].map(approx);
+        assert_eq!(shown, ["0", "400", "999", "1.0k", "1.0k", "1.1k", "1.2k", "2.5k", "12.3k"]);
     }
 }
