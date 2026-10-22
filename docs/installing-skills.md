@@ -32,10 +32,11 @@ root instead (see [project skills](project-skills.md)).
   The skill is `<path>` at `<ref>`, which `mazo.lock` records as `ref`. Since a
   branch or tag may hold `/`, mazo runs `git ls-remote` on the repository before
   cloning and takes the longest branch or tag that the URL's segments start
-  with; failing that, a full 40-hex commit id is cloned as that commit, which
-  needs git 2.49 or later.
+  with; failing that, a full 40-hex commit id is fetched as that commit. A
+  query or fragment the browser added (`?plain=1`, `#L1`) is dropped.
 
-A git URL or GitHub shorthand containing `?`, `#` or `\` is a usage error.
+Any other git URL, or GitHub shorthand, containing `?`, `#` or `\` is a usage
+error.
 
 The recorded origin drops a trailing `/` and ends in `.git` (except a `file://`
 URL), so `https://github.com/owner/repo` and `owner/repo` record the same one.

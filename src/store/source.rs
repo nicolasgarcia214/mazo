@@ -1,6 +1,7 @@
 //! Where a skill comes from: a [`Source`] parsed, a [`Remote`]'s host,
 //! trust and ref, and its shallow clone into a [`Scratch`] directory.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -35,18 +36,18 @@ impl Source {
     /// A path that exists or starts with `.`, `/` or `~` is local. Otherwise
     /// `scheme://…` and `[user@]host:path` are git URLs, and `owner/repo[/sub]`
     /// is a GitHub repository. In a URL the subpath follows the first
-    /// segment ending in `.git`, except in a GitHub browser URL,
-    /// `https://github.com/owner/repo/tree/<ref>/<path>` or
-    /// `…/blob/<ref>/<path>/SKILL.md`, which names `<path>` at `<ref>`; a ref
-    /// may hold `/`, so that split is a guess until [`Remote::resolve`]. A
-    /// git source holding `?`, `#` or `\` is refused: git could fetch from
-    /// another host than the one trust checks.
+    /// segment ending in `.git`, except in a GitHub browser URL
+    /// ([`github_browser_url`]). Any other git source holding `?`, `#` or `\`
+    /// is refused: git could fetch from another host than the one trust checks.
     pub(super) fn parse(arg: &str) -> std::result::Result<Source, String> {
         if arg.starts_with('-') {
             return Err("a source must not start with -".into());
         }
         if arg.starts_with(['.', '/', '~']) || Path::new(arg).exists() {
             return Ok(Source::Local(arg.into()));
+        }
+        if let Some(browsed) = github_browser_url(arg) {
+            return browsed;
         }
         if arg.contains(['?', '#', '\\']) {
             return Err(format!("a git source must not contain ?, # or \\: {arg:?}"));
@@ -66,19 +67,6 @@ impl Source {
             return Remote::new(url, path, &segments[2..]).map(Source::Git).ok_or_else(bad);
         };
         let segments: Vec<&str> = segments.into_iter().filter(|s| !s.is_empty()).collect();
-        if base.eq_ignore_ascii_case("https://github.com/")
-            && let [owner, repo, kind @ ("tree" | "blob"), tail @ ..] = segments.as_slice()
-        {
-            let tail = match (*kind, tail) {
-                ("tree", _) => tail,
-                (_, [dir @ .., "SKILL.md"]) => dir,
-                _ => return Err(format!("a GitHub blob URL must name a SKILL.md: {arg:?}")),
-            };
-            let url = format!("https://github.com/{owner}/{repo}.git");
-            return Remote::browsed(url, vec![owner.to_string(), repo.to_string()], tail)
-                .map(Source::Git)
-                .ok_or_else(bad);
-        }
         let cut = segments.iter().position(|s| s.ends_with(".git")).map_or(segments.len(), |i| i + 1);
         let mut url = format!("{base}{}", segments[..cut].join("/"));
         // One origin per repository; a `file://` path names the directory as it is.
@@ -89,6 +77,31 @@ impl Source {
         let path = segments[..cut].iter().map(|s| s.strip_suffix(".git").unwrap_or(s).to_string()).collect();
         Remote::new(url, path, &segments[cut..]).map(Source::Git).ok_or_else(bad)
     }
+}
+
+/// A GitHub browser URL, `https://github.com/owner/repo/tree/<ref>/<path>`
+/// or `…/blob/<ref>/<path>/SKILL.md`, naming `<path>` at `<ref>`, its query
+/// or fragment (`?plain=1`, `#L1`) dropped; `None` for any other source. A
+/// ref may hold `/`, so the split of `<ref>/<path>` is a guess until
+/// [`Remote::resolve`].
+fn github_browser_url(arg: &str) -> Option<std::result::Result<Source, String>> {
+    const GITHUB: &str = "https://github.com/";
+    let url = arg.split(['?', '#']).next()?;
+    let rest = url.get(GITHUB.len()..).filter(|_| url[..GITHUB.len()].eq_ignore_ascii_case(GITHUB))?;
+    if rest.contains('\\') {
+        return None;
+    }
+    let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+    let [owner, repo, kind @ ("tree" | "blob"), tail @ ..] = segments.as_slice() else { return None };
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    let tail = match (*kind, tail) {
+        ("tree", _) => tail,
+        (_, [dir @ .., "SKILL.md"]) => dir,
+        _ => return Some(Err(format!("a GitHub blob URL must name a SKILL.md: {arg:?}"))),
+    };
+    let url = format!("https://github.com/{owner}/{repo}.git");
+    let remote = Remote::browsed(url, vec![owner.to_string(), repo.to_string()], tail);
+    Some(remote.map(Source::Git).ok_or_else(|| format!("not a GitHub tree or blob URL with a ref: {arg:?}")))
 }
 
 impl Remote {
@@ -115,7 +128,7 @@ impl Remote {
     pub(super) fn resolve(&mut self, cancel: &dyn Fn() -> bool) -> Result<()> {
         let (true, Some(guess)) = (self.browsed, &self.r#ref) else { return Ok(()) };
         let tail = Path::new(guess).join(&self.subpath);
-        let listed = self.git(&["ls-remote", "--refs", "--heads", "--tags"], None, cancel)?;
+        let listed = self.git(None, &[&"ls-remote", &"--refs", &"--heads", &"--tags", &"--", &self.url], cancel)?;
         let listed = String::from_utf8_lossy(&listed);
         let names = listed.lines().filter_map(|line| {
             let name = line.split_once('\t')?.1;
@@ -164,21 +177,34 @@ impl Remote {
 
     /// Shallow-clones the repository at its ref into `into` and returns the commit.
     pub(super) fn clone_into(&self, into: &Path, cancel: &dyn Fn() -> bool) -> Result<String> {
-        let mut args = vec!["clone", "--depth", "1", "--quiet"];
-        if let Some(r#ref) = &self.r#ref {
-            args.extend([if is_commit(r#ref) { "--revision" } else { "--branch" }, r#ref]);
+        if let Some(sha) = self.r#ref.as_ref().filter(|r| is_commit(r)) {
+            // `clone --branch` takes no commit, and `--revision` needs git
+            // 2.49, so a commit is fetched alone into an empty repository.
+            self.git(None, &[&"init", &"--quiet", &"--", &into], cancel)?;
+            self.git(Some(into), &[&"fetch", &"--depth", &"1", &"--quiet", &"--", &self.url, sha], cancel)?;
+            self.git(Some(into), &[&"checkout", &"--quiet", &"--detach", &"FETCH_HEAD"], cancel)?;
+        } else {
+            let mut clone: Vec<&dyn AsRef<OsStr>> = vec![&"clone", &"--depth", &"1", &"--quiet"];
+            if let Some(branch) = &self.r#ref {
+                clone.extend([&"--branch" as &dyn AsRef<OsStr>, branch]);
+            }
+            clone.extend([&"--" as &dyn AsRef<OsStr>, &self.url, &into]);
+            self.git(None, &clone, cancel)?;
         }
-        self.git(&args, Some(into), cancel)?;
         let head = crate::inventory::git(into, &["rev-parse", "HEAD"]);
         head.map(|h| h.trim().to_string()).ok_or_else(|| format!("{}: no HEAD commit", self.url).into())
     }
 
-    /// The stdout of `git <args…> -- <url> [<into>]`. Neither git nor ssh may
-    /// prompt, unless the user's `GIT_SSH_COMMAND` says so. It is killed once
-    /// `cancel` turns true, or after [`CLONE_LIMIT`].
-    fn git(&self, args: &[&str], into: Option<&Path>, cancel: &dyn Fn() -> bool) -> Result<Vec<u8>> {
+    /// The stdout of `git <args…>`, run in `dir` when there is one. Neither
+    /// git nor ssh may prompt, unless the user's `GIT_SSH_COMMAND` says so.
+    /// It is killed once `cancel` turns true, or after [`CLONE_LIMIT`].
+    fn git(&self, dir: Option<&Path>, args: &[&dyn AsRef<OsStr>], cancel: &dyn Fn() -> bool) -> Result<Vec<u8>> {
+        let verb = args[0].as_ref().to_string_lossy();
         let mut git = std::process::Command::new("git");
-        git.args(args).arg("--").arg(&self.url).args(into).env("GIT_TERMINAL_PROMPT", "0");
+        git.args(args).env("GIT_TERMINAL_PROMPT", "0");
+        if let Some(dir) = dir {
+            git.current_dir(dir);
+        }
         if std::env::var_os("GIT_SSH_COMMAND").is_none() {
             git.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
         }
@@ -189,13 +215,11 @@ impl Remote {
                 return Err(audit::CANCELLED.into());
             }
             let minutes = CLONE_LIMIT.as_secs() / 60;
-            return Err(
-                format!("git {} {}: not done within {minutes} minutes; it was killed", args[0], self.url).into()
-            );
+            return Err(format!("git {verb} {}: not done within {minutes} minutes; it was killed", self.url).into());
         };
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(format!("git {} {}: {}", args[0], self.url, stderr.trim()).into());
+            return Err(format!("git {verb} {}: {}", self.url, stderr.trim()).into());
         }
         Ok(out.stdout)
     }
@@ -297,6 +321,11 @@ mod tests {
             // Until resolved, a ref holding `/` is cut at its first segment.
             ("https://github.com/mattpocock/skills/tree/release/v2/skills/x/", "release", "v2/skills/x"),
             (&format!("https://github.com/mattpocock/skills/tree/{sha}/skills/x"), sha, "skills/x"),
+            // A browser's query or fragment, and a `.git` on the repository, are dropped.
+            ("https://github.com/mattpocock/skills/blob/main/skills/x/SKILL.md#L1", "main", "skills/x"),
+            ("https://github.com/mattpocock/skills/blob/main/skills/x/SKILL.md?plain=1#L2", "main", "skills/x"),
+            ("https://github.com/mattpocock/skills/tree/main/skills/x?tab=readme", "main", "skills/x"),
+            ("https://github.com/mattpocock/skills.git/tree/main/skills/x", "main", "skills/x"),
         ] {
             let r = remote(arg);
             assert_eq!(
@@ -315,6 +344,11 @@ mod tests {
             "https://github.com/o/r/tree",
             "https://github.com/o/r/tree/../x",
             "https://github.com/o/r/tree/main/a/../b",
+            "https://github.com/o/r/tree/main/x\\y",
+            // A query or fragment is dropped only from a tree or blob URL on github.com.
+            "https://github.com/o/r#x",
+            "https://github.com.evil.example/o/r/tree/main#x",
+            "https://evil.example#@github.com/o/r/tree/main/x",
         ] {
             assert!(Source::parse(arg).is_err(), "{arg}");
         }

@@ -894,6 +894,17 @@ fn a_github_tree_url_installs_its_ref_and_update_follows_it() {
 fn a_github_blob_url_at_a_commit_installs_that_commit_and_stays_there() {
     let mut fx = git_fixture();
     let file = github_pack(&mut fx);
+    // A git before 2.49, which has no `clone --revision`.
+    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|d| d.join("git")).find(|p| p.is_file());
+    let shim = fx.root.join("bin/git");
+    common::write(
+        &shim,
+        &format!(
+            "#!/bin/sh\nfor a; do [ \"$a\" = --revision ] && {{ echo 'unknown option' >&2; exit 129; }}; done\nexec '{}' \"$@\"\n",
+            git.unwrap().display()
+        ),
+    );
+    fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let sha = head(&file);
     push_change(&fx, "pack", "skills/theirs/SKILL.md", "---\nname: theirs\ndescription: later.\n---\n");
     let url = format!("https://github.com/acme/pack/blob/{sha}/skills/theirs/SKILL.md");
