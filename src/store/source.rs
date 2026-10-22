@@ -21,7 +21,7 @@ pub(super) struct Remote {
     /// The clone URL, without the subpath.
     pub(super) url: String,
     /// The URL's path segments, `.git` dropped from the last: owner, repo, ….
-    pub(super) path: Vec<String>,
+    path: Vec<String>,
     /// The directory inside the repository; empty for its root.
     pub(super) subpath: PathBuf,
 }
