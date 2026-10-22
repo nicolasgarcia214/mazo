@@ -254,7 +254,7 @@ fn a_narrow_terminal_drops_columns_from_the_right_and_keeps_skill_and_sess() {
     let mut app = app(&input);
     let screen = text(&mut app, 60, 30);
     let keys = screen.iter().rev().take_while(|l| !l.starts_with("usage · ")).flat_map(|l| l.split(" · ")).count();
-    assert_eq!(keys, 14, "every key shows: {screen:#?}");
+    assert_eq!(keys, 15, "every key shows: {screen:#?}");
     let header: Vec<&str> = screen[0].split_whitespace().collect();
     assert_eq!(header[..2], ["skill", "sess"]);
     assert!(!header.contains(&"grade"), "{screen:#?}");
@@ -317,6 +317,8 @@ impl Actions {
             yes: false,
             force: false,
             project: false,
+            pane: None,
+            asks: None,
         };
         store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
         fx
@@ -561,6 +563,8 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
         yes: false,
         force: false,
         project: false,
+        pane: None,
+        asks: None,
     };
     store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
     let now: jiff::Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
@@ -782,6 +786,8 @@ impl Actions {
             yes: false,
             force: false,
             project: false,
+            pane: None,
+            asks: None,
         };
         store::add(&self.cfg, &self.inv(), &self.data, &args).unwrap();
         if !trusted {
@@ -1087,4 +1093,278 @@ fn quitting_bare_mazo_mid_audit_kills_the_judge_and_restores_the_terminal() {
     assert!(out.ends_with(b"\x1b[?1049l\x1b[?25h"), "{:?}", String::from_utf8_lossy(&out));
     let pid = pids();
     assert!(!alive(pid.trim()), "the judge outlived mazo");
+}
+
+impl Actions {
+    /// A bare repository `origin/<name>.git` holding each of `skills` in a
+    /// child directory, and its `file://` URL.
+    fn repo_of(&self, name: &str, skills: &[&str]) -> String {
+        let root = self.data.parent().unwrap();
+        let work = root.join("work").join(name);
+        for skill in skills {
+            common::write(
+                &work.join(skill).join("SKILL.md"),
+                &format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\n"),
+            );
+        }
+        common::git(&work, &["init", "-q"], common::NOW);
+        common::git(&work, &["add", "."], common::NOW);
+        common::git(&work, &["commit", "-q", "-m", "skills"], common::NOW);
+        let bare = root.join("origin").join(format!("{name}.git"));
+        common::git(&work, &["clone", "-q", "--bare", ".", &bare.display().to_string()], common::NOW);
+        format!("file://{}", bare.display())
+    }
+
+    fn locked(&self, name: &str) -> Option<store::Locked> {
+        store::Lock::load(&self.data).unwrap().skills.into_iter().find(|l| l.name == name)
+    }
+}
+
+/// Opens the add dialog and submits `source`.
+fn add(app: &mut App, source: &str) {
+    press(app, KeyCode::Char('i'));
+    typed(app, source);
+    press(app, KeyCode::Enter);
+}
+
+/// Ticks `app` until a screen line contains `line`, for at most 20 seconds: that screen.
+fn shown(app: &mut App, line: &str) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        app.tick();
+        let screen = text(app, 200, 30);
+        if screen.iter().any(|l| l.contains(line)) {
+            return screen;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {line:?}: {screen:#?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn i_adds_an_untrusted_skill_after_the_call_count_and_the_verdict_dialog() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("theirs");
+    let mut app = fx.app();
+    press(&mut app, KeyCode::Char('i'));
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains("add a skill from a local path, a git URL or owner/repo[/path]:")));
+    assert!(screen.iter().any(|l| l == "Enter add · Esc cancels"), "{screen:#?}");
+    typed(&mut app, &url);
+    assert!(text(&mut app, 200, 30).iter().any(|l| l.contains(&format!("> {url}_"))));
+    press(&mut app, KeyCode::Enter);
+    assert!(app.busy());
+
+    let screen = shown(&mut app, "make 1 judge call? [y/N]");
+    assert!(screen.iter().any(|l| l.contains("vetting 1 skill makes 1 judge call")), "{screen:#?}");
+    assert!(fx.pids().is_empty(), "no judge call before the count is agreed to");
+    press(&mut app, KeyCode::Char('y'));
+    let screen = shown(&mut app, "install theirs? [Y/n]");
+    assert!(screen.iter().any(|l| l.contains("vet theirs: quality good, value worth trying")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "Enter yes · y yes · n/Esc no · q quit"), "{screen:#?}");
+    // Any key but Enter, y, n, Esc and q leaves the question open.
+    press(&mut app, KeyCode::Char('x'));
+    assert!(text(&mut app, 200, 30).iter().any(|l| l.contains("install theirs? [Y/n]")));
+    press(&mut app, KeyCode::Enter);
+    until(&mut app, |app| !app.busy());
+
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(&format!(" add {url} · done · Esc closes "))), "{screen:#?}");
+    let to = store::dir(&fx.data).join("theirs");
+    assert!(screen.iter().any(|l| l.contains(&format!("installed {}", to.display()))), "{screen:#?}");
+    assert!(to.join("SKILL.md").is_file());
+    let entry = fx.locked("theirs").unwrap();
+    assert!(!entry.trusted);
+    assert_eq!(entry.r#for.as_deref(), Some("Tidies notes."));
+    assert!(fx.linked("theirs"));
+    assert_eq!(fx.pids().len(), 1);
+    // The data was re-read: the usage table lists the new skill.
+    assert!(rows(&screen).iter().any(|l| l.split_whitespace().next() == Some("theirs")), "{screen:#?}");
+}
+
+#[test]
+fn n_on_the_verdict_installs_nothing() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("theirs");
+    let before = fx.disk();
+    let mut app = fx.app();
+    add(&mut app, &url);
+    shown(&mut app, "make 1 judge call? [y/N]");
+    press(&mut app, KeyCode::Char('y'));
+    shown(&mut app, "install theirs? [Y/n]");
+    press(&mut app, KeyCode::Char('n'));
+    until(&mut app, |app| !app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(&format!(" add {url} · failed · Esc closes "))), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("add declined; nothing was installed")), "{screen:#?}");
+    assert_eq!(fx.disk(), before);
+    assert_eq!(fx.locked("theirs"), None);
+    assert_eq!(fx.pids().len(), 1);
+}
+
+#[test]
+fn the_picker_in_a_dialog_installs_only_the_skill_selected() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo_of("pack", &["one", "two"]);
+    let mut app = fx.app();
+    add(&mut app, &url);
+    let screen = shown(&mut app, "install from this source: 0 of 2 selected");
+    assert!(screen.iter().any(|l| l.contains("[ ] two") && l.contains("The two skill.")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "add: pick the skills to install"), "{screen:#?}");
+    for key in [KeyCode::Down, KeyCode::Char(' '), KeyCode::Enter] {
+        press(&mut app, key);
+    }
+    shown(&mut app, "make 1 judge call? [y/N]");
+    press(&mut app, KeyCode::Char('y'));
+    shown(&mut app, "install two? [Y/n]");
+    press(&mut app, KeyCode::Char('y'));
+    until(&mut app, |app| !app.busy());
+    assert_eq!(fx.locked("two").map(|l| l.subpath), Some("two".into()));
+    assert_eq!(fx.locked("one"), None);
+    assert!(!store::dir(&fx.data).join("one").exists());
+    assert_eq!(fx.pids().len(), 1);
+}
+
+#[test]
+fn declining_the_call_count_makes_no_judge_call_and_installs_nothing() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("theirs");
+    let before = fx.disk();
+    let mut app = fx.app();
+    add(&mut app, &url);
+    shown(&mut app, "make 1 judge call? [y/N]");
+    // Enter takes the default, No.
+    press(&mut app, KeyCode::Enter);
+    until(&mut app, |app| !app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains("add declined; nothing was installed")), "{screen:#?}");
+    assert!(fx.pids().is_empty());
+    assert_eq!(fx.disk(), before);
+}
+
+#[test]
+fn a_trusted_source_installs_without_a_confirmation_or_a_judge_call() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("ours");
+    // A `file://` URL's owner is the first segment of its path.
+    fx.cfg.trusted = vec![url.trim_start_matches("file:///").split('/').next().unwrap().to_string()];
+    let mut app = fx.app();
+    add(&mut app, &url);
+    until(&mut app, |app| !app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(&format!(" add {url} · done · Esc closes "))), "{screen:#?}");
+    assert!(fx.locked("ours").unwrap().trusted);
+    assert!(fx.pids().is_empty());
+}
+
+#[test]
+fn i_with_no_judge_shows_the_refusal_and_starts_nothing() {
+    let fx = Actions::new(true);
+    let url = fx.repo("theirs");
+    let before = fx.disk();
+    let mut app = fx.app();
+    add(&mut app, &url);
+    assert!(!app.busy());
+    let screen = text(&mut app, 200, 60);
+    assert!(screen.iter().any(|l| l.contains("vetting it needs a [judge], which the config lacks")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("agent = \"command\"")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "any key closes"), "{screen:#?}");
+    // Esc cancels the source dialog.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('i'));
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.busy());
+    assert_eq!(fx.disk(), before);
+}
+
+#[test]
+fn quitting_during_an_add_kills_the_judge_and_installs_nothing() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("theirs");
+    common::write(&fx.data.parent().unwrap().join("hang"), "");
+    let before = fx.disk();
+    let mut app = fx.app();
+    add(&mut app, &url);
+    shown(&mut app, "make 1 judge call? [y/N]");
+    press(&mut app, KeyCode::Char('y'));
+    until(&mut app, |_| !fx.pids().is_empty());
+    let pid = fx.pids()[0].clone();
+    press(&mut app, KeyCode::Char('i'));
+    let busy = format!("the add of {url} is running; one job at a time");
+    assert!(text(&mut app, 200, 30).iter().any(|l| l.contains(&busy)));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('q'));
+    let ask = format!("the add of {url} is running; stop its judge and quit?");
+    assert!(text(&mut app, 200, 30).iter().any(|l| l.contains(&ask)));
+    assert!(!press(&mut app, KeyCode::Char('y')));
+    assert!(!alive(&pid), "the judge outlived the TUI");
+    assert_eq!(fx.disk(), before);
+}
+
+#[test]
+fn q_on_the_verdict_answers_no_and_asks_to_quit() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("theirs");
+    let before = fx.disk();
+    let mut app = fx.app();
+    add(&mut app, &url);
+    shown(&mut app, "make 1 judge call? [y/N]");
+    press(&mut app, KeyCode::Char('y'));
+    shown(&mut app, "install theirs? [Y/n]");
+    press(&mut app, KeyCode::Char('q'));
+    shown(&mut app, "stop its judge and quit?");
+    // Not quitting leaves the add to end on its No.
+    press(&mut app, KeyCode::Char('n'));
+    until(&mut app, |app| !app.busy());
+    assert!(text(&mut app, 200, 30).iter().any(|l| l.contains("add declined; nothing was installed")));
+    assert_eq!(fx.disk(), before);
+}
+
+#[test]
+fn a_paste_inserts_its_text_without_submitting_and_a_long_source_shows_its_tail() {
+    let fx = Actions::new(true);
+    let mut app = fx.app();
+    press(&mut app, KeyCode::Char('i'));
+    app.paste("owner/\r\nrepo\n");
+    assert!(!app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains("> owner/repo_")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "Enter add · Esc cancels"), "{screen:#?}");
+    let long = format!("https://example.com/{}/tail-end", "x".repeat(100));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('i'));
+    app.paste(&long);
+    let screen = text(&mut app, 60, 30);
+    let line = screen.iter().find(|l| l.contains("tail-end_")).unwrap_or_else(|| panic!("{screen:#?}"));
+    assert!(line.contains('…') && !line.contains("https"), "{line}");
+    // Outside the source dialog a paste does nothing.
+    press(&mut app, KeyCode::Esc);
+    app.paste("q");
+    assert_eq!(app.screen(), Screen::Usage);
+}
+
+#[test]
+fn capital_y_accepts_the_verdict_and_a_ctrl_or_alt_chord_answers_nothing() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("theirs");
+    let mut app = fx.app();
+    add(&mut app, &url);
+    shown(&mut app, "make 1 judge call? [y/N]");
+    press(&mut app, KeyCode::Char('Y'));
+    shown(&mut app, "install theirs? [Y/n]");
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        app.key(KeyEvent::new(KeyCode::Char('n'), modifiers));
+        assert!(text(&mut app, 200, 30).iter().any(|l| l.contains("install theirs? [Y/n]")), "{modifiers:?}");
+    }
+    app.key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT));
+    until(&mut app, |app| !app.busy());
+    assert!(fx.locked("theirs").is_some());
 }

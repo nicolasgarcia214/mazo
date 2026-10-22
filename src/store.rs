@@ -9,6 +9,7 @@ use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Stdio};
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -260,13 +261,49 @@ pub struct Add<'a> {
     pub force: bool,
     /// Install into the project at the current directory's git root.
     pub project: bool,
+    /// The TUI's job pane: what the add reports, and its judge's progress,
+    /// go there instead of to stdout and stderr.
+    pub pane: Option<&'a Pane>,
+    /// The TUI's dialogs, which take the picker and the y/N questions in
+    /// place of the terminal.
+    pub asks: Option<&'a mpsc::Sender<Question>>,
 }
 
 impl Add<'_> {
     /// What the vet gate may assume for this add.
-    fn consent(&self) -> Consent {
-        Consent { update: false, yes: self.yes, force: self.force }
+    fn consent(&self) -> Consent<'_> {
+        Consent { update: false, yes: self.yes, force: self.force, asks: self.asks }
     }
+}
+
+/// A question the TUI's add job puts to the main loop, which answers it in a
+/// dialog. A dialog closed without a reply is No, or nothing picked.
+pub enum Question {
+    /// The skills picked from each one's name and description.
+    Pick(Vec<(String, String)>, mpsc::Sender<Vec<String>>),
+    /// `lines`, then `prompt` ending in `[Y/n]` or `[y/N]`: Enter takes `default`.
+    YesNo { lines: Vec<String>, prompt: String, default: bool, reply: mpsc::Sender<bool> },
+}
+
+/// `arg` parsed, and whether it installs without vetting: with `trust`, or
+/// as a git source on the `trusted` list. An untrusted source with no
+/// `[judge]` is refused, naming the judges to add ([`no_judge`]).
+fn resolve(cfg: &Config, arg: &str, trust: bool) -> Result<(Source, bool)> {
+    let source = Source::parse(arg).map_err(|e| Error::Usage(format!("add {arg}: {e}")))?;
+    let trusted = trust || matches!(&source, Source::Git(r) if r.trusted_by(&cfg.trusted));
+    if !trusted && cfg.judge.is_none() {
+        return Err(Error::Usage(format!(
+            "add refused: {arg} is not on the trust list and vetting it needs a [judge], which the config lacks; \
+             pass --trust to install it without vetting\n{}",
+            no_judge()
+        )));
+    }
+    Ok((source, trusted))
+}
+
+/// The refusal `mazo add <arg>` gives before reading the source, if any.
+pub fn precheck(cfg: &Config, arg: &str) -> Result<()> {
+    resolve(cfg, arg, false).map(drop)
 }
 
 /// What `add` reads skills from: the source resolved, and cloned when it is a repository.
@@ -297,23 +334,16 @@ struct Fetched<'a> {
 /// else, and the vet sees the project's skills too.
 pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<ExitCode> {
     let project = if args.project { Some(project_root()?) } else { None };
-    let arg = args.source;
+    let (arg, out) = (args.source, Out(args.pane));
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
-    let source = Source::parse(arg).map_err(usage)?;
-    let trusted = args.trust || matches!(&source, Source::Git(r) if r.trusted_by(&cfg.trusted));
+    let (source, trusted) = resolve(cfg, arg, args.trust)?;
     // The judge is set up, and its login checked, before anything is cloned.
     let backend = match &cfg.judge {
-        _ if trusted => None,
-        None => {
-            return Err(Error::Usage(format!(
-                "add refused: {arg} is not on the trust list and vetting it needs a [judge], which the config lacks; \
-                 pass --trust to install it without vetting\n{}",
-                no_judge()
-            )));
-        }
-        Some(judge) => Some((judge, audit::backend(judge, &cfg.homes)?)),
+        Some(judge) if !trusted => Some((judge, audit::backend(judge, &cfg.homes)?)),
+        _ => None,
     };
-    let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: None });
+    let caller =
+        backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: args.pane });
     if let Some(c) = &caller {
         // `--all` shows its call count first, so it asks once the source is read.
         if !args.all {
@@ -334,7 +364,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
             fs::create_dir_all(data).map_err(|e| err(data, e))?;
             let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
             let _ = fs::remove_dir_all(clone);
-            let commit = remote.clone_into(clone, &|| false)?;
+            let commit = remote.clone_into(clone, &|| out.cancelled())?;
             (clone.join(&remote.subpath), remote.url.clone(), remote.subpath.clone(), Some(commit), remote.name())
         }
     };
@@ -342,10 +372,11 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     let from = Fetched { root, origin, subpath, commit, own, clone, trusted };
     let children = skills_in(&from.root, &from.own, args)?;
     if children.is_empty() {
-        println!("nothing selected; nothing was installed");
+        out.line("nothing selected; nothing was installed");
     }
-    if caller.is_some() && args.all {
-        confirm_calls(children.len(), args.consent())?;
+    // The TUI shows the count for any untrusted add, since its picker can select several.
+    if caller.is_some() && !children.is_empty() && (args.all || args.asks.is_some()) {
+        confirm_calls(children.len(), args.consent(), out)?;
     }
     let mut inv = match &project {
         Some(p) => {
@@ -362,8 +393,12 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     let target = Target { data, project: project.as_deref() };
     let mut code = 0;
     for child in children {
+        // A cancelled job starts nothing more.
+        if out.cancelled() {
+            return Err(audit::CANCELLED.into());
+        }
         if let Err(e) = install(cfg, &mut inv, target, args, caller.as_ref(), &from, child) {
-            eprintln!("ERROR: {e}");
+            out.error(&format!("ERROR: {e}"));
             code = code.max(e.exit_code());
         }
     }
@@ -393,7 +428,7 @@ fn install(
     from: &Fetched,
     child: Option<String>,
 ) -> Result<()> {
-    let (arg, rename) = (args.source, args.rename);
+    let (arg, rename, out) = (args.source, args.rename, Out(args.pane));
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let (src, subpath) = match &child {
@@ -481,9 +516,9 @@ fn install(
         }
         inv.skills.insert(name.clone());
         inv.origins.entry(name).or_default().push(store);
-        println!("installed {}", to.display());
+        out.line(&format!("installed {}", to.display()));
         for link in made {
-            println!("linked    {}", link.display());
+            out.line(&format!("linked    {}", link.display()));
         }
         return Ok(());
     }
@@ -498,15 +533,15 @@ fn install(
     if let Err(e) = recorded {
         fs::remove_dir_all(&to).map_err(|e| err(&to, e))?;
         for e in &errors {
-            eprintln!("{e}");
+            out.error(e);
         }
         return Err(e);
     }
     // Recorded: the next skill of this add plans its links with this one.
     *inv = with;
-    println!("installed {}", to.display());
+    out.line(&format!("installed {}", to.display()));
     for line in links::apply(&plan)? {
-        println!("{line}");
+        out.line(&line);
     }
     Ok(())
 }
@@ -565,7 +600,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
     if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
         return Err(Error::Usage(format!("update: not a store skill: {n}")));
     }
-    let consent = Consent { update: true, yes: args.yes, force: args.force };
+    let consent = Consent { update: true, yes: args.yes, force: args.force, asks: None };
     let revet = cfg.judge.as_ref().map(|judge| Revet {
         data,
         judge,
@@ -749,7 +784,7 @@ struct Revet<'a> {
     data: &'a Path,
     judge: &'a Judge,
     homes: &'a [Home],
-    consent: Consent,
+    consent: Consent<'a>,
     pane: Option<&'a Pane>,
     backend: OnceCell<Box<dyn Backend>>,
 }
@@ -862,17 +897,19 @@ const VET_FILE_BYTES: u64 = 64 * 1024;
 const VET_TOTAL_BYTES: u64 = 256 * 1024;
 
 /// What the vet gate guards, an add or an update, which words its prompt and
-/// refusals, and the flags that answer for the user.
+/// refusals, the flags that answer for the user, and where it asks.
 #[derive(Clone, Copy)]
-struct Consent {
+struct Consent<'a> {
     update: bool,
     /// `--yes`.
     yes: bool,
     /// `--force`.
     force: bool,
+    /// The TUI's dialogs; the terminal when `None`.
+    asks: Option<&'a mpsc::Sender<Question>>,
 }
 
-impl Consent {
+impl Consent<'_> {
     fn verb(self) -> &'static str {
         if self.update { "update" } else { "add" }
     }
@@ -887,7 +924,7 @@ impl Consent {
 
     /// Refused before the judge is paid for an answer nobody can accept.
     fn answerable(self) -> std::result::Result<(), String> {
-        if self.yes || std::io::stdin().is_terminal() {
+        if self.yes || self.asks.is_some() || std::io::stdin().is_terminal() {
             return Ok(());
         }
         Err(format!(
@@ -895,6 +932,24 @@ impl Consent {
             self.verb(),
             self.act()
         ))
+    }
+
+    /// `prompt` asked y/N, Enter taking `default`: on stdin, after `lines`
+    /// were printed, or in a TUI dialog showing `lines` first.
+    fn ask(self, lines: Vec<String>, prompt: &str, default: bool) -> Result<bool> {
+        let prompt = format!("{prompt} {}", if default { "[Y/n]" } else { "[y/N]" });
+        if let Some(asks) = self.asks {
+            let (reply, answer) = mpsc::channel();
+            _ = asks.send(Question::YesNo { lines, prompt, default, reply });
+            return Ok(answer.recv().unwrap_or(false));
+        }
+        eprint!("{prompt} ");
+        let mut answer = String::new();
+        std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
+        Ok(match answer.trim() {
+            "" => default,
+            a => matches!(a, "y" | "Y" | "yes"),
+        })
     }
 }
 
@@ -924,20 +979,15 @@ fn no_judge() -> String {
     )
 }
 
-/// `add --all` of an untrusted source: the `n` judge calls, one per skill,
-/// shown and agreed to y/N before the first; `--yes` agrees, and without a
-/// terminal it is required.
-fn confirm_calls(n: usize, consent: Consent) -> Result<()> {
+/// `add --all`, or any add from the TUI, of an untrusted source: the `n`
+/// judge calls, one per skill, shown and agreed to y/N before the first;
+/// `--yes` agrees, and without a terminal it is required.
+fn confirm_calls(n: usize, consent: Consent, out: Out) -> Result<()> {
     let s = if n == 1 { "" } else { "s" };
-    println!("vetting {n} skill{s} makes {n} judge call{s}");
+    let count = format!("vetting {n} skill{s} makes {n} judge call{s}");
+    out.line(&count);
     consent.answerable().map_err(Error::Usage)?;
-    if consent.yes {
-        return Ok(());
-    }
-    eprint!("make {n} judge call{s}? [y/N] ");
-    let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
-    if !matches!(answer.trim(), "y" | "Y" | "yes") {
+    if !consent.yes && !consent.ask(vec![count], &format!("make {n} judge call{s}?"), false)? {
         return Err("add declined; nothing was installed".into());
     }
     Ok(())
@@ -1021,22 +1071,15 @@ fn gate(
         let found = vet.verdict.security.take();
         vet.verdict.security = Some(found.map_or_else(|| withheld.clone(), |f| format!("{f}; {withheld}")));
     }
-    vet.text(name).lines().for_each(|l| Out(c.pane).line(l));
+    let text: Vec<String> = vet.text(name).lines().map(String::from).collect();
+    text.iter().for_each(|l| Out(c.pane).line(l));
     if vet.verdict.security.is_some() && !consent.force {
         return Err(format!("{verb} refused: the judge found a security issue; pass --force to {act} it anyway").into());
     }
     if consent.yes {
         return Ok(vet);
     }
-    let default = vet.verdict.default_yes();
-    eprint!("{act} {name}? {} ", if default { "[Y/n]" } else { "[y/N]" });
-    let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
-    let yes = match answer.trim() {
-        "" => default,
-        a => matches!(a, "y" | "Y" | "yes"),
-    };
-    if !yes {
+    if !consent.ask(text, &format!("{act} {name}?"), vet.verdict.default_yes())? {
         return Err(format!("{verb} declined; {kept}").into());
     }
     Ok(vet)
@@ -1045,8 +1088,8 @@ fn gate(
 /// The skills under `root` to install, each by the child it is in: `root`
 /// itself (`None`), named `own`, when it holds a `SKILL.md`; else its one
 /// child skill, the one `--skill` names, every one with `--all`, or those
-/// picked when stdin and stdout are a terminal. Off a terminal, several
-/// skills and neither flag is a usage error listing them.
+/// picked in the TUI's picker or when stdin and stdout are a terminal. Off
+/// both, several skills and neither flag is a usage error listing them.
 fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option<String>>> {
     let usage = |e: String| Error::Usage(format!("add {}: {e}", args.source));
     if root.join("SKILL.md").is_file() {
@@ -1063,11 +1106,18 @@ fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option<String>>> 
         Some(p) => return Err(usage(format!("no skill named {p}; the skills here are: {list}"))),
         None if found.skills.is_empty() => return Err(usage("no SKILL.md here or in any child directory".into())),
         None if args.all || found.skills.len() == 1 => found.skills.iter().cloned().collect(),
-        None if tty => {
+        None if tty || args.asks.is_some() => {
             // One line each: a folded description keeps its words, not its breaks.
             let line = |d: String| d.split_whitespace().collect::<Vec<_>>().join(" ");
             let items = found.skills.iter().map(|s| (s.clone(), found.description(s).map(line).unwrap_or_default()));
-            crate::pick::pick(items.collect()).map_err(|e| format!("skill picker: {e}"))?
+            match args.asks {
+                Some(asks) => {
+                    let (reply, picked) = mpsc::channel();
+                    _ = asks.send(Question::Pick(items.collect(), reply));
+                    picked.recv().unwrap_or_default()
+                }
+                None => crate::pick::pick(items.collect()).map_err(|e| format!("skill picker: {e}"))?,
+            }
         }
         None => return Err(usage(format!("several skills here; pass --skill with one of: {list}, or --all"))),
     };
