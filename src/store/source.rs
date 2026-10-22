@@ -46,6 +46,11 @@ impl Source {
         if arg.starts_with(['.', '/', '~']) || Path::new(arg).exists() {
             return Ok(Source::Local(arg.into()));
         }
+        Source::git(arg)
+    }
+
+    /// `arg` read as a git source, whatever the filesystem holds: [`Source::parse`] past its local check.
+    fn git(arg: &str) -> std::result::Result<Source, String> {
         if let Some(browsed) = github_browser_url(arg) {
             return browsed;
         }
@@ -83,8 +88,9 @@ impl Source {
 /// ssh or the `git@github.com:` form, as `https://github.com/<owner>/<repo>.git`;
 /// `None` for a local path, `owner/repo` shorthand or another host.
 pub fn github_repo(url: &str) -> Option<String> {
-    // Shorthand has no `:`, and parses as GitHub whatever wrote it.
-    let (true, Ok(Source::Git(remote))) = (url.contains(':'), Source::parse(url)) else { return None };
+    // Shorthand has no `:`, and parses as GitHub whatever wrote it; a path is no URL.
+    let url_like = url.contains(':') && !url.starts_with(['-', '.', '/', '~']);
+    let (true, Ok(Source::Git(remote))) = (url_like, Source::git(url)) else { return None };
     let [owner, repo] = remote.path.as_slice() else { return None };
     let bare = remote.subpath.as_os_str().is_empty() && remote.r#ref.is_none();
     (bare && remote.host()?.eq_ignore_ascii_case("github.com"))
@@ -304,12 +310,32 @@ mod tests {
             "https://github.com/o/r",
             "git@github.com:o/r.git",
             "ssh://git@GitHub.com/o/r",
+            "https://github.com/o/r/",
+            "https://tok@github.com/o/r",
         ] {
             assert_eq!(github_repo(url), repo, "{url}");
         }
-        for url in ["/x", "o/r", "git@gitlab.com:o/r.git", "https://github.com/o/r.git/sub", "file:///o/r.git"] {
+        for url in [
+            "/x",
+            "o/r",
+            "git@gitlab.com:o/r.git",
+            "https://github.com/o/r.git/sub",
+            "file:///o/r.git",
+            "https://github.com.evil.com/o/r",
+            "https://github.com@evil.com/o/r",
+        ] {
             assert_eq!(github_repo(url), None, "{url}");
         }
+    }
+
+    #[test]
+    fn a_file_named_like_the_remote_does_not_hide_it() {
+        // Tests run in the crate root; the owner directory is this test's alone.
+        let (owner, url) = ("git@github.com:cwd-probe", "git@github.com:cwd-probe/r.git");
+        std::fs::create_dir_all(url).unwrap();
+        let got = github_repo(url);
+        std::fs::remove_dir_all(owner).unwrap();
+        assert_eq!(got.as_deref(), Some("https://github.com/cwd-probe/r.git"));
     }
 
     #[test]
