@@ -6,6 +6,7 @@ Use this template to structure the retrospective report. Fill in all bracketed s
 ---
 skill: "[skill-name]"
 date: "[YYYY-MM-DD]"
+content_hash: "[content_hash from mazo show <skill-name> --json]"
 verdict: "[EXCELLENT | GOOD | ADEQUATE | POOR | FAILED]"
 score: [X.X weighted composite]
 score_raw: [X.X unweighted mean]
@@ -24,7 +25,7 @@ prior_retro_count: [N]
 prior_retro_latest: "[YYYY-MM-DD or none]"
 trend: "[improving | stable | declining | first_run]"
 github_repo: "[owner/repo or omit if Phase 4 skipped]"
-github_issues: "[list of issue numbers, or omit if Phase 4 skipped]"
+github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 ---
 
 # Retrospective: [skill-name]
@@ -165,6 +166,10 @@ Each recommendation filed as an issue also gets an inline `[TRACKED](issue-url)`
 | # | Recommendation | Issue | Labels |
 |---|----------------|-------|--------|
 | 1 | [recommendation title] | [#N](issue-url) | [comma-separated labels] |
+
+## Proposed Issue
+
+[Omit this section unless Phase 4 ran in propose mode. The consolidated issue body from references/github-issues.md, followed by the `gh issue create -R {repo}` command printed for the user.]
 
 ## Score Trend
 

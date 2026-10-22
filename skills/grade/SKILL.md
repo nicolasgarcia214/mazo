@@ -93,7 +93,7 @@ Resolve the target from the user's request — the argument passed to the skill 
 
 1. If the target is a file path — read it directly.
 2. If the target is a directory — scan its structure and read key files.
-3. If the target is a skill name (e.g., "triage-finding") — find and read its `SKILL.md` plus supporting files. Also glob `{skills-root}/.retros/{skill-name}/*.md` and read the frontmatter of up to the 3 most recent: retro reports are runtime evidence, and a dimension that looks strong on paper but repeatedly fails in execution is graded on the evidence, not the paper. Cite the retro dates you used. When `mazo` is on `PATH`, also run `mazo show <skill-name> --json` and weigh its `usage`, `examples` and `audit` as runtime evidence of the same kind, skipping its `grades`. Never read the target's own prior grades — a previous score anchors the new one. Retros are evidence; grades are not.
+3. If the target is a skill name (e.g., "triage-finding") — find and read its `SKILL.md` plus supporting files. Then run `mazo show <skill-name> --json` and keep its `content_hash` for the persisted grade. Its `retros` array lists retro reports newest first: read the frontmatter of the `file` of up to the 3 most recent. Retro reports are runtime evidence, and a dimension that looks strong on paper but repeatedly fails in execution is graded on the evidence, not the paper. Cite the retro dates you used. Weigh its `usage`, `examples` and `audit` as runtime evidence of the same kind, skipping its `grades`. Never read the target's own prior grades — a previous score anchors the new one. Retros are evidence; grades are not. If `mazo show` exits non-zero, mazo does not know the skill: grade it from its files alone and print the report without persisting it.
 4. If no target was given — check conversation context for a recently-discussed target. If nothing found, ask the user.
 
 For large codebases and directories, build a full picture before scoring: on Claude Code, you may spawn an Explore agent (Agent tool) to map the target. If subagent spawning is unavailable or not permitted (e.g., on Codex), run the same exploration yourself sequentially with Glob/Grep/Read. For single files and small directories, read directly.
@@ -151,7 +151,7 @@ Read the target thoroughly. For each applicable dimension:
 
 ### Persisting the grade (skill targets only)
 
-When the target is a skill directory, also write the report to `{skills-root}/.grades/{skill-name}/grade-{context-slug}-{YYYY-MM-DD}.md` (create the directory; slug: 1-3 words, underscores) with YAML frontmatter above the report body, where `{skills-root}` is the directory holding this skill — resolve this `SKILL.md` through its install symlink first, because every installed skill is a symlink into the source repo. The leading dot keeps every report out of the installed skill trees: the installer's glob skips dot entries, so no agent loading a skill can reach them. Frontmatter:
+When the target is a skill mazo knows, also write the report to `{grades-dir}/grade-{context-slug}-{YYYY-MM-DD}.md` (create the directory; slug: 1-3 words, underscores) with YAML frontmatter above the report body. `mazo evals dir <skill-name>` prints two tab-separated lines, `grades<TAB><path>` and `retros<TAB><path>`; `{grades-dir}` is the path on the `grades` line. It sits under the user's `evals_dir`, outside every skill tree, so it works the same for installed and authored skills. Frontmatter, where `content_hash` is the value `mazo show <skill-name> --json` printed in Phase 0 — mazo marks the grade stale once the skill's content no longer hashes to it:
 
 ```yaml
 ---
@@ -159,11 +159,12 @@ target: <skill name>
 date: YYYY-MM-DD
 score: X.X
 verdict: <the one-line verdict>
+content_hash: <content_hash from mazo show --json>
 dimensions: {D1: X, D2: X, ...}
 retros_consulted: [<filenames, or empty>]
 ---
 ```
 
-This completes a cross-check with the `retro` skill: `retro` reads the most recent grade as its static baseline, and this skill reads `{skills-root}/.retros/{skill-name}/` as runtime evidence — static and dynamic evaluation of the same skill inform each other. For non-skill targets, print the report only; write a file only when the user asks.
+This completes a cross-check with the `retro` skill: `retro` reads the most recent grade as its static baseline, and this skill reads the retros `mazo show` lists as runtime evidence — static and dynamic evaluation of the same skill inform each other. For non-skill targets, print the report only; write a file only when the user asks.
 
 For skill targets, recommendations that amount to editing the SKILL.md or its references are actionable through the `skill-creator` skill; where a problem already surfaced in a retro and was filed as a `retro`-labeled GitHub issue, reference that issue instead of duplicating it.
