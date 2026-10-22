@@ -152,14 +152,25 @@ fn as_installs_under_another_name_and_rewrites_the_name() {
     assert_eq!(fx.snapshot(), before);
 }
 
+/// The no-judge refusal names the two judges any setup can configure and
+/// links a prefilled issue asking for one of the user's harness.
+fn assert_names_the_judges(stderr: &str) {
+    for judge in ["[judge]\nagent = \"command\"\nargv = [", "[judge]\nagent = \"http\"\nurl = "] {
+        assert!(stderr.contains(judge), "{judge}: {stderr}");
+    }
+    let issue = "https://github.com/nicolasgarcia214/mazo/issues/new?title=Support+%3Charness%3E+as+a+judge&body=";
+    assert!(stderr.contains(issue), "{stderr}");
+}
+
 #[test]
-fn an_untrusted_local_path_is_refused_until_trust_is_given() {
+fn with_no_judge_an_untrusted_add_is_refused_until_trust_is_given() {
     let (fx, dir) = fixture();
     let before = fx.snapshot();
     let r = add(&fx, &[&s(&dir)]);
     assert_eq!(r.code(), 2);
-    assert!(r.stderr().contains("vetting is not available yet"), "{}", r.stderr());
+    assert!(r.stderr().contains("vetting it needs a [judge], which the config lacks"), "{}", r.stderr());
     assert!(r.stderr().contains("pass --trust to install it without vetting"), "{}", r.stderr());
+    assert_names_the_judges(&r.stderr());
     assert_eq!(fx.snapshot(), before);
     assert!(!exists(&store(&fx)));
 }
@@ -651,7 +662,7 @@ fn an_unchanged_skill_is_up_to_date_and_its_entry_untouched() {
 }
 
 #[test]
-fn with_no_judge_an_untrusted_skill_is_skipped_until_its_source_is_trusted() {
+fn with_no_judge_an_untrusted_skill_is_refused_until_its_source_is_trusted() {
     let fx = git_fixture();
     let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
     add(&fx, &[&url, "--trust"]).assert_ok();
@@ -660,9 +671,14 @@ fn with_no_judge_an_untrusted_skill_is_skipped_until_its_source_is_trusted() {
     push_change(&fx, "theirs", "references/new.md", "new\n");
     let before = fx.snapshot();
     let r = fx.mazo(&["update"]);
-    r.assert_ok();
-    let skipped = format!("theirs: skipped; {url} is not trusted and re-vetting it needs a [judge] in the config\n");
-    assert_eq!(r.stdout(), skipped);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    let refused = format!(
+        "ERROR: update theirs: update refused: {url} is not trusted and re-vetting it needs a [judge], \
+         which the config lacks; add it to trusted to update it without vetting\n"
+    );
+    assert!(r.stderr().starts_with(&refused), "{}", r.stderr());
+    assert_names_the_judges(&r.stderr());
+    assert_eq!(r.stdout(), "");
     assert_eq!(fx.snapshot(), before);
 
     let segments: Vec<&str> = url.strip_prefix("file:///").unwrap().split('/').take(2).collect();
@@ -673,6 +689,21 @@ fn with_no_judge_an_untrusted_skill_is_skipped_until_its_source_is_trusted() {
     r.assert_ok();
     assert!(r.stdout().contains("updated"), "{}", r.stdout());
     assert!(exists(&store(&fx).join("theirs/references/new.md")));
+}
+
+#[test]
+fn with_no_judge_each_untrusted_skill_is_refused_and_the_judges_are_named_once() {
+    let (fx, one, two) = two_installed();
+    let path = fx.data.join("mazo/mazo.lock");
+    fs::write(&path, lock_text(&fx).replace("trusted = true", "trusted = false")).unwrap();
+    let r = fx.mazo(&["update"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    for (name, url) in [("one", &one), ("two", &two)] {
+        let refused = format!("ERROR: update {name}: update refused: {url} is not trusted");
+        assert!(r.stderr().contains(&refused), "{}", r.stderr());
+    }
+    assert_names_the_judges(&r.stderr());
+    assert_eq!(r.stderr().matches("add one of these judges to the config").count(), 1, "{}", r.stderr());
 }
 
 #[test]
@@ -911,6 +942,76 @@ fn every_skill_of_several_goes_through_the_vet_gate() {
     assert!(calls[0].contains("# one") && calls[1].contains("# two"), "{calls:?}");
     assert_eq!(lock_names(&fx), ["one", "two"]);
     assert!(lock(&fx).iter().all(|e| e.get("verdict").is_some()), "{:?}", lock(&fx));
+}
+
+/// The fixture of [`judged`] with a repository holding `one`, `two` and
+/// `three` under `skills/`, each allowed, and its URL at that subpath.
+fn judged_pack() -> (Fixture, String) {
+    let (mut fx, _) = judged();
+    fs::create_dir_all(fx.data.join("mazo")).unwrap();
+    let names = ["one", "two", "three"];
+    for n in names {
+        fx.allow(n);
+    }
+    let skills: Vec<(String, &str)> = names.iter().map(|n| (format!("skills/{n}"), *n)).collect();
+    let skills: Vec<(&str, &str)> = skills.iter().map(|(sub, n)| (sub.as_str(), *n)).collect();
+    let url = bare_repo(&fx, "pack", &skills);
+    answer(&fx, None, "good", "worth trying");
+    (fx, format!("{url}/skills"))
+}
+
+#[test]
+fn an_untrusted_all_shows_its_judge_calls_and_asks_before_the_first() {
+    let (fx, url) = judged_pack();
+    let before = fx.snapshot();
+    let count = "vetting 3 skills makes 3 judge calls\n";
+
+    // Off a terminal without --yes: the count, then refused before any call.
+    let r = add(&fx, &[&url, "--all"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert_eq!(r.stdout(), count);
+    assert!(r.stderr().contains("pass --yes when stdin is not a terminal"), "{}", r.stderr());
+    assert!(calls(&fx).is_empty());
+    assert_eq!(fx.snapshot(), before);
+    assert_no_clone(&fx);
+
+    // Declined (Enter takes No): no call, nothing installed.
+    for typed in ["\n", "n\n"] {
+        let r = add_at_terminal(&fx, &[&url, "--all"], typed);
+        assert_eq!(r.code(), 1, "{typed:?}: {}", r.stderr());
+        assert_eq!(r.stdout(), count);
+        assert!(r.stderr().contains("make 3 judge calls? [y/N]"), "{}", r.stderr());
+        assert!(r.stderr().contains("add declined; nothing was installed"), "{}", r.stderr());
+        assert!(calls(&fx).is_empty(), "{typed:?}");
+        assert_eq!(fx.snapshot(), before, "{typed:?}");
+    }
+
+    // Accepted: one call per skill, each install still asked.
+    let r = add_at_terminal(&fx, &[&url, "--all"], "y\ny\ny\ny\n");
+    r.assert_ok();
+    assert!(r.stdout().starts_with(count), "{}", r.stdout());
+    assert_eq!(calls(&fx).len(), 3);
+    assert_eq!(lock_names(&fx), ["one", "three", "two"]);
+}
+
+#[test]
+fn an_untrusted_all_with_yes_shows_its_judge_calls_and_makes_them() {
+    let (fx, url) = judged_pack();
+    let r = add(&fx, &[&url, "--all", "--yes"]);
+    r.assert_ok();
+    assert!(r.stdout().starts_with("vetting 3 skills makes 3 judge calls\n"), "{}", r.stdout());
+    assert!(!r.stderr().contains("[y/N]"), "{}", r.stderr());
+    assert_eq!(calls(&fx).len(), 3);
+}
+
+#[test]
+fn a_trusted_all_asks_nothing_and_calls_no_judge() {
+    let (fx, url) = judged_pack();
+    let r = add(&fx, &[&url, "--all", "--trust"]);
+    r.assert_ok();
+    assert!(!r.stdout().contains("judge call"), "{}", r.stdout());
+    assert!(calls(&fx).is_empty());
+    assert_eq!(lock_names(&fx), ["one", "three", "two"]);
 }
 
 #[test]
