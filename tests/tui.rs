@@ -268,7 +268,7 @@ fn buffer(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
 /// columns split the spare width, the counts keep theirs, and the selected
 /// row's highlight runs from edge to edge.
 #[test]
-fn a_wide_terminal_stretches_the_skill_and_quality_columns_and_highlights_the_whole_row() {
+fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whole_row() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
     let mut app = app(&input);
