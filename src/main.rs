@@ -143,6 +143,9 @@ enum Cmd {
         /// Retire a held or named skill, or one used in the last 30 days.
         #[arg(long)]
         force: bool,
+        /// Remove a skill of the project at the current directory's git root: its `.mazo/skills/` directory, `mazo.lock` entry, and links in `.claude/skills` and `.agents/skills`.
+        #[arg(long)]
+        project: bool,
     },
     /// Judge how a skill performs in real sessions; reports, never edits the source.
     Audit(AuditArgs),
@@ -182,6 +185,9 @@ enum Cmd {
         /// Update even when the judge reports a security issue.
         #[arg(long)]
         force: bool,
+        /// Update the skills of the project at the current directory's git root, and its `mazo.lock`.
+        #[arg(long)]
+        project: bool,
     },
 }
 
@@ -270,7 +276,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Prune { name, yes, force } => {
             lifecycle::prune(cfg.need_source("prune")?, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
-        Cmd::Retire { name, force } => cmd_retire(&cfg, &inv, &data, &name, force),
+        Cmd::Retire { name, force, project } => cmd_retire(&cfg, &inv, &data, &name, force, project),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Add { source, name, skill, all, trust, yes, force, project } => {
             let (rename, pick) = (name.as_deref(), skill.as_deref());
@@ -278,8 +284,8 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
                 store::Add { source: &source, rename, pick, all, trust, yes, force, project, pane: None, asks: None };
             store::add(&cfg, &inv, &data, &args)
         }
-        Cmd::Update { names, yes, force } => {
-            store::update(&cfg, &inv, &data, &store::Update { names: &names, yes, force, pane: None })
+        Cmd::Update { names, yes, force, project } => {
+            store::update(&cfg, &inv, &data, &store::Update { names: &names, yes, force, pane: None, project })
         }
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
@@ -488,9 +494,10 @@ fn cmd_retire(
     data: &std::path::Path,
     name: &str,
     force: bool,
+    project: bool,
 ) -> mazo::Result<ExitCode> {
     let mut warnings = Vec::new();
-    let retired = lifecycle::retire(cfg, inv, data, name, force, &mut warnings);
+    let retired = lifecycle::retire(cfg, inv, data, name, force, project, &mut warnings);
     for w in &warnings {
         eprintln!("{w}");
     }

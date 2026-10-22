@@ -251,21 +251,42 @@ pub enum Retired {
 /// in the sync plan as if the skill were gone, all before any write. Then
 /// moves a source skill `<source>/<name>` to `<source>/.archive/<name>` (`git
 /// mv` when tracked) and applies that plan; or, for a store skill, applies
-/// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never
-/// commits. Prints nothing: the scan's warnings go to `warnings`, kept even
-/// when a later step fails.
+/// that plan, drops its lockfile entry and deletes `<store>/<name>`. With
+/// `project`, it retires only a skill of the project at the current
+/// directory's git root, its blockers found with the project's skills: its
+/// links in the project skill dirs go instead of the homes', then its
+/// project lockfile entry and directory. Never commits. Prints nothing: the
+/// scan's warnings go to `warnings`, kept even when a later step fails.
 pub fn retire(
     cfg: &Config,
     inv: &Inventory,
     data: &Path,
     name: &str,
     force: bool,
+    project: bool,
     warnings: &mut Vec<String>,
 ) -> Result<Retired> {
+    let project = if project { Some(store::project_root("retire")?) } else { None };
+    let with_project;
+    let inv = match &project {
+        Some(p) => {
+            with_project = store::project_inventory(inv, p)?;
+            &with_project
+        }
+        None => inv,
+    };
+    if let Some(p) = &project
+        && inv.root(name) != Some(store::project_dir(p).as_path())
+    {
+        return Err(Error::Usage(format!("{name} is not a project skill")));
+    }
     let Some(root) = inv.root(name) else {
+        let hint = store::project_hint(name);
         // Only a store skill retires without a source.
-        cfg.need_source(&format!("retire {name}"))?;
-        return Err(Error::Usage(format!("{name} is not a canonical skill")));
+        if hint.is_empty() {
+            cfg.need_source(&format!("retire {name}"))?;
+        }
+        return Err(Error::Usage(format!("{name} is not a canonical skill{hint}")));
     };
     let from = root.join(name);
     // A source skill is archived; a store skill is removed.
@@ -288,6 +309,15 @@ pub fn retire(
     }
     // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
     let _lock = if to.is_some() { None } else { Some(ledger::lock(data)?) };
+    let mut out = Vec::new();
+    if let Some(p) = &project {
+        // The homes link no project skill; the same order as a store skill's.
+        out.extend(store::unlink_project(p, name)?);
+        store::Lock::remove(p, name)?;
+        std::fs::remove_dir_all(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+        out.push(format!("removed   {}", from.display()));
+        return Ok(Retired::Done(out));
+    }
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
@@ -298,7 +328,6 @@ pub fn retire(
         return Ok(Retired::Refused(errors));
     }
 
-    let mut out = Vec::new();
     if let Some(to) = &to {
         let archive = root.join(".archive");
         std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
