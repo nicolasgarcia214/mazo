@@ -20,6 +20,7 @@ source = "."                      # your skills directory, relative to this file
 loose  = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
 trusted = ["owner", "owner/repo"] # sources whose skills install without vetting
 evals_dir = "~/evals"             # where grades and retros live; <data dir>/evals by default
+context_window = 200000           # the tokens the agents' listing budgets are shares of; 200000 by default
 
 [[home]]
 name  = "claude"
@@ -129,6 +130,17 @@ absolute path; it exits 2 for a skill mazo does not know.
 A grade whose frontmatter `content_hash` is not the skill's current one, the
 `content_hash` that `mazo show <skill> --json` prints, is stale. A grade
 without one is stale too.
+
+## `context_window`
+
+Optional. The context window, in tokens, that the TUI's top bar measures each
+agent's skill listing against, 200000 by default. The top bar estimates the
+listing at a quarter token per character: a skill in context with its
+description counts its name and description, a name-only one its name. Claude
+lists skills within 1% of the window and Codex within 2%, and past that
+budget an agent trims the descriptions without saying so. An agent's total
+turns the warning colour at 80% of its budget. Pi has no budget. One window
+covers every agent.
 
 ## `[policy]`
 

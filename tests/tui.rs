@@ -231,6 +231,36 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert!(text(&mut app, 200, 40).iter().any(|l| body(l).starts_with(&format!("{skill}: "))));
 }
 
+/// The top bar ends with the tokens in context, an agent near its listing
+/// budget in the warning colour.
+#[test]
+fn the_top_bar_shows_each_agents_tokens_in_context_and_warns_near_its_budget() {
+    let mut golden = Golden::new();
+    let tokens = {
+        let input = golden.world.input(&golden.events);
+        mazo::ctx::Contexts::new(input.cfg, input.inv).tokens(input.inv)
+    };
+    assert!(tokens.claude > 0 && tokens.claude < tokens.codex, "{tokens:?}");
+    let approx = mazo::ctx::approx;
+    let (c, x, p) = (approx(tokens.claude), approx(tokens.codex), approx(tokens.pi));
+    let bar = format!("~{} tok in context: C {c} · X {x} · P {p}", approx(tokens.total()));
+    // The top bar's text, and the colour of the value after `letter `.
+    let top = |golden: &Golden| {
+        let (text, colours) = draw(&mut app(&golden.world.input(&golden.events)), 250, 30).swap_remove(0);
+        let at = |letter: &str| colours[text[..text.rfind(&format!("{letter} ")).unwrap()].chars().count() + 2];
+        (text.clone(), [at("C"), at("X"), at("P")])
+    };
+    let (text, colours) = top(&golden);
+    assert!(text.ends_with(&bar), "{text:?}");
+    assert_eq!(colours, [mazo::theme::ACCENT; 3]);
+    // A window where Claude's tokens are 80% of its 1%, and Codex's under 80% of its 2%.
+    golden.world.cfg.context_window = tokens.claude * 125;
+    assert!(tokens.codex * 125 < golden.world.cfg.context_window * 2);
+    assert_eq!(top(&golden).1, [mazo::theme::WARN, mazo::theme::ACCENT, mazo::theme::ACCENT]);
+    golden.world.cfg.context_window = 1;
+    assert_eq!(top(&golden).1, [mazo::theme::WARN, mazo::theme::WARN, mazo::theme::ACCENT], "Pi never warns");
+}
+
 #[test]
 fn slash_leaves_only_the_rows_whose_name_matches() {
     let golden = Golden::new();
@@ -663,6 +693,8 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
         "retro judges one run in context, right after it ran.",
         "audit judges many past runs offline and takes the retros as input",
         "It stops implicit selection, so Codex never loads the skill on its own, but Codex still lists its name and description",
+        "Claude lists skills within 1% of its context window and Codex within 2%",
+        "Past its budget an agent trims the descriptions silently",
     ] {
         assert!(faq.contains(answer), "{answer}: {faq}");
     }

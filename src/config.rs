@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::ledger::Agent;
 use crate::{Error, Result};
 
+/// The `context_window` of a config that sets none.
+pub const CONTEXT_WINDOW: usize = 200_000;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The physical skills source directory; `None` for a user with no skills of their own.
@@ -22,6 +25,8 @@ pub struct Config {
     pub trusted: Vec<String>,
     /// Where grades and retros live, `<data dir>/evals` by default.
     pub evals_dir: PathBuf,
+    /// The context window, in tokens, the agents' listing budgets are shares of.
+    pub context_window: usize,
     pub homes: Vec<Home>,
     pub policy: Policy,
     /// `None` without a `[judge]` table: no agent is assumed.
@@ -157,6 +162,8 @@ struct RawConfig {
     trusted: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     evals_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_window: Option<usize>,
     #[serde(default)]
     policy: Policy,
     judge: Option<Judge>,
@@ -254,6 +261,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
         loose: raw.loose,
         trusted: raw.trusted,
         evals_dir,
+        context_window: raw.context_window.unwrap_or(CONTEXT_WINDOW),
         homes,
         policy: raw.policy,
         judge: raw.judge,
@@ -405,6 +413,7 @@ fn config_text(source: Option<String>, homes: Vec<RawHome>, judge: Option<JudgeA
         loose: Vec::new(),
         trusted: Vec::new(),
         evals_dir: None,
+        context_window: None,
         policy: Policy::default(),
         judge: table,
         homes,
@@ -521,6 +530,18 @@ mod tests {
         assert_eq!(p.authoring_skills, ["grade"]);
         let p = policy("[policy]\nno_disable_model_invocation = true\nclaude_name_only = true\n").unwrap();
         assert!(p.no_disable_model_invocation && p.claude_name_only && !p.codex_manifest);
+    }
+
+    #[test]
+    fn context_window_defaults_to_200k() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        let window = |text: &str| {
+            fs::write(&path, format!("evals_dir = \".\"\n{text}")).unwrap();
+            load(&path).unwrap().unwrap().context_window
+        };
+        assert_eq!(window(""), 200_000);
+        assert_eq!(window("context_window = 1000000\n"), 1_000_000);
     }
 
     fn judge(table: &str) -> std::result::Result<Option<Judge>, String> {

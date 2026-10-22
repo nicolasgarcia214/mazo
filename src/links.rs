@@ -345,6 +345,7 @@ mod tests {
             loose: vec![],
             trusted: vec![],
             evals_dir: Default::default(),
+            context_window: crate::config::CONTEXT_WINDOW,
             homes: vec![home],
             policy: Default::default(),
             judge: None,

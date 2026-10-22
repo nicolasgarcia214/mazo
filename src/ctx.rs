@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::config::{Config, Home};
-use crate::inventory::{Inventory, Scope};
+use crate::inventory::{self, Inventory, Scope};
 use crate::ledger::Agent;
 use crate::{links, store, yaml};
 
@@ -48,6 +48,15 @@ impl Invocation {
             _ => Invocation::On,
         }
     }
+
+    /// The characters it keeps of the skill `name` described by `description`.
+    fn chars(self, name: &str, description: &str) -> usize {
+        match self {
+            Invocation::On => name.chars().count() + description.chars().count(),
+            Invocation::NameOnly => name.chars().count(),
+            Invocation::UserInvocableOnly | Invocation::Off => 0,
+        }
+    }
 }
 
 /// Each agent's [`Invocation`] of a skill, for the agents it is linked into only.
@@ -69,6 +78,39 @@ impl Ctx {
             .filter_map(|(agent, state)| state.map(|s| format!("{}{}", agent.letter(), s.glyph())))
             .collect()
     }
+}
+
+/// Each agent's approximate tokens of skill listings in context: the
+/// characters [`Invocation::chars`] keeps of every skill, divided by 4.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tokens {
+    pub claude: usize,
+    pub codex: usize,
+    pub pi: usize,
+}
+
+impl Tokens {
+    pub fn total(&self) -> usize {
+        self.claude + self.codex + self.pi
+    }
+
+    /// Each agent's tokens and whether they reach 80% of its listing budget
+    /// out of `context_window`: 1% for Claude, 2% for Codex, none for Pi.
+    pub fn agents(&self, context_window: usize) -> [(Agent, usize, bool); 3] {
+        // 80% of `percent`% of the window.
+        let near = |tokens: usize, percent: usize| 100 * 5 * tokens >= context_window * percent * 4;
+        [
+            (Agent::Claude, self.claude, near(self.claude, 1)),
+            (Agent::Codex, self.codex, near(self.codex, 2)),
+            (Agent::Pi, self.pi, false),
+        ]
+    }
+}
+
+/// `n` tokens as the top bar shows them: whole under 1000, else thousands
+/// to one decimal, `2.5k`.
+pub fn approx(n: usize) -> String {
+    if n < 1000 { n.to_string() } else { format!("{:.1}k", n as f64 / 1000.0) }
 }
 
 /// What every skill's [`Ctx`] reads, read once: the homes each skill is
@@ -121,6 +163,25 @@ impl Contexts {
         let of = |agent: Agent| homes.iter().filter(|(a, _)| *a == agent).map(|(a, h)| state(*a, *h)).min();
         Ctx { claude: of(Agent::Claude), codex: of(Agent::Codex), pi: of(Agent::Pi) }
     }
+
+    /// The [`Tokens`] of every skill of `inv` and of its project.
+    pub fn tokens(&self, inv: &Inventory) -> Tokens {
+        let global = inv.skills.iter().map(|s| (s, Scope::Global, inv.description(s)));
+        let project = inv.project.iter().flat_map(|p| {
+            let dir = store::project_dir(&p.root);
+            p.skills.iter().map(move |s| (s, Scope::Project, inventory::description(&dir.join(s))))
+        });
+        let mut chars = [0; 3];
+        for (skill, scope, description) in global.chain(project) {
+            let ctx = self.of(inv, skill, scope);
+            let description = description.unwrap_or_default();
+            for (n, state) in chars.iter_mut().zip([ctx.claude, ctx.codex, ctx.pi]) {
+                *n += state.map_or(0, |s| s.chars(skill, &description));
+            }
+        }
+        let [claude, codex, pi] = chars.map(|n| n / 4);
+        Tokens { claude, codex, pi }
+    }
 }
 
 /// A Claude home's `skillOverrides`, merged per skill with
@@ -145,7 +206,7 @@ fn disables_model_invocation(dir: &Path) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{Contexts, Ctx, Invocation};
+    use super::{Contexts, Ctx, Invocation, Tokens, approx};
     use crate::config::{Config, Home};
     use crate::inventory::{Inventory, Scope};
     use crate::ledger::Agent;
@@ -171,6 +232,7 @@ mod tests {
             loose: vec![],
             trusted: vec![],
             evals_dir: Default::default(),
+            context_window: crate::config::CONTEXT_WINDOW,
             homes,
             policy: Default::default(),
             judge: None,
@@ -270,7 +332,39 @@ mod tests {
         let ctx = Contexts::new(&cfg, &inv);
         assert_eq!(ctx.of(&inv, "user", Scope::Project).cell(), "C○X●P●");
         assert_eq!(ctx.of(&inv, "manual", Scope::Project).cell(), "C○X●P○");
+        // Codex keeps user and manual of the project beside the six global skills.
+        assert_eq!(ctx.tokens(&inv).codex, (40 + "user".len() + 2 + "manual".len() + 2) / 4);
         let no_claude = Config { homes: vec![], ..cfg };
         assert_eq!(Contexts::new(&no_claude, &inv).of(&inv, "user", Scope::Project).cell(), "C●X●P●");
+    }
+
+    #[test]
+    fn tokens_count_name_and_description_when_on_the_name_when_name_only_and_nothing_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (cfg, inv) = setup(tmp.path());
+        let only_a = Config { homes: cfg.homes.into_iter().filter(|h| h.name != "b").collect(), ..cfg };
+        // Each skill is its name and the description `D.`. Claude has plain
+        // on and named name-only; Codex has all six on; Pi all but the two
+        // that disable model invocation.
+        let on = |names: &[&str]| names.iter().map(|n| n.len() + 2).sum::<usize>();
+        let claude = on(&["plain"]) + "named".len();
+        let codex = on(&SKILLS);
+        let pi = on(&["plain", "named", "user", "local"]);
+        let tokens = Contexts::new(&only_a, &inv).tokens(&inv);
+        assert_eq!(tokens, Tokens { claude: claude / 4, codex: codex / 4, pi: pi / 4 });
+        assert_eq!(tokens.total(), 3 + 10 + 6);
+    }
+
+    #[test]
+    fn an_agent_nears_its_budget_at_80_percent_of_its_share_of_the_window_and_pi_never() {
+        let near = |claude, codex, pi| Tokens { claude, codex, pi }.agents(200_000).map(|(_, _, near)| near);
+        assert_eq!(near(1599, 3199, 1_000_000), [false, false, false]);
+        assert_eq!(near(1600, 3200, 0), [true, true, false]);
+        assert_eq!(Tokens { claude: 8, codex: 0, pi: 0 }.agents(1000)[0], (Agent::Claude, 8, true));
+    }
+
+    #[test]
+    fn approx_shows_whole_tokens_under_1000_and_thousands_to_one_decimal_from_it() {
+        assert_eq!([0, 400, 999, 1000, 2460, 12_345].map(approx), ["0", "400", "999", "1.0k", "2.5k", "12.3k"]);
     }
 }
