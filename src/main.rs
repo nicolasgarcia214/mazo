@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use mazo::config::{self, Config, Home, JudgeAgent};
+use mazo::config::{self, Config, Home};
 use mazo::inventory::Inventory;
 use mazo::ledger::{self, Agent, Channel, Ledger};
 use mazo::lifecycle::{self, Retired};
@@ -212,16 +212,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         let ask = stdin.is_terminal().then_some(&mut stdin as &mut dyn std::io::BufRead);
         let judge = config::init(&path, source.as_deref(), ask)?;
         println!("wrote {}", path.display());
-        match judge.and_then(|j| config::JUDGE_AGENTS.iter().find(|(_, a)| *a == j)) {
-            Some((name, JudgeAgent::Command | JudgeAgent::Http)) => println!(
-                "the [judge] table for agent = \"{name}\" is commented out: fill in its placeholders and uncomment it"
-            ),
-            Some((name, _)) => println!("judge: {name}"),
-            None => println!(
-                "no judge: log in to claude, codex or pi and add [judge] agent = \"<agent>\" to the config, \
-                 or a command or http judge (see the README)"
-            ),
-        }
+        println!("{}", config::init_note(judge));
         return Ok(ExitCode::SUCCESS);
     }
     let Some(cfg) = config::load(&path)? else {

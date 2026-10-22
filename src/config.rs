@@ -2,9 +2,9 @@
 //! including the Pi directory normalisation that `install.sh` did in Node.
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, DirBuilder};
 use std::io::{BufRead, ErrorKind, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -238,7 +238,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
 /// home for each agent directory under `~` that exists, every rule off, and
 /// the [`detect_judge`] judge, else the one [`choose_judge`] reads from `ask`.
 /// Refuses to overwrite, before detecting or asking.
-pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -> Result<Option<JudgeAgent>> {
+pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -> Result<Option<InitJudge>> {
     let exists = || format!("{} exists; not overwriting it", path.display());
     if path.symlink_metadata().is_ok() {
         return Err(exists().into());
@@ -263,11 +263,11 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
             })
             .collect();
     let judge = match (detect_judge()?, ask) {
-        (Some(agent), _) => Some(agent),
-        (None, Some(input)) => choose_judge(input, &mut std::io::stderr())?,
+        (Some(agent), _) => Some(InitJudge::Detected(agent)),
+        (None, Some(input)) => choose_judge(input, &mut std::io::stderr())?.map(InitJudge::Chosen),
         (None, None) => None,
     };
-    let text = config_text(source, homes, judge)?;
+    let text = config_text(source, homes, judge.map(|(InitJudge::Detected(a) | InitJudge::Chosen(a))| a))?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -277,6 +277,35 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
     })?;
     file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(judge)
+}
+
+/// The judge `init` wrote: one it found logged in, or one the user chose.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InitJudge {
+    Detected(JudgeAgent),
+    Chosen(JudgeAgent),
+}
+
+/// The line `init` prints after the config path: the judge it wrote and
+/// what is left to do before `mazo audit` can use it.
+pub fn init_note(judge: Option<InitJudge>) -> String {
+    let name = |a: JudgeAgent| JUDGE_AGENTS.iter().find(|(_, b)| *b == a).map_or("", |(name, _)| *name);
+    match judge {
+        Some(InitJudge::Chosen(a @ (JudgeAgent::Command | JudgeAgent::Http))) => format!(
+            "the [judge] table for agent = \"{}\" is commented out: fill in its placeholders and uncomment it",
+            name(a)
+        ),
+        Some(InitJudge::Chosen(a)) => {
+            format!(
+                "judge: {0}, which was not found on PATH or not logged in; log in to {0} before mazo audit",
+                name(a)
+            )
+        }
+        Some(InitJudge::Detected(a)) => format!("judge: {}", name(a)),
+        None => "no judge: log in to claude, codex or pi and add [judge] agent = \"<agent>\" to the config, \
+                 or a command or http judge (see the README)"
+            .into(),
+    }
 }
 
 /// Each judge agent by its config name, in the order `init` tries them.
@@ -296,18 +325,25 @@ const HTTP_PLACEHOLDER: &str = "\n# [judge]\n# agent = \"http\"\n# url = \"<base
 
 /// The first of claude, codex and pi whose binary is on `PATH` and whose
 /// subscription login check passes; Pi has no check. The checks read local
-/// state only: `claude auth status` and Codex's `auth.json`.
+/// state only: `claude auth status` and Codex's `auth.json`. A check's
+/// scratch directory is a fresh one under the temporary directory, removed
+/// after, so detection leaves nothing behind.
 fn detect_judge() -> Result<Option<JudgeAgent>> {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let data = crate::ledger::data_dir()?;
-    for (name, agent) in &JUDGE_AGENTS[..3] {
+    let scratch = std::env::temp_dir().join(format!(
+        "mazo-init-{}-{}",
+        std::process::id(),
+        jiff::Timestamp::now().as_nanosecond()
+    ));
+    DirBuilder::new().mode(0o700).create(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    let detected = JUDGE_AGENTS[..3].iter().find_map(|&(name, agent)| {
         let found = std::env::split_paths(&path)
             .any(|dir| dir.join(name).metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0));
-        if found && crate::audit::backend(&Judge { agent: *agent, ..Judge::default() }, &[])?.login(&data).is_ok() {
-            return Ok(Some(*agent));
-        }
-    }
-    Ok(None)
+        let judge = Judge { agent, ..Judge::default() };
+        (found && crate::audit::backend(&judge, &[]).and_then(|b| b.login(&scratch)).is_ok()).then_some(agent)
+    });
+    fs::remove_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    Ok(detected)
 }
 
 /// The judge agent named on a line of `input`, asked for on `prompt` until
@@ -608,6 +644,18 @@ mod tests {
             // Uncommented, the placeholders make a valid table of that agent.
             fs::write(&path, text.replace("# ", "")).unwrap();
             assert_eq!(load(&path).unwrap().unwrap().judge.map(|j| j.agent), Some(agent), "{text}");
+        }
+    }
+
+    #[test]
+    fn init_note_warns_that_a_chosen_agent_is_not_logged_in() {
+        assert_eq!(init_note(Some(InitJudge::Detected(JudgeAgent::Codex))), "judge: codex");
+        assert_eq!(
+            init_note(Some(InitJudge::Chosen(JudgeAgent::Codex))),
+            "judge: codex, which was not found on PATH or not logged in; log in to codex before mazo audit"
+        );
+        for agent in [JudgeAgent::Command, JudgeAgent::Http] {
+            assert!(init_note(Some(InitJudge::Chosen(agent))).ends_with("fill in its placeholders and uncomment it"));
         }
     }
 }

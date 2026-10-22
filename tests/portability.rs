@@ -334,11 +334,17 @@ fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
 #[test]
 fn init_without_a_judge_or_a_terminal_writes_no_judge_and_says_how_to_add_one() {
     let f = Fresh::new();
-    // A codex without a ChatGPT login is not a judge.
+    // Neither a claude nor a codex without a subscription login is a judge.
+    stub(&f, "claude", r#"{"authMethod":"api_key"}"#);
     stub(&f, "codex", "");
-    let o = f.init(&[], &[]);
+    let tmp = f.home.join("tmp");
+    fs::create_dir(&tmp).unwrap();
+    let o = f.init(&[("TMPDIR", tmp.as_os_str())], &[]);
     assert_ok(&o);
     assert!(judge(&f.home.join(".config/mazo/config.toml")).is_none());
+    // The login checks leave no data directory and no scratch directory.
+    assert!(!f.home.join("data").exists());
+    assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
     assert_eq!(
         stdout(&o).lines().nth(1),
         Some(
