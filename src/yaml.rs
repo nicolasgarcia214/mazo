@@ -48,6 +48,14 @@ pub fn string(node: &Yaml) -> Option<&str> {
     matches!(value, Some(ScalarOwned::String(_))).then_some(s)
 }
 
+/// A scalar the core schema resolves to `true`.
+pub fn is_true(node: &Yaml) -> bool {
+    let Yaml::Representation(s, style, tag) = node else { return false };
+    let tag = tag.as_ref().map(Cow::Borrowed);
+    let value = ScalarOwned::parse_from_cow_and_metadata(s.as_str().into(), *style, tag.as_ref());
+    matches!(value, Some(ScalarOwned::Boolean(true)))
+}
+
 /// The plain, untagged scalar `false`. `"false"`, `False`, `no` and `!!bool false` are not.
 pub fn is_plain_false(node: &Yaml) -> bool {
     matches!(node, Yaml::Representation(s, ScalarStyle::Plain, None) if s == "false")

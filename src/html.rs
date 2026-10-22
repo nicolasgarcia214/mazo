@@ -144,7 +144,7 @@ fn usage(model: &Report) -> String {
                 esc(&r.skill)
             };
             format!(
-                "<tr><td>{name}</td>{}{}{}{}{}{}<td class=\"mono\">{}</td><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
+                "<tr><td>{name}</td>{}{}{}{}{}{}<td class=\"mono\">{}</td><td class=\"mono\">{}</td><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
                 n(r.sess),
                 n(r.slash),
                 n(r.tool),
@@ -152,6 +152,7 @@ fn usage(model: &Report) -> String {
                 n(r.read),
                 n(r.ref_),
                 esc(&r.agents),
+                esc(&r.ctx.cell()),
                 local(r.last.as_deref(), &model.tz, DAY),
                 sparkline(&r.last_30d),
                 grade(r.grade.as_ref()),

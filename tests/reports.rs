@@ -16,7 +16,11 @@ use mazo::{evals, render};
 use serde_json::Value;
 
 /// The last line of `usage` and `unused`: the help's marks and glyphs.
-const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
+const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; \
+                      ● name and description in context: Claude on, every Codex skill, Pi by default; \
+                      ◐ name only in context: Claude name-only; \
+                      ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; \
+                      × off: Claude off; · no events that day; \
                       stale the skill changed since the grade; \
                       (project) a project skill, counted apart";
 
@@ -378,13 +382,13 @@ fn usage_collapses_and_applies_default_filters() {
         "{text}"
     );
     assert!(lines[1].starts_with("unslop "), "highest sess first: {text}");
-    assert!(lines[1].contains(" CX     1d ago "), "{text}");
+    assert!(lines[1].contains(" CX     C●X● 1d ago "), "{text}");
     assert!(
         lines[1].ends_with(&format!("{}▃█·     - not judged", "·".repeat(27))),
         "a day with no event is a dot: {text}"
     );
     let execute = lines.iter().find(|l| l.starts_with("goal-execute ")).unwrap();
-    assert!(execute.ends_with(&format!(" 0        -      {}     - not judged", "·".repeat(30))), "{text}");
+    assert!(execute.ends_with(&format!(" 0        C●X● -      {}     - not judged", "·".repeat(30))), "{text}");
     assert_eq!(
         lines[lines.len() - 2],
         format!(
@@ -745,6 +749,7 @@ fn show_prints_the_card() {
         "usage",
         "examples",
         "audit",
+        "ctx",
     ];
     assert_eq!(keys, BTreeSet::from(all));
     assert_eq!(v["path"], src.join("unslop").display().to_string());

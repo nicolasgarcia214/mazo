@@ -38,6 +38,10 @@
         0
       ],
       "agents": "C",
+      "ctx": {
+        "claude": "name-only",
+        "codex": "on"
+      },
       "grade": {
         "content_hash": "cf2447f6a26b5133ff5d91c09b35f484731a856a",
         "date": "2026-03-01",
@@ -92,6 +96,10 @@
         0
       ],
       "agents": "CX",
+      "ctx": {
+        "claude": "on",
+        "codex": "on"
+      },
       "grade": {
         "content_hash": "ec569061a8db94f03793d35c30a438d936dcbe86",
         "date": "2026-05-01",
@@ -146,6 +154,10 @@
         0
       ],
       "agents": "C",
+      "ctx": {
+        "claude": "on",
+        "codex": "on"
+      },
       "grade": null,
       "last": "2026-10-09T12:00:00Z",
       "read": 0,
@@ -193,6 +205,10 @@
         0
       ],
       "agents": "C",
+      "ctx": {
+        "claude": "on",
+        "codex": "on"
+      },
       "grade": null,
       "last": "2026-10-01T12:00:00Z",
       "read": 0,
@@ -240,6 +256,10 @@
         0
       ],
       "agents": "",
+      "ctx": {
+        "claude": "on",
+        "codex": "on"
+      },
       "grade": null,
       "last": null,
       "read": 0,
@@ -287,6 +307,10 @@
         0
       ],
       "agents": "",
+      "ctx": {
+        "claude": "on",
+        "codex": "on"
+      },
       "grade": null,
       "last": null,
       "read": 0,
@@ -334,6 +358,7 @@
         0
       ],
       "agents": "",
+      "ctx": {},
       "grade": null,
       "last": null,
       "read": 0,
@@ -381,6 +406,10 @@
         0
       ],
       "agents": "",
+      "ctx": {
+        "claude": "on",
+        "codex": "on"
+      },
       "grade": null,
       "last": null,
       "read": 0,

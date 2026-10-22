@@ -137,6 +137,18 @@ fn targets(
     out
 }
 
+/// The `(home, skill)` pairs that [`plan`] links over `homes`, whatever is
+/// on disk: each skill of `inv` that is an entry of a home's skills directory.
+pub fn linked<'h>(cfg: &Config, inv: &Inventory, homes: &[&'h Home]) -> Vec<(&'h Home, String)> {
+    let targets = targets(cfg, inv, homes, &|p: &Path| p.exists(), &mut Vec::new());
+    let entries = |h: &'h Home| {
+        let dir = h.skills_dir();
+        let of = targets.iter().filter(move |t| t.home == h.name && t.dir == dir).flat_map(|t| &t.entries);
+        of.filter(|(name, _)| inv.skills.contains(name)).map(move |(name, _)| (h, name.clone()))
+    };
+    homes.iter().flat_map(|h| entries(h)).collect()
+}
+
 /// Classifies every entry of the selected homes and plans the writes that
 /// `sync` would make. Never touches the filesystem except to read it.
 /// With `gone` (for `retire`), the plan is the one `sync` would make if `gone`

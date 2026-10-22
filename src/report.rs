@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::audit::SkillRecord;
 use crate::config::Config;
+use crate::ctx::{Contexts, Ctx};
 use crate::evals::{self, Eval, Evals, Grade};
 use crate::examples::{self, Examples};
 use crate::help;
@@ -101,6 +102,8 @@ struct View<'a> {
     project: HashSet<&'a str>,
     /// The source repository's GitHub URL and HEAD, read once a card needs them.
     upstream: OnceCell<Option<(String, String)>>,
+    /// What each skill's ctx reads, read once a row or card needs it.
+    ctx: OnceCell<Contexts>,
 }
 
 /// Which events a report counts. The default is canonical origin, no probe
@@ -150,7 +153,11 @@ impl<'a> View<'a> {
             let of = |e: &Event| e.path.as_deref().and_then(|path| p.skill_of(path)).is_some();
             input.events.iter().filter(|e| of(e)).map(|e| e.id.as_str()).collect()
         });
-        View { input, today, events, authoring_sessions, project, upstream: OnceCell::new() }
+        View { input, today, events, authoring_sessions, project, upstream: OnceCell::new(), ctx: OnceCell::new() }
+    }
+
+    fn ctx(&self) -> &Contexts {
+        self.ctx.get_or_init(|| Contexts::new(self.input.cfg, self.input.inv))
     }
 
     /// A project skill's event is one in its directory; every other is global.
@@ -298,6 +305,7 @@ pub struct UsageRow {
     #[serde(rename = "ref")]
     pub ref_: usize,
     pub agents: String,
+    pub ctx: Ctx,
     pub last: Option<String>,
     #[serde(rename = "30d")]
     pub last_30d: Vec<usize>,
@@ -410,6 +418,7 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
                 read: count(Channel::Read),
                 ref_: count(Channel::Ref),
                 agents: agents.iter().map(|a| a.letter()).collect(),
+                ctx: view.ctx().of(input.inv, skill, scope),
                 last: last.map(|t| t.to_string()),
                 last_30d,
                 grade,
@@ -436,7 +445,7 @@ pub fn usage_table(input: &Input, args: &UsageArgs) -> Usage {
 }
 
 /// The usage table's columns.
-pub const USAGE_HEADER: [(&str, Align); 12] = [
+pub const USAGE_HEADER: [(&str, Align); 13] = [
     ("skill", Align::Left),
     ("sess", Align::Right),
     ("slash", Align::Right),
@@ -445,6 +454,7 @@ pub const USAGE_HEADER: [(&str, Align); 12] = [
     ("read", Align::Right),
     ("ref", Align::Right),
     ("agents", Align::Left),
+    ("ctx", Align::Left),
     ("last", Align::Left),
     ("30d", Align::Left),
     ("grade", Align::Right),
@@ -466,6 +476,7 @@ pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
         r.read.to_string(),
         r.ref_.to_string(),
         r.agents.clone(),
+        r.ctx.cell(),
         r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)),
         render::sparkline(&r.last_30d),
         grade_cell(&r.grade, tty),
@@ -809,6 +820,7 @@ pub struct Card<'a> {
     pub examples: Examples,
     /// The latest skill record.
     pub audit: Option<&'a SkillRecord>,
+    pub ctx: Ctx,
 }
 
 /// Where a skill came from on GitHub: a store skill's lockfile entry, or the
@@ -1001,6 +1013,8 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         usage: card_usage(view, &f, skill, start),
         examples,
         audit,
+        // `show` takes only a known name, never a project-only one, so a card is a global skill's.
+        ctx: view.ctx().of(inv, skill, Scope::Global),
     }
 }
 

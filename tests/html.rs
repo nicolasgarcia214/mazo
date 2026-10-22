@@ -196,7 +196,11 @@ fn the_legend_lists_the_helps_marks() {
     let legend = &legend[..legend.find("</p>").unwrap()];
     assert_eq!(
         legend,
-        "legend: agents C Claude, X Codex, P Pi; a grey tick for a day with no events; \
+        "legend: agents C Claude, X Codex, P Pi; \
+         ● name and description in context: Claude on, every Codex skill, Pi by default; \
+         ◐ name only in context: Claude name-only; \
+         ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; \
+         × off: Claude off; a grey tick for a day with no events; \
          stale the skill changed since the grade; (project) a project skill, counted apart"
     );
     assert_eq!(legend, format!("legend: {}", mazo::help::legend(true)));
