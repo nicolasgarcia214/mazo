@@ -6,7 +6,9 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use common::{CLAUDE_FIRST, CODEX_FIRST, NOW, ago, copy_tree, event, git, report_repo, report_world, write};
+use common::{
+    CLAUDE_FIRST, CODEX_FIRST, NOW, ago, copy_tree, event, git, report_repo, report_world, skill_record, write,
+};
 use mazo::inventory::{self, Inventory};
 use mazo::ledger::{Actor, Agent, Channel, Event, Origin};
 use mazo::report::{self, Since, UsageArgs};
@@ -277,7 +279,7 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     assert!(line("goal-smart").ends_with(&format!("{reset} cluster: goal-execute, goal-plan")), "{text}");
     let usage = report::usage(&input, &args(), false, on);
     let unslop = usage.lines().find(|l| l.starts_with("unslop ")).unwrap();
-    assert!(unslop.ends_with(&format!("9.1{yellow}+wip{reset}")), "{usage}");
+    assert!(unslop.ends_with(&format!("9.1{yellow}+wip{reset} not judged")), "{usage}");
     assert_eq!(usage.lines().skip(1).map(|l| l.matches('\x1b').count()).sum::<usize>(), 2, "only the mark: {usage}");
 
     let off = render::colour(true, Some(std::ffi::OsStr::new("1")));
@@ -369,12 +371,18 @@ fn usage_collapses_and_applies_default_filters() {
 
     let text = report::usage(&input, &args(), false, false);
     let lines: Vec<&str> = text.lines().collect();
-    assert!(lines[0].starts_with("skill") && lines[0].ends_with(&format!("30d{}grade", " ".repeat(28))), "{text}");
+    assert!(
+        lines[0].starts_with("skill") && lines[0].ends_with(&format!("30d{}grade quality", " ".repeat(28))),
+        "{text}"
+    );
     assert!(lines[1].starts_with("unslop "), "highest sess first: {text}");
     assert!(lines[1].contains(" CX     1d ago "), "{text}");
-    assert!(lines[1].ends_with(&format!("{}▃█·     -", "·".repeat(27))), "a day with no event is a dot: {text}");
+    assert!(
+        lines[1].ends_with(&format!("{}▃█·     - not judged", "·".repeat(27))),
+        "a day with no event is a dot: {text}"
+    );
     let execute = lines.iter().find(|l| l.starts_with("goal-execute ")).unwrap();
-    assert!(execute.ends_with(&format!(" 0        -      {}     -", "·".repeat(30))), "{text}");
+    assert!(execute.ends_with(&format!(" 0        -      {}     - not judged", "·".repeat(30))), "{text}");
     assert_eq!(
         lines[lines.len() - 2],
         format!(
@@ -389,13 +397,58 @@ fn usage_collapses_and_applies_default_filters() {
     assert!(report::usage(&input, &args(), false, true).starts_with("\x1b[1mskill"));
 }
 
+/// The quality column is the latest audit's verdict labelled `audit`, else
+/// the lockfile's vet verdict labelled `vet`, else `not judged`; `--json`
+/// carries the verdict and its source apart. The text cell is cut to 40
+/// characters with `…`, between chars.
+#[test]
+fn usage_quality_is_the_latest_audit_else_the_vet_else_not_judged() {
+    let repo = report_repo();
+    let data = tempfile::tempdir().unwrap();
+    common::vetted(data.path());
+    let long = "Écrit très bien, même les longues notes de version.";
+    let audits = skill_record("OLD", "2026-10-01T10:00:00Z") + &skill_record(long, "2026-10-12T10:00:00Z");
+    write(&data.path().join("audits.jsonl"), &audits);
+    let mut w = report_world(repo.path());
+    w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
+    w.audits = mazo::audit::latest(data.path()).unwrap();
+    let input = w.input(&[]);
+
+    let json = report::usage(&input, &args(), true, false);
+    let source = |skill: &str| {
+        let r = row(&json, skill);
+        (r["verdict_source"].clone(), r["verdict"].clone())
+    };
+    assert_eq!(source("unslop"), (Value::from("audit"), Value::from(long)), "the latest audit");
+    assert_eq!(source("vetted"), (Value::from("vet"), Value::from("quality weak, value low value")));
+    assert_eq!(source("goal-plan"), (Value::Null, Value::Null));
+    assert_eq!(row(&json, "unslop")["sess"], 0, "the existing fields stay");
+
+    let text = report::usage(&input, &args(), false, false);
+    let line = |skill: &str| text.lines().find(|l| l.starts_with(&format!("{skill} "))).unwrap().to_string();
+    let cut: String = format!("audit: {long}").chars().take(39).chain(['…']).collect();
+    assert!(line("unslop").ends_with(&format!(" {cut}")), "{text}");
+    assert!(line("vetted").ends_with(" vet: quality weak, value low value"), "{text}");
+    assert!(line("goal-plan").ends_with(" not judged"), "{text}");
+
+    // An audit wins over the vet.
+    write(
+        &data.path().join("audits.jsonl"),
+        &(audits + &skill_record("Fine.", NOW).replace("\"unslop\"", "\"vetted\"")),
+    );
+    w.audits = mazo::audit::latest(data.path()).unwrap();
+    let json = report::usage(&w.input(&[]), &args(), true, false);
+    assert_eq!(row(&json, "vetted")["verdict_source"], "audit");
+    assert_eq!(row(&json, "vetted")["verdict"], "Fine.");
+}
+
 /// The text and JSON grade of `skill` in a fresh report, which reads the history again.
 fn grade_of(source: &Path, skill: &str) -> (String, Value) {
     let w = report_world(source);
     let input = w.input(&[]);
     let text = report::usage(&input, &args(), false, false);
     let line = text.lines().find(|l| l.starts_with(&format!("{skill} "))).unwrap();
-    let cell = line.rsplit(' ').next().unwrap().to_string();
+    let cell = line.strip_suffix(" not judged").unwrap().rsplit(' ').next().unwrap().to_string();
     (cell, row(&report::usage(&input, &args(), true, false), skill)["grade"].clone())
 }
 

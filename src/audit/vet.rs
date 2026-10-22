@@ -82,6 +82,12 @@ impl VetVerdict {
     pub fn default_yes(&self) -> bool {
         self.value == Worth::WorthTrying && self.quality != Quality::Poor
     }
+
+    /// `quality Q, value V`: the verdict's line in `mazo add` and its
+    /// cell in the usage table.
+    pub fn summary(&self) -> String {
+        format!("quality {}, value {}", name(self.quality), name(self.value))
+    }
 }
 
 /// The vet judge's answer: the verdict, what the skill is for, and up to
@@ -110,7 +116,7 @@ impl Vet {
     /// The verdict as `mazo add` shows it before asking.
     pub fn text(&self, skill: &str) -> String {
         let v = &self.verdict;
-        let mut out = format!("vet {skill}: quality {}, value {}\n", name(v.quality), name(v.value));
+        let mut out = format!("vet {skill}: {}\n", v.summary());
         if let Some(finding) = &v.security {
             out.push_str(&format!("security: {finding}\n"));
         }

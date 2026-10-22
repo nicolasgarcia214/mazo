@@ -318,8 +318,8 @@ fn times_are_local_under_a_fixed_zone() {
     assert!(generated.is_match(&page), "generated to the minute");
 }
 
-/// The usage table carries each skill's latest audit verdict
-/// and the card shows its date, session count, rates, top three improvements
+/// The usage table's quality column carries each skill's latest audit
+/// verdict, else its vet verdict, else `not judged`, and the card shows its date, session count, rates, top three improvements
 /// and curated examples, escaped; an older record is not shown.
 #[test]
 fn the_latest_audit_is_in_the_usage_table_and_the_card() {
@@ -330,15 +330,18 @@ fn the_latest_audit_is_in_the_usage_table_and_the_card() {
         + "{\"v\":1,\"kind\":\"session\",\"skill\":\"unslop\",\"session\":\"s1\"}\n"
         + &skill_record("Good on <short> texts & \"notes\"", latest);
     write(&data.path().join("audits.jsonl"), &audits);
+    common::vetted(data.path());
     let mut w = world(repo.path());
+    w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
     w.audits = mazo::audit::latest(data.path()).unwrap();
     let page = page(&w, &events());
 
     let verdict = "Good on &lt;short&gt; texts &amp; &quot;notes&quot;";
     let usage = &page[page.find("<h2>Usage</h2>").unwrap()..page.find("coverage:").unwrap()];
-    assert!(usage.contains("<th>audit</th>"), "{usage}");
-    assert!(usage.contains(&format!("<td>{verdict}</td></tr>")), "{usage}");
-    assert_eq!(usage.matches("<td>-</td></tr>").count(), 8, "skills with no audit show -");
+    assert!(usage.contains("<th>quality</th>"), "{usage}");
+    assert!(usage.contains(&format!("<td>audit: {verdict}</td></tr>")), "{usage}");
+    assert!(usage.contains("<td>vet: quality weak, value low value</td></tr>"), "{usage}");
+    assert_eq!(usage.matches("<td>not judged</td></tr>").count(), 8, "{usage}");
     assert!(!page.contains("OLD VERDICT"), "only the latest record is shown");
 
     let card = section(&page, "skill-unslop");

@@ -145,7 +145,6 @@ fn usage(model: &Report) -> String {
             } else {
                 esc(&r.skill)
             };
-            let verdict = card(&r.skill).and_then(|c| c.audit).map(|a| a.result.verdict.as_str());
             format!(
                 "<tr><td>{name}</td>{}{}{}{}{}{}<td class=\"mono\">{}</td><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
                 n(r.sess),
@@ -158,13 +157,12 @@ fn usage(model: &Report) -> String {
                 local(r.last.as_deref(), &model.tz, DAY),
                 sparkline(&r.last_30d),
                 grade(r.grade.as_ref()),
-                or_dash(verdict),
+                esc(&report::verdict_text(r)),
             )
         })
         .collect();
     let head: String = report::USAGE_HEADER
         .iter()
-        .chain(&[("audit", Align::Left)])
         .map(|(h, a)| match a {
             Align::Right => format!("<th class=\"n\">{h}</th>"),
             Align::Left => format!("<th>{h}</th>"),
