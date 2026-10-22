@@ -21,8 +21,8 @@ fn hash_of(file: &Path) -> Option<String> {
 }
 
 /// AC1–AC4: grades committed before a skill change carry the hash of the skill
-/// at that commit, which equals the current hash of a skill unchanged since and
-/// differs from that of a changed one. An uncommitted grade and one whose skill
+/// at that commit, which equals the current hash of a skill unchanged since,
+/// eol-converted on checkout or not, and differs from that of a changed one. An uncommitted grade and one whose skill
 /// directory never existed move without a hash and say why. A destination that
 /// exists is never overwritten, its source stays and is listed on every run,
 /// and a second run moves nothing and says so.
@@ -41,6 +41,10 @@ fn migrate_moves_grades_and_retros_with_the_hash_at_their_commit() {
         );
         common::write(&source.join(format!("{skill}/references/notes.md")), "notes\n");
     }
+    // Checked out with CRLF, stored with LF: the historical copy must be the checkout's bytes.
+    common::write(&source.join("crlf/.gitattributes"), "* text eol=crlf\r\n");
+    common::write(&source.join("crlf/SKILL.md"), "---\r\nname: crlf\r\ndescription: D.\r\n---\r\n");
+    common::write(&source.join(".grades/crlf/2026-01-01.md"), &grade("2026-01-01"));
     common::write(&source.join(".grades/steady/2026-01-01.md"), &grade("2026-01-01"));
     common::write(&source.join(".grades/changed/2026-01-01.md"), &grade("2026-01-01"));
     common::write(&source.join(".grades/gone/2026-01-01.md"), &grade("2026-01-01"));
@@ -64,6 +68,8 @@ fn migrate_moves_grades_and_retros_with_the_hash_at_their_commit() {
     let steady = content_hash(&source.join("steady")).unwrap();
     assert_eq!(hash_of(&evals.join("grades/steady/2026-01-01.md")), Some(steady.clone()), "{text}");
     assert_eq!(hash_of(&evals.join("retros/steady/2026-01-02.md")), Some(steady), "{text}");
+    let crlf = content_hash(&source.join("crlf")).ok();
+    assert_eq!(hash_of(&evals.join("grades/crlf/2026-01-01.md")), crlf, "{text}");
     let changed = hash_of(&evals.join("grades/changed/2026-01-01.md"));
     assert_eq!(changed, Some(before), "{text}");
     assert_ne!(changed, content_hash(&source.join("changed")).ok());
@@ -83,7 +89,7 @@ fn migrate_moves_grades_and_retros_with_the_hash_at_their_commit() {
     }
     let left = format!("left {}: {} exists\n", source.join(".grades/changed/2026-03-01.md").display(), kept.display());
     assert!(text.contains(&left), "{text}");
-    assert!(text.ends_with("moved 5 files\n"), "{text}");
+    assert!(text.ends_with("moved 6 files\n"), "{text}");
     assert_eq!(fs::read_to_string(&kept).unwrap(), "mine\n");
     assert!(source.join(".grades/changed/2026-03-01.md").is_file());
     assert!(!source.join(".retros").exists() && !source.join(".grades/steady").exists());

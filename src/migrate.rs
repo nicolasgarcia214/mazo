@@ -3,7 +3,8 @@
 //! [`content_hash`] of its skill as of the commit that last touched it.
 //! Removed in the release after the one it ships in.
 
-use std::ffi::OsStr;
+use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -43,7 +44,8 @@ pub fn migrate(source: &Path, evals_dir: &Path, say: &mut dyn FnMut(String)) -> 
 
 fn moves(source: &Path, evals_dir: &Path, scratch: &Path, say: &mut dyn FnMut(String)) -> Result<Migrated> {
     let mut done = Migrated::default();
-    let mut copies = 0;
+    // The historical hash per (commit, skill), and the scratch copies made for it.
+    let mut hashes = BTreeMap::<(String, String), std::result::Result<String, String>>::new();
     for (i, kind) in ["grades", "retros"].into_iter().enumerate() {
         let old = source.join(format!(".{kind}"));
         for skill in sorted(&old).into_iter().filter(|p| p.is_dir()) {
@@ -51,10 +53,15 @@ fn moves(source: &Path, evals_dir: &Path, scratch: &Path, say: &mut dyn FnMut(St
             let to = &dirs(evals_dir, &name)[i];
             for file in sorted(&skill).into_iter().filter(|p| p.is_file() && p.extension() == Some(OsStr::new("md"))) {
                 let dest = to.join(file.file_name().unwrap_or_default());
-                copies += 1;
                 let rel = file.strip_prefix(source).unwrap_or(&file);
                 let text = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-                let hashed = committed_hash(source, rel, &name, &scratch.join(copies.to_string()))
+                let copies = hashes.len();
+                let hashed = last_commit(source, rel)
+                    .and_then(|commit| {
+                        let copy = scratch.join(copies.to_string());
+                        let hash = hashes.entry((commit, name.clone()));
+                        hash.or_insert_with_key(|(commit, skill)| tree_hash(source, commit, skill, &copy)).clone()
+                    })
                     .and_then(|hash| with_hash(&text, &hash).ok_or_else(|| "no frontmatter".to_string()));
                 fs::create_dir_all(to).map_err(|e| format!("{}: {e}", to.display()))?;
                 if !create(&dest, hashed.as_deref().unwrap_or(&text[..]))? {
@@ -89,17 +96,17 @@ fn create(path: &Path, bytes: &[u8]) -> Result<bool> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
         Err(e) => return Err(fail(e).into()),
     };
-    f.write_all(bytes).map_err(|e| {
+    // Synced, so the source is never removed before its copy is on disk.
+    f.write_all(bytes).and_then(|()| f.sync_all()).map_err(|e| {
         drop(fs::remove_file(path));
         fail(e)
     })?;
     Ok(true)
 }
 
-/// The [`content_hash`] of `<source>/<skill>` as of the commit that last
-/// touched `rel`, computed over a copy of that tree written to `scratch`; or
+/// The commit that last touched `rel`, which must have no changes since; or
 /// why there is none.
-fn committed_hash(source: &Path, rel: &Path, skill: &str, scratch: &Path) -> std::result::Result<String, String> {
+fn last_commit(source: &Path, rel: &Path) -> std::result::Result<String, String> {
     let rel = rel.as_os_str();
     let log = git(source, &["log".as_ref(), "-1".as_ref(), "--format=%H".as_ref(), "--".as_ref(), rel])
         .ok_or("no git history")?;
@@ -112,6 +119,13 @@ fn committed_hash(source: &Path, rel: &Path, skill: &str, scratch: &Path) -> std
     if !status.is_empty() {
         return Err("uncommitted changes".into());
     }
+    Ok(commit)
+}
+
+/// The [`content_hash`] of `<source>/<skill>` at `commit`, computed over a
+/// checkout of that tree, filters applied, written to `scratch`; or why there
+/// is none.
+fn tree_hash(source: &Path, commit: &str, skill: &str, scratch: &Path) -> std::result::Result<String, String> {
     let short = &commit[..commit.len().min(12)];
     let prefix = format!("{skill}/");
     let tree = git(
@@ -127,13 +141,16 @@ fn committed_hash(source: &Path, rel: &Path, skill: &str, scratch: &Path) -> std
         // `<mode> <type> <object>\t<path>`
         let tab = entry.iter().position(|b| *b == b'\t').ok_or("unreadable git ls-tree")?;
         let (meta, path) = (String::from_utf8_lossy(&entry[..tab]), Path::new(OsStr::from_bytes(&entry[tab + 1..])));
-        let [mode, kind, object] = meta.split(' ').collect::<Vec<_>>()[..] else {
+        let [mode, kind, _] = meta.split(' ').collect::<Vec<_>>()[..] else {
             return Err("unreadable git ls-tree".into());
         };
         if kind != "blob" || mode == "120000" {
             return Err(format!("{} at commit {short} is not a regular file", path.display()));
         }
-        let blob = git(source, &["cat-file".as_ref(), "blob".as_ref(), object.as_ref()])
+        // As a checkout writes it: eol conversion and smudge filters applied.
+        let mut spec = OsString::from(format!("{commit}:./"));
+        spec.push(path);
+        let blob = git(source, &["cat-file".as_ref(), "--filters".as_ref(), &spec])
             .ok_or_else(|| format!("{} at commit {short} does not read", path.display()))?;
         let to = dir.join(path.strip_prefix(&prefix).unwrap_or(path));
         let write = to.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(&to, blob));
@@ -154,7 +171,8 @@ fn git(dir: &Path, args: &[&OsStr]) -> Option<Vec<u8>> {
 }
 
 /// `text` with `content_hash: <hash>` as the first frontmatter key, replacing
-/// any `content_hash` line there; None when `text` has no frontmatter.
+/// any `content_hash` line there; None when `text` has no frontmatter or never
+/// closes it.
 fn with_hash(text: &[u8], hash: &str) -> Option<Vec<u8>> {
     let mut lines = text.split_inclusive(|b| *b == b'\n');
     let fence = lines.next()?;
@@ -173,7 +191,7 @@ fn with_hash(text: &[u8], hash: &str) -> Option<Vec<u8>> {
         }
         out.extend_from_slice(line);
     }
-    Some(out)
+    (!inside).then_some(out)
 }
 
 #[cfg(test)]
@@ -186,5 +204,6 @@ mod tests {
         let want = b"---\r\ncontent_hash: h\r\ndate: 2026-01-01\r\n---\r\ncontent_hash: body\r\n";
         assert_eq!(with_hash(text, "h").unwrap(), want);
         assert_eq!(with_hash(b"# no frontmatter\n", "h"), None);
+        assert_eq!(with_hash(b"---\ndate: 2026-01-01\ncontent_hash: body\n", "h"), None, "an unclosed frontmatter");
     }
 }

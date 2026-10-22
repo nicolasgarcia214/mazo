@@ -23,7 +23,10 @@ one-time command and is removed in the next release.
 
 Each moved file gets a `content_hash` in its frontmatter: the hash of the
 skill directory as of the commit that last touched the file. A grade of a
-skill unchanged since that commit is therefore not stale. A file that is
+skill unchanged since that commit is therefore not stale. Untracked or
+ignored files in the skill directory, such as `.DS_Store` or `__pycache__`,
+count in the skill's current hash but are absent from its commit, so its
+moved grades show stale. A file that is
 uncommitted, or whose commit or skill directory is not found, moves without a
 hash, and its output line says why.
 
