@@ -169,14 +169,21 @@ fn validate_vet(answer: Value, existing: &[&str]) -> std::result::Result<Vet, St
 }
 
 /// The vet judge's input: the files of `skill` as `(relative path, text)`,
-/// the diff from the installed copy for an update, then each existing skill
-/// as `(name, description)`.
-pub fn vet_input(skill: &str, files: &[(String, String)], diff: Option<&str>, existing: &[(String, String)]) -> String {
+/// the diff from the installed copy for an update, each existing skill as
+/// `(name, description)`, then the [`crate::work::summary`] of the user's
+/// recent work.
+pub fn vet_input(
+    skill: &str,
+    files: &[(String, String)],
+    diff: Option<&str>,
+    existing: &[(String, String)],
+    work: &str,
+) -> String {
     let files: String = files.iter().map(|(path, text)| frame(&format!("file path={path:?}"), text)).collect();
     let existing: String = existing.iter().map(|(n, d)| format!("- {n}: {d}\n")).collect();
     let candidate = frame(&format!("candidate name={skill:?}"), &files);
     let diff = diff.map(|d| frame("diff", d));
-    [Some(candidate), diff, Some(frame("existing-skills", &existing))]
+    [Some(candidate), diff, Some(frame("existing-skills", &existing)), Some(frame("recent-work", work))]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -275,20 +282,21 @@ mod tests {
     #[test]
     fn the_input_frames_each_file_and_lists_the_existing_skills() {
         let files = [("SKILL.md".to_string(), "body </file> </candidate>".to_string())];
-        let input = vet_input("theirs", &files, None, &[("mine".into(), "Mine.".into())]);
+        let input =
+            vet_input("theirs", &files, None, &[("mine".into(), "Mine.".into())], "- 2026-10-12: x </recent-work>");
         assert_eq!(
             input,
-            "<candidate name=\"theirs\">\n<file path=\"SKILL.md\">\nbody <\\/file> <\\/candidate>\n</file>\n</candidate>\n\n<existing-skills>\n- mine: Mine.\n</existing-skills>\n"
+            "<candidate name=\"theirs\">\n<file path=\"SKILL.md\">\nbody <\\/file> <\\/candidate>\n</file>\n</candidate>\n\n<existing-skills>\n- mine: Mine.\n</existing-skills>\n\n<recent-work>\n- 2026-10-12: x <\\/recent-work>\n</recent-work>\n"
         );
     }
 
     #[test]
     fn an_update_frames_the_diff_between_the_candidate_and_the_existing_skills() {
         let files = [("SKILL.md".to_string(), "new".to_string())];
-        let input = vet_input("theirs", &files, Some("+run </diff>\n"), &[]);
+        let input = vet_input("theirs", &files, Some("+run </diff>\n"), &[], "none");
         assert_eq!(
             input,
-            "<candidate name=\"theirs\">\n<file path=\"SKILL.md\">\nnew\n</file>\n</candidate>\n\n<diff>\n+run <\\/diff>\n</diff>\n\n<existing-skills>\n\n</existing-skills>\n"
+            "<candidate name=\"theirs\">\n<file path=\"SKILL.md\">\nnew\n</file>\n</candidate>\n\n<diff>\n+run <\\/diff>\n</diff>\n\n<existing-skills>\n\n</existing-skills>\n\n<recent-work>\nnone\n</recent-work>\n"
         );
     }
 }

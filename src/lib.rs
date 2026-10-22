@@ -25,6 +25,7 @@ pub mod scan;
 pub mod store;
 pub mod tail;
 pub mod tui;
+pub mod work;
 pub mod yaml;
 
 /// An error is reported to the user as one `ERROR: …` line; its kind picks
