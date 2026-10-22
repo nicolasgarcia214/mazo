@@ -1,9 +1,10 @@
 //! The TUI of bare `mazo`: the usage table, the unused list and one skill's
 //! card, rendered from the typed report model over a finished scan. Its
-//! actions, `retire`, `sync`, `update` and `audit`, each ask y/N first and run
-//! the CLI command's own code path; the data is re-read after each. An update
-//! or an audit runs on a background thread, one at a time, and reports in the
-//! job pane.
+//! actions, `retire`, `sync`, `add`, `update` and `audit`, each ask first and
+//! run the CLI command's own code path; the data is re-read after each. An
+//! add, an update or an audit runs on a background thread, one at a time,
+//! and reports in the job pane; an add's picker and y/N questions open
+//! dialogs over the screen.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -27,9 +28,10 @@ use crate::inventory::Inventory;
 use crate::ledger::{self, Agent, Channel, Coverage, Ledger, name};
 use crate::lifecycle::{self, Retired};
 use crate::links::{self, Plan};
+use crate::pick::{Picker, Step};
 use crate::render::{self, Align, Colour};
 use crate::report::{self, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
-use crate::store;
+use crate::store::{self, Question};
 
 /// The windows `w` cycles through.
 const WINDOWS: [Since; 3] = [Since::Days(30), Since::Days(60), Since::All];
@@ -42,7 +44,7 @@ const PANE_LINES: usize = 6;
 const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// The keys, as the footer lists them.
-const KEYS: [&str; 14] = [
+const KEYS: [&str; 15] = [
     "↑↓←→/hjkl move",
     "Enter card/retire",
     "Esc back",
@@ -54,6 +56,7 @@ const KEYS: [&str; 14] = [
     "A authoring",
     "r retire",
     "s sync",
+    "i add",
     "u/U update one/all",
     "x audit",
     "q quit",
@@ -134,17 +137,26 @@ enum Ask {
     Update(Option<String>),
     /// Stops the running job and quits.
     Quit,
+    /// The add source typed so far; Enter starts the job, Esc cancels.
+    Source(String),
+    /// The add job's picker; its selection, none when cancelled, is the reply.
+    Pick(Picker, mpsc::Sender<Vec<String>>),
+    /// The add job's y/N question and its default: Enter takes it, `y` and
+    /// `n` answer, and Esc or quitting is No.
+    Answer(mpsc::Sender<bool>, bool),
 }
 
-/// A background audit or update and what its pane shows.
+/// A background add, audit or update and what its pane shows.
 struct Job {
-    /// `audit` or `update`.
+    /// `add`, `audit` or `update`.
     verb: &'static str,
-    /// The skill, or every store skill.
+    /// The skill, every store skill, or the add source.
     target: String,
     /// What the run reported, then what its CLI command prints.
     lines: Vec<String>,
     rx: mpsc::Receiver<String>,
+    /// What an add asks, each opened as a dialog once none is open.
+    asks: Option<mpsc::Receiver<Question>>,
     cancel: Arc<AtomicBool>,
     /// The thread until it ends; it returns whether the run succeeded.
     thread: Option<JoinHandle<bool>>,
@@ -152,7 +164,7 @@ struct Job {
 }
 
 /// Lines over the screen that take the next key: `y` does `ask`, any other
-/// key closes it.
+/// key closes it; a source, a picker or an answer takes keys of its own.
 struct Dialog {
     lines: Vec<String>,
     ask: Option<Ask>,
@@ -376,23 +388,44 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return self.quit();
         }
-        if let Some(dialog) = self.dialog.take() {
-            if let Some(ask) = dialog.ask
-                && key.code == KeyCode::Char('y')
-                && key.modifiers.is_empty()
-            {
-                match ask {
-                    Ask::Act(act) => {
-                        let lines = self.act(act);
-                        self.dialog = Some(Dialog { lines, ask: None });
+        if let Some(Dialog { lines, ask }) = self.dialog.take() {
+            let y = key.code == KeyCode::Char('y') && key.modifiers.is_empty();
+            match ask {
+                Some(Ask::Source(mut source)) => match key.code {
+                    KeyCode::Enter => self.add(source),
+                    KeyCode::Esc => {}
+                    code => {
+                        match code {
+                            KeyCode::Char(c) if (key.modifiers - KeyModifiers::SHIFT).is_empty() => source.push(c),
+                            KeyCode::Backspace => _ = source.pop(),
+                            _ => {}
+                        }
+                        self.dialog = Some(source_dialog(source));
                     }
-                    Ask::Audit(skill) => self.run_audit(skill),
-                    Ask::Update(skill) => self.run_update(skill),
-                    Ask::Quit => {
-                        self.stop();
-                        return false;
-                    }
+                },
+                Some(Ask::Pick(mut picker, reply)) => match picker.key(key) {
+                    Step::Open => self.dialog = Some(Dialog { lines, ask: Some(Ask::Pick(picker, reply)) }),
+                    Step::Done(names) => _ = reply.send(names),
+                },
+                Some(Ask::Answer(reply, default)) => match key.code {
+                    KeyCode::Enter => _ = reply.send(default),
+                    KeyCode::Char('y') => _ = reply.send(true),
+                    KeyCode::Char('n') | KeyCode::Esc => _ = reply.send(false),
+                    // The unanswered question is No.
+                    KeyCode::Char('q') => return self.quit(),
+                    _ => self.dialog = Some(Dialog { lines, ask: Some(Ask::Answer(reply, default)) }),
+                },
+                Some(Ask::Act(act)) if y => {
+                    let lines = self.act(act);
+                    self.dialog = Some(Dialog { lines, ask: None });
                 }
+                Some(Ask::Audit(skill)) if y => self.run_audit(skill),
+                Some(Ask::Update(skill)) if y => self.run_update(skill),
+                Some(Ask::Quit) if y => {
+                    self.stop();
+                    return false;
+                }
+                _ => {}
             }
             return true;
         }
@@ -476,6 +509,7 @@ impl App {
                 }
             }
             KeyCode::Char('U') => self.dialog = Some(self.update(None)),
+            KeyCode::Char('i') => self.dialog = Some(self.one_job().unwrap_or_else(|| source_dialog(String::new()))),
             KeyCode::Char('x') => {
                 if let Some(skill) = self.chosen() {
                     self.dialog = Some(self.audit(skill));
@@ -572,13 +606,44 @@ impl App {
         Dialog { lines, ask: Some(Ask::Update(skill)) }
     }
 
+    /// Adds from `source` in the background as `mazo add <source>` does, its
+    /// picker and y/N questions answered in dialogs, or shows the refusal
+    /// `add` gives before reading the source. There is no `--force`.
+    fn add(&mut self, source: String) {
+        if let Err(e) = store::vets(&self.data.cfg, &source) {
+            self.dialog = Some(Dialog { lines: vec![format!("ERROR: {e}")], ask: None });
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let target = source.clone();
+        self.start("add", target, Some(rx), move |data, pane| {
+            let args = store::Add {
+                source: &source,
+                rename: None,
+                pick: None,
+                all: false,
+                trust: false,
+                yes: false,
+                force: false,
+                project: false,
+                pane: Some(pane),
+                asks: Some(&tx),
+            };
+            match store::add(&data.cfg, &data.inv, &data.dir, &args) {
+                Ok(code) => (String::new(), code == ExitCode::SUCCESS),
+                Err(e) => (format!("ERROR: {e}"), false),
+            }
+        });
+    }
+
     /// Runs `job` on a thread over a copy of the data, as the `verb` of
     /// `target`: the lines it reports, then the text it returns, go to the
-    /// job pane.
+    /// job pane, and what it `asks` to the dialogs.
     fn start(
         &mut self,
         verb: &'static str,
         target: String,
+        asks: Option<mpsc::Receiver<Question>>,
         job: impl FnOnce(&Data, &audit::Pane) -> (String, bool) + Send + 'static,
     ) {
         let (tx, rx) = mpsc::channel();
@@ -592,13 +657,13 @@ impl App {
             }
             ok
         });
-        self.job = Some(Job { verb, target, lines: Vec::new(), rx, cancel, thread: Some(thread), ok: false });
+        self.job = Some(Job { verb, target, lines: Vec::new(), rx, asks, cancel, thread: Some(thread), ok: false });
     }
 
     /// Audits `skill` in the background as `mazo audit <skill>` does.
     fn run_audit(&mut self, skill: String) {
         let name = skill.clone();
-        self.start("audit", skill, move |data, pane| {
+        self.start("audit", skill, None, move |data, pane| {
             let args = audit::Args { limit: Some(audit::LIMIT), resynth: false, dry_run: false, json: false };
             let ran = audit::plan(&data.cfg, &data.inv, &name, None)
                 .and_then(|p| audit::command(&p, &args, &data.input(), &data.dir, false, Some(pane)));
@@ -610,7 +675,7 @@ impl App {
     /// update [skill] --yes` does.
     fn run_update(&mut self, skill: Option<String>) {
         let target = skill.clone().unwrap_or_else(|| "every store skill".into());
-        self.start("update", target, move |data, pane| {
+        self.start("update", target, None, move |data, pane| {
             let names = Vec::from_iter(skill);
             let args = store::Update { names: &names, yes: true, force: false, pane: Some(pane) };
             match store::update(&data.cfg, &data.inv, &data.dir, &args) {
@@ -620,10 +685,24 @@ impl App {
         });
     }
 
-    /// Takes the lines the job reported; once its thread ended, re-reads the
-    /// data. Called before each draw.
+    /// Takes the lines the job reported, and opens its next question when no
+    /// dialog is open; once its thread ended, re-reads the data. Called
+    /// before each draw.
     pub fn tick(&mut self) {
         let Some(job) = &mut self.job else { return };
+        if self.dialog.is_none()
+            && let Some(question) = job.asks.as_ref().and_then(|a| a.try_recv().ok())
+        {
+            self.dialog = Some(match question {
+                Question::Pick(items, reply) => {
+                    Dialog { lines: Vec::new(), ask: Some(Ask::Pick(Picker::new(items), reply)) }
+                }
+                Question::YesNo { mut lines, prompt, default, reply } => {
+                    lines.push(prompt);
+                    Dialog { lines, ask: Some(Ask::Answer(reply, default)) }
+                }
+            });
+        }
         loop {
             match job.rx.try_recv() {
                 Ok(line) => job.lines.push(line),
@@ -647,6 +726,8 @@ impl App {
         job.cancel.store(true, Ordering::Relaxed);
         let deadline = Instant::now() + STOP_WAIT;
         while !thread.is_finished() && Instant::now() < deadline {
+            // A question the job waits on is dropped unanswered: No.
+            while job.asks.as_ref().is_some_and(|a| a.try_recv().is_ok()) {}
             std::thread::sleep(Duration::from_millis(10));
         }
         if thread.is_finished() {
@@ -733,6 +814,12 @@ impl App {
     /// The footer's first line: the view, its window and the active filters.
     fn status(&self) -> String {
         match &self.dialog {
+            Some(Dialog { ask: Some(Ask::Source(_)), .. }) => return "Enter add · Esc cancels".into(),
+            Some(Dialog { ask: Some(Ask::Pick(..)), .. }) => return "add: pick the skills to install".into(),
+            Some(Dialog { ask: Some(Ask::Answer(_, default)), .. }) => {
+                let default = if *default { "yes" } else { "no" };
+                return format!("Enter {default} · y yes · n/Esc no · q quit");
+            }
             Some(Dialog { ask: Some(_), .. }) => return "y apply · any other key cancels".into(),
             Some(_) => return "any key closes".into(),
             None => {}
@@ -783,6 +870,13 @@ impl App {
         }
         if let Some(dialog) = &self.dialog {
             let area = body.union(info);
+            if let Some(Ask::Pick(picker, _)) = &dialog.ask {
+                let block = Block::bordered();
+                frame.render_widget(Clear, area);
+                picker.draw(frame, block.inner(area));
+                frame.render_widget(block, area);
+                return;
+            }
             let room = usize::from(area.height.saturating_sub(2)).max(1);
             let mut lines: Vec<Line> = dialog.lines.iter().flat_map(|l| l.lines()).map(Line::raw).collect();
             if lines.len() > room {
@@ -844,6 +938,12 @@ impl App {
         );
         frame.render_widget(Paragraph::new(lines), body);
     }
+}
+
+/// The dialog that takes an add's source.
+fn source_dialog(source: String) -> Dialog {
+    let lines = vec!["add a skill from a local path, a git URL or owner/repo[/path]:".into(), format!("> {source}_")];
+    Dialog { lines, ask: Some(Ask::Source(source)) }
 }
 
 /// What `job`, the `verb` run, returns, or a failure naming its panic: the

@@ -1,9 +1,10 @@
-//! The multi-select `mazo add` opens at a terminal on a source holding
-//! several skills: each skill's name and description, and the ones to install.
+//! The multi-select `mazo add` opens at a terminal, or in the TUI's add
+//! dialog, on a source holding several skills: each skill's name and
+//! description, and the ones to install.
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -68,8 +69,9 @@ impl Picker {
         self.items.iter().zip(&self.selected).filter(|(_, s)| **s).map(|((n, _), _)| n.clone()).collect()
     }
 
-    fn draw(&self, frame: &mut Frame) {
-        let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(frame.area());
+    /// Draws the list and its footer into `area`.
+    pub fn draw(&self, frame: &mut Frame, area: Rect) {
+        let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(area);
         let count = self.selected.iter().filter(|s| **s).count();
         let status = format!("install from this source: {count} of {} selected", self.items.len());
         frame.render_widget(Paragraph::new(vec![Line::raw(status), Line::raw(KEYS).dim()]), footer);
@@ -99,7 +101,7 @@ pub fn pick(items: Vec<(String, String)>) -> std::io::Result<Vec<String>> {
     let mut picker = Picker::new(items);
     let result = ratatui::try_init().and_then(|mut terminal| {
         loop {
-            terminal.draw(|frame| picker.draw(frame))?;
+            terminal.draw(|frame| picker.draw(frame, frame.area()))?;
             if let Event::Key(key) = event::read()?
                 && let Step::Done(names) = picker.key(key)
             {

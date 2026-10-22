@@ -274,7 +274,8 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Add { source, name, skill, all, trust, yes, force, project } => {
             let (rename, pick) = (name.as_deref(), skill.as_deref());
-            let args = store::Add { source: &source, rename, pick, all, trust, yes, force, project };
+            let args =
+                store::Add { source: &source, rename, pick, all, trust, yes, force, project, pane: None, asks: None };
             store::add(&cfg, &inv, &data, &args)
         }
         Cmd::Update { names, yes, force } => {

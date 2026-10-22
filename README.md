@@ -202,15 +202,26 @@ in the background pane, where no y/N can be answered, so its dialog names the
 judge and its cap and asks "update and accept judge verdicts?": `y` accepts
 the verdict of each re-vet of an untrusted skill that changed. There is no
 `--force`, so a security finding still refuses that skill's update. An
-up-to-date skill is reported without a judge call. `x` audits the selected
+up-to-date skill is reported without a judge call. `i` asks for a source
+(Enter adds, Esc cancels) and adds it as `mazo add <source>` does, in the
+background pane. A source that is not trusted with no `[judge]` shows the
+refusal `add` gives and starts nothing. A source of several skills opens the
+picker in a dialog. For a source that is not trusted, the dialog shows the
+number of judge calls, one per picked skill, and asks `make <n> judge calls?
+[y/N]` before the first; a trusted source asks nothing and calls no judge.
+Each verdict then opens a dialog with the `install <name>?` prompt and the
+default `add` gives it: Enter takes the default, `y` and `n` answer, and Esc
+or `q` is No (`q` then asks to quit). There is no `--force`, so a security
+finding refuses that skill. A skill is written to the store only once its
+verdict is accepted. `x` audits the selected
 skill, or the card's, as
 `mazo audit <skill>` does with its default caps: the dialog shows the cap (20
 sessions, and $1 for a judge that reports its cost) or the refusal `mazo audit`
 would give. The audit runs in the background and a pane above the footer
 shows its progress and result while the views keep working; `Esc` on a list
-closes the pane once the audit ends. One job, an update or an audit, runs at
-a time. Quitting while one runs asks first, and on `y` its judge call is
-killed. Each action runs only on `y`; any other key cancels. The data is re-read after each action. It scans
+closes the pane once the audit ends. One job, an add, an update or an audit, runs
+at a time. Quitting while one runs asks first, and on `y` its judge call is
+killed. Every other action runs only on `y`; any other key cancels. The data is re-read after each action. It scans
 first and writes nothing but what an action writes. Off a terminal, bare `mazo`
 prints the help.
 
