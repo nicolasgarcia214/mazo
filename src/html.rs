@@ -14,7 +14,7 @@ use crate::examples::Examples;
 use crate::help;
 use crate::ledger::name;
 use crate::render::{self, Align, DAY, MINUTE};
-use crate::report::{self, AUDIT_IMPROVEMENTS, Card, Day, GradeOut, Link, Report, tilde};
+use crate::report::{self, AUDIT_IMPROVEMENTS, Card, Day, GradeOut, Link, Report, Trend, tilde};
 
 const CSS: &str = "
 :root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
@@ -37,7 +37,6 @@ code, .mono { font-family: ui-monospace, monospace; font-size: 13px; }
 .wrap { overflow-x: auto; }
 svg .s { fill: var(--strong); }
 svg .w { fill: var(--weak); }
-svg .z { fill: var(--line); }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
 dt { color: var(--muted); }
 dd { margin: 0; }
@@ -69,23 +68,6 @@ fn grade(g: Option<&GradeOut>) -> String {
     let Some(g) = g else { return "-".into() };
     let score = esc(g.grade.eval.score.as_deref().unwrap_or("?"));
     if g.grade.stale { format!("<span class=\"stale\">{score} {}</span>", g.mark) } else { score }
-}
-
-/// The 30-day sparkline: one bar per day, a tick for a day with no event.
-fn sparkline(counts: &[usize]) -> String {
-    let max = counts.iter().copied().max().unwrap_or(0).max(1);
-    let bars: String = counts
-        .iter()
-        .enumerate()
-        .map(|(i, &c)| match c {
-            0 => format!("<rect class=\"z\" x=\"{}\" y=\"15\" width=\"2\" height=\"1\"/>", i * 3),
-            c => {
-                let h = (c * 16).div_ceil(max);
-                format!("<rect class=\"s\" x=\"{}\" y=\"{}\" width=\"2\" height=\"{h}\"/>", i * 3, 16 - h)
-            }
-        })
-        .collect();
-    format!("<svg width=\"{}\" height=\"16\" role=\"img\">{bars}</svg>", counts.len() * 3)
 }
 
 /// The card histogram: one column per day with events, strong below weak.
@@ -144,8 +126,11 @@ fn usage(model: &Report) -> String {
                 esc(&r.skill)
             };
             format!(
-                "<tr><td>{name}</td>{}{}{}{}{}{}<td class=\"mono\">{}</td><td class=\"mono\">{}</td><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
+                "<tr><td>{name}</td>{}{}{}<td>{}</td>{}{}{}{}{}<td class=\"mono\">{}</td><td class=\"mono\">{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
                 n(r.sess),
+                n(r.sessions_7d),
+                n(r.sessions_30d),
+                Trend::glyph(r.trend),
                 n(r.slash),
                 n(r.tool),
                 n(r.typed),
@@ -154,7 +139,6 @@ fn usage(model: &Report) -> String {
                 esc(&r.agents),
                 esc(&r.ctx.cell()),
                 local(r.last.as_deref(), &model.tz, DAY),
-                sparkline(&r.last_30d),
                 grade(r.grade.as_ref()),
                 esc(&report::verdict_text(r)),
             )

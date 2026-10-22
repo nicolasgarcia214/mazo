@@ -4,4 +4,4 @@ goal-execute held   held by goal-smart
 goal-plan    held   held by goal-smart; named by unslop
 wfa-helper   held   held by writing-for-agents
 window: claude since 2026-09-13 · codex since 2026-09-13
-legend: agents C Claude, X Codex, P Pi; ● name and description in context: Claude on, every Codex skill, Pi by default; ◐ name only in context: Claude name-only; ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; × off: Claude off; · no events that day; stale the skill changed since the grade; (project) a project skill, counted apart
+legend: agents C Claude, X Codex, P Pi; ● name and description in context: Claude on, every Codex skill, Pi by default; ◐ name only in context: Claude name-only; ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; × off: Claude off; stale the skill changed since the grade; (project) a project skill, counted apart

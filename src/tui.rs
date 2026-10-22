@@ -281,8 +281,7 @@ fn token(t: &str) -> Span<'static> {
     }
 }
 
-/// The spans of `cell` in the column `head`: a sparkline in the accent with
-/// its empty days muted, a grade of 9 or more green and its mark apart,
+/// The spans of `cell` in the column `head`: a grade of 9 or more green and its mark apart,
 /// `today` in the accent, and zero counts, `-` and `not judged` muted. In
 /// any other column each `; `-separated note is styled as a status token.
 fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
@@ -290,10 +289,6 @@ fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
     match (head, cell) {
         (_, "-" | "0" | "not judged") => vec![muted(cell)],
         (_, "today") => vec![Span::raw("today").fg(theme::ACCENT)],
-        ("30d", _) => cell
-            .chars()
-            .map(|c| if c == '·' { muted("·") } else { Span::raw(c.to_string()).fg(theme::ACCENT) })
-            .collect(),
         ("grade", _) => {
             let (score, mark) = cell.split_once(' ').unwrap_or((cell, ""));
             let high = score.parse::<f64>().is_ok_and(|s| s >= 9.0);
@@ -345,12 +340,12 @@ enum Narrow {
 /// step taken only while the table overflows. A column not named here
 /// never narrows; one only cut never drops.
 const NARROWING: &[Narrow] = &[
-    Narrow::Drop("30d"),
     Narrow::Drop("typed"),
     Narrow::Drop("ref"),
     Narrow::Drop("read"),
     Narrow::Fold("slash", "tool", "via"),
     Narrow::Drop("agents"),
+    Narrow::Drop("7d"),
     Narrow::Drop("ctx"),
     Narrow::Cut("notes"),
     Narrow::Cut("skill"),

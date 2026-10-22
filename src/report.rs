@@ -85,7 +85,7 @@ fn legend() -> String {
     format!("legend: {}\n", help::legend(false))
 }
 
-/// Days in the `30d` sparkline.
+/// Days in the `30d` per-day counts.
 const SPARK_DAYS: i64 = 30;
 
 /// The collapse key, within one skill.
@@ -209,6 +209,18 @@ impl<'a> View<'a> {
         self.select(&f, None, start).filter(|(e, _)| e.channel.strong()).map(|(e, _)| e.skill.as_str()).collect()
     }
 
+    /// Distinct (agent, session) pairs with a strong event on a local day
+    /// `days` ago, today being 0.
+    fn strong_sessions<'s>(
+        &self,
+        events: impl Iterator<Item = &'s (&'s Event, Timestamp)>,
+        days: std::ops::Range<i64>,
+    ) -> usize {
+        let ago = |t: Timestamp| (self.today - self.date(t)).get_days() as i64;
+        let pairs = events.filter(|(e, t)| e.channel.strong() && days.contains(&ago(*t)));
+        pairs.map(|(e, _)| (e.agent, e.session.as_str())).collect::<HashSet<_>>().len()
+    }
+
     /// Distinct collapse keys of strong events per local day, for the last `days` days.
     fn daily_strong<'s>(&self, events: impl Iterator<Item = &'s (&'s Event, Timestamp)>, days: i64) -> Vec<usize> {
         let mut per_day: Vec<HashSet<Key>> = vec![HashSet::new(); days as usize];
@@ -307,6 +319,12 @@ pub struct UsageRow {
     pub agents: String,
     pub ctx: Ctx,
     pub last: Option<String>,
+    /// [`Self::sess`] over the last 7 local days, whatever the window.
+    pub sessions_7d: usize,
+    /// [`Self::sess`] over the last 30 local days, whatever the window.
+    pub sessions_30d: usize,
+    /// `sessions_30d` against the 30 days before; null when both are zero.
+    pub trend: Option<Trend>,
     #[serde(rename = "30d")]
     pub last_30d: Vec<usize>,
     pub grade: Option<GradeOut>,
@@ -314,6 +332,41 @@ pub struct UsageRow {
     pub verdict: Option<String>,
     /// Where `verdict` comes from; null when not judged.
     pub verdict_source: Option<VerdictSource>,
+}
+
+/// How a usage row's last 30 days compare with the 30 before.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Trend {
+    Up,
+    Down,
+    Flat,
+    New,
+}
+
+impl Trend {
+    /// `later` against `earlier`: up at +20% or more, down at -20% or less,
+    /// new from zero, none when both are zero.
+    fn of(later: usize, earlier: usize) -> Option<Trend> {
+        Some(match (later, earlier) {
+            (0, 0) => return None,
+            (_, 0) => Trend::New,
+            _ if 5 * later >= 6 * earlier => Trend::Up,
+            _ if 5 * later <= 4 * earlier => Trend::Down,
+            _ => Trend::Flat,
+        })
+    }
+
+    /// The trend cell: an arrow, or `new`.
+    pub fn glyph(trend: Option<Trend>) -> &'static str {
+        match trend {
+            Some(Trend::Up) => "↑",
+            Some(Trend::Down) => "↓",
+            Some(Trend::Flat) => "→",
+            Some(Trend::New) => "new",
+            None => "",
+        }
+    }
 }
 
 /// Where a usage row's verdict comes from.
@@ -404,6 +457,8 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
             let last = window.iter().filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
             let spark_from = input.now.checked_sub(SignedDuration::from_hours(24 * (SPARK_DAYS + 1))).ok();
             let last_30d = view.daily_strong(select(spark_from), SPARK_DAYS);
+            let sessions = |days| view.strong_sessions(select(None), days);
+            let sessions_30d = sessions(0..30);
             // Only a source or store skill has grades.
             let global = scope == Scope::Global && input.inv.skills.contains(skill);
             let grade = global.then(|| grade_out(&evals::load(&input.cfg.evals_dir, input.inv, skill))).flatten();
@@ -420,6 +475,9 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
                 agents: agents.iter().map(|a| a.letter()).collect(),
                 ctx: view.ctx().of(input.inv, skill, scope),
                 last: last.map(|t| t.to_string()),
+                sessions_7d: sessions(0..7),
+                sessions_30d,
+                trend: Trend::of(sessions_30d, sessions(30..60)),
                 last_30d,
                 grade,
                 verdict,
@@ -445,9 +503,12 @@ pub fn usage_table(input: &Input, args: &UsageArgs) -> Usage {
 }
 
 /// The usage table's columns.
-pub const USAGE_HEADER: [(&str, Align); 13] = [
+pub const USAGE_HEADER: [(&str, Align); 15] = [
     ("skill", Align::Left),
     ("sess", Align::Right),
+    ("7d", Align::Right),
+    ("30d", Align::Right),
+    ("trend", Align::Left),
     ("slash", Align::Right),
     ("tool", Align::Right),
     ("typed", Align::Right),
@@ -456,7 +517,6 @@ pub const USAGE_HEADER: [(&str, Align); 13] = [
     ("agents", Align::Left),
     ("ctx", Align::Left),
     ("last", Align::Left),
-    ("30d", Align::Left),
     ("grade", Align::Right),
     ("audit", Align::Left),
 ];
@@ -470,6 +530,9 @@ pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
     vec![
         format!("{}{}", r.skill, r.scope.suffix()),
         r.sess.to_string(),
+        r.sessions_7d.to_string(),
+        r.sessions_30d.to_string(),
+        Trend::glyph(r.trend).into(),
         r.slash.to_string(),
         r.tool.to_string(),
         r.typed.to_string(),
@@ -478,7 +541,6 @@ pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
         r.agents.clone(),
         r.ctx.cell(),
         r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)),
-        render::sparkline(&r.last_30d),
         grade_cell(&r.grade, tty),
         cut(&verdict_text(r), VERDICT_CHARS),
     ]
@@ -1245,5 +1307,24 @@ pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
         grades_due,
         cards,
         tz: input.tz.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trend_switches_at_twenty_percent_either_way() {
+        let cases = [(6, 5, Some(Trend::Up)), (11, 10, Some(Trend::Flat)), (9, 10, Some(Trend::Flat))];
+        let edges = [(4, 5, Some(Trend::Down)), (0, 3, Some(Trend::Down)), (1, 0, Some(Trend::New)), (0, 0, None)];
+        for (later, earlier, trend) in cases.into_iter().chain(edges) {
+            assert_eq!(Trend::of(later, earlier), trend, "{later} against {earlier}");
+        }
+        assert_eq!(
+            [Trend::Up, Trend::Down, Trend::Flat, Trend::New].map(|t| Trend::glyph(Some(t))),
+            ["↑", "↓", "→", "new"]
+        );
+        assert_eq!(Trend::glyph(None), "");
     }
 }

@@ -290,7 +290,7 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
     let mut app = app(&input);
     let screen = text(&mut app, 250, 30);
     let header = &screen[1];
-    assert!(header.contains(" sess slash tool typed read ref agents ctx "), "{screen:#?}");
+    assert!(header.contains(" sess 7d 30d trend slash tool typed read ref agents ctx "), "{screen:#?}");
     let cells: Vec<Vec<String>> = report::usage_table(&input, &UsageArgs::new(Since::Days(30)))
         .rows
         .iter()
@@ -301,7 +301,7 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
     let skill = header.find(" sess ").unwrap() + 1 - 3;
     // The side card takes 100 of the 250 columns.
     let audit = 150 - header.find("audit").unwrap();
-    let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(12).max(5));
+    let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(14).max(5));
     assert!(skill_spare > 0 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
 
     let buf = buffer(&mut app, 250, 30);
@@ -313,10 +313,10 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
 
 /// As the terminal narrows from the widest with no side card, the usage
 /// columns give way one at a time in their priority order, slash and tool
-/// folding into `via`, while skill, sess, last, grade and audit stay down to
-/// 60 columns.
+/// folding into `via`, while skill, sess, 30d, trend, last, grade and
+/// audit stay down to 60 columns.
 #[test]
-fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_grade_and_audit() {
+fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_30d_trend_last_grade_and_audit() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
     let mut app = app(&input);
@@ -334,14 +334,14 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
     assert_eq!(
         seen,
         [
-            "sess slash tool typed read ref agents ctx last 30d grade audit",
-            "sess slash tool typed read ref agents ctx last grade audit",
-            "sess slash tool read ref agents ctx last grade audit",
-            "sess slash tool read agents ctx last grade audit",
-            "sess slash tool agents ctx last grade audit",
-            "sess via agents ctx last grade audit",
-            "sess via ctx last grade audit",
-            "sess via last grade audit",
+            "sess 7d 30d trend slash tool typed read ref agents ctx last grade audit",
+            "sess 7d 30d trend slash tool read ref agents ctx last grade audit",
+            "sess 7d 30d trend slash tool read agents ctx last grade audit",
+            "sess 7d 30d trend slash tool agents ctx last grade audit",
+            "sess 7d 30d trend via agents ctx last grade audit",
+            "sess 7d 30d trend via ctx last grade audit",
+            "sess 30d trend via ctx last grade audit",
+            "sess 30d trend via last grade audit",
         ]
     );
 
@@ -354,7 +354,7 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
         .iter()
         .map(|r| {
             let c = report::usage_cells(&input, r, false);
-            let rest = [&c[1], &format!("{}/{}", c[2], c[3]), &c[9], &c[11], &c[12]];
+            let rest = [&c[1], &c[3], &c[4], &format!("{}/{}", c[5], c[6]), &c[12], &c[13], &c[14]];
             (c[0].clone(), rest.iter().flat_map(|s| s.split_whitespace()).map(String::from).collect())
         })
         .collect();

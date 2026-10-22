@@ -11,18 +11,18 @@ has a judge of your choice vet it.
 
 ```console
 $ mazo usage
-skill         sess slash tool typed read ref agents last   30d                            grade audit
-release-notes    3     3    0     0    0   0 C      1d ago ······················█··█··█·     - not judged
-triage           1     1    0     0    0   0 C      4d ago ·························█····     - not judged
-tidy-imports     0     0    0     0    0   0        -      ······························     - not judged
+skill         sess 7d 30d trend slash tool typed read ref agents last   grade audit
+release-notes    3  2   3 new       3    0     0    0   0 C      1d ago     - not judged
+triage           1  1   1 new       1    0     0    0   0 C      4d ago     - not judged
+tidy-imports     0  0   0           0    0     0    0   0        -          - not judged
 coverage: claude since 2026-10-14
-legend: agents C Claude, X Codex, P Pi; · no events that day; stale the skill changed since the grade; (project) a project skill, counted apart
+legend: agents C Claude, X Codex, P Pi; stale the skill changed since the grade; (project) a project skill, counted apart
 ```
 
 ## What it does
 
-- Counts every skill load per session, channel and agent, with a 30-day
-  sparkline and the last use.
+- Counts every skill load per session, channel and agent, with the sessions
+  of the last 7 and 30 days, their trend, and the last use.
 - Lists skills with no strong load in a window, so you can retire them.
 - Links your skills directory and the skills you install into each configured
   agent home, such as `~/.claude`, `~/.codex` and `~/.pi/agent`, and reports

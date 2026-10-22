@@ -20,7 +20,7 @@ const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; \
                       ● name and description in context: Claude on, every Codex skill, Pi by default; \
                       ◐ name only in context: Claude name-only; \
                       ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; \
-                      × off: Claude off; · no events that day; \
+                      × off: Claude off; \
                       stale the skill changed since the grade; \
                       (project) a project skill, counted apart";
 
@@ -295,6 +295,50 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
 
 // ---------------------------------------------------------------- usage
 
+/// 7d and 30d count strong sessions over local days, whatever the window,
+/// under the usage filters; trend compares 30d with the 30 days before.
+#[test]
+fn usage_counts_sessions_over_7_and_30_local_days_and_their_trend() {
+    let repo = report_repo();
+    let w = report_world(repo.path());
+    let mut codex = event("x", "unslop", Channel::Tool, "X", &ago(2));
+    codex.agent = Agent::Codex;
+    let mut probe = event("p", "unslop", Channel::Tool, "P", &ago(1));
+    probe.actor = Actor::Probe;
+    let events = vec![
+        event("a", "unslop", Channel::Tool, "A", "2026-10-07T00:30:00Z"), // 6 days ago
+        event("b1", "unslop", Channel::Slash, "B", "2026-10-06T23:59:00Z"), // 7 days ago
+        event("b2", "unslop", Channel::Tool, "B", &ago(1)),
+        event("c", "unslop", Channel::Tool, "C", &ago(29)),
+        // Inside the 30d window by the hour, but 30 local days ago.
+        event("e", "unslop", Channel::Tool, "E", "2026-09-13T13:00:00Z"),
+        event("d", "unslop", Channel::Tool, "D", &ago(59)),
+        event("r", "unslop", Channel::Read, "R", &ago(1)),
+        codex,
+        probe,
+    ];
+    let input = w.input(&events);
+    let periods = |args: &UsageArgs| {
+        let r = row(&report::usage(&input, args, true, false), "unslop");
+        (
+            r["sess"].as_u64().unwrap(),
+            r["sessions_7d"].as_u64().unwrap(),
+            r["sessions_30d"].as_u64().unwrap(),
+            r["trend"].clone(),
+        )
+    };
+    assert_eq!(periods(&args()), (5, 3, 4, Value::from("up")), "7d: A, B, X; 30d: and C; before: E, D");
+    assert_eq!(periods(&UsageArgs { since: Since::Days(7), ..args() }), (3, 3, 4, Value::from("up")));
+    assert_eq!(periods(&UsageArgs { since: Since::All, ..args() }), (6, 3, 4, Value::from("up")));
+    assert_eq!(periods(&UsageArgs { all: true, ..args() }).1, 4, "--all adds the probe");
+    let codex = UsageArgs { agent: Some(Agent::Codex), ..args() };
+    assert_eq!(periods(&codex), (1, 1, 1, Value::from("new")));
+    let read = UsageArgs { channel: Some(Channel::Read), ..args() };
+    assert_eq!(periods(&read), (0, 0, 0, Value::Null), "reads are weak");
+    let r = row(&report::usage(&input, &args(), true, false), "unslop");
+    assert_eq!(r["30d"].as_array().unwrap().len(), 30, "the per-day counts stay");
+}
+
 #[test]
 fn usage_collapses_and_applies_default_filters() {
     let repo = report_repo();
@@ -378,17 +422,18 @@ fn usage_collapses_and_applies_default_filters() {
     let text = report::usage(&input, &args(), false, false);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
-        lines[0].starts_with("skill") && lines[0].ends_with(&format!("30d{}grade audit", " ".repeat(28))),
+        lines[0].starts_with("skill")
+            && lines[0].ends_with(" sess 7d 30d trend slash tool typed read ref agents ctx  last   grade audit"),
         "{text}"
     );
     assert!(lines[1].starts_with("unslop "), "highest sess first: {text}");
-    assert!(lines[1].contains(" CX     C●X● 1d ago "), "{text}");
-    assert!(
-        lines[1].ends_with(&format!("{}▃█·     - not judged", "·".repeat(27))),
-        "a day with no event is a dot: {text}"
-    );
+    assert!(lines[1].contains("  3  3   3 ↑ "), "Z 40 days ago is in the 30 before: {text}");
+    assert!(lines[1].ends_with(" CX     C●X● 1d ago     - not judged"), "no strip: {text}");
     let execute = lines.iter().find(|l| l.starts_with("goal-execute ")).unwrap();
-    assert!(execute.ends_with(&format!(" 0        C●X● -      {}     - not judged", "·".repeat(30))), "{text}");
+    assert!(execute.contains("  0  0   0 ↓ "), "{text}");
+    let plan = lines.iter().find(|l| l.starts_with("goal-plan ")).unwrap();
+    assert_eq!(plan.split_whitespace().nth(4), Some("0"), "blank trend, then slash: {text}");
+    assert_eq!(row(&out, "goal-plan")["trend"], Value::Null);
     assert_eq!(
         lines[lines.len() - 2],
         format!(
@@ -549,7 +594,7 @@ fn grade_of(source: &Path, skill: &str) -> (String, Value) {
     let rows = report::usage_table(&input, &args()).rows;
     let r = rows.iter().find(|r| r.skill == skill).unwrap();
     (
-        report::usage_cells(&input, r, false)[11].clone(),
+        report::usage_cells(&input, r, false)[13].clone(),
         row(&report::usage(&input, &args(), true, false), skill)["grade"].clone(),
     )
 }

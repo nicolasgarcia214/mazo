@@ -180,8 +180,7 @@ fn the_page_is_self_contained() {
     let usage = &page[page.find("<h2>Usage</h2>").unwrap()..page.find("coverage:").unwrap()];
     let rows = usage.matches("<tr><td>").count();
     assert_eq!(rows, 9, "six inventory skills, the retired one, the other origin and the probe");
-    assert_eq!(usage.matches("<svg").count(), rows, "a 30-day sparkline per row");
-    assert_eq!(Regex::new(r"<rect [^>]*/>").unwrap().find_iter(usage).count(), 30 * rows, "30 days each");
+    assert!(!usage.contains("<svg"), "no 30-day strip");
     let unslop = section(&page, "skill-unslop");
     assert!(unslop.contains("<svg") && unslop.contains("strong 1 weak 0"), "the card histogram: {unslop}");
 }
@@ -200,7 +199,7 @@ fn the_legend_lists_the_helps_marks() {
          ● name and description in context: Claude on, every Codex skill, Pi by default; \
          ◐ name only in context: Claude name-only; \
          ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; \
-         × off: Claude off; a grey tick for a day with no events; \
+         × off: Claude off; \
          stale the skill changed since the grade; (project) a project skill, counted apart"
     );
     assert_eq!(legend, format!("legend: {}", mazo::help::legend(true)));
