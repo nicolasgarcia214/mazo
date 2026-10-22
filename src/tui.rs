@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use clap::ValueEnum;
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
@@ -24,8 +25,8 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, HighlightSpacing, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Table, TableState, Tabs,
+    Bar, BarChart, Block, BorderType, Borders, Clear, HighlightSpacing, Padding, Paragraph, Row, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, Table, TableState, Tabs, Widget,
 };
 
 use crate::audit::{self, SkillRecord};
@@ -37,7 +38,7 @@ use crate::lifecycle::{self, Retired};
 use crate::links::{self, Plan};
 use crate::pick::{Picker, Step};
 use crate::render::{self, Align, Colour};
-use crate::report::{self, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
+use crate::report::{self, Bucket, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
 use crate::store::{self, Question};
 use crate::theme;
 
@@ -228,10 +229,10 @@ pub struct App {
     page: usize,
     usage: Usage,
     unused: Unused,
-    /// The open card's skill and its `show` lines.
-    card: Option<(String, Vec<String>)>,
-    /// The card beside a wide usage table, as last drawn: its skill and lines.
-    side: Option<(String, Vec<String>)>,
+    /// The open card.
+    card: Option<Shown>,
+    /// The card beside a wide usage table, as last drawn.
+    side: Option<Shown>,
     scroll: usize,
     dialog: Option<Dialog>,
     /// The running job, or the last one until `Esc` closes its pane.
@@ -239,6 +240,9 @@ pub struct App {
     /// Whether an action ran since the last draw: it may have written under the screen.
     clear: bool,
 }
+
+/// A card as the TUI draws it: its skill, its `show` lines and its activity chart.
+type Shown = (String, Vec<String>, Vec<Bucket>);
 
 /// The next of `all` after `cur`, `None` (no filter) after the last.
 fn cycle<T: Copy + PartialEq>(all: &[T], cur: Option<T>) -> Option<T> {
@@ -496,21 +500,22 @@ impl App {
         skills.into_iter().filter(|s| self.matches(s)).collect()
     }
 
-    /// `skill`'s card over `since`, as `show` prints it at a terminal.
-    fn card_lines(&self, skill: &str, since: Since) -> Vec<String> {
+    /// `skill`'s card over `since`: as `show` prints it at a terminal, with its chart.
+    fn shown(&self, skill: &str, since: Since) -> Shown {
         let input = self.data.input();
         let card = report::skill_card(&input, skill, &self.args(since), SHOW_LIMIT);
-        report::card_text(&input, &card, true).lines().map(String::from).collect()
+        let lines = report::card_text(&input, &card, true).lines().map(String::from).collect();
+        (skill.to_string(), lines, card.activity)
     }
 
     fn open(&mut self, skill: &str) {
-        self.card = Some((skill.to_string(), self.card_lines(skill, self.card_since)));
+        self.card = Some(self.shown(skill, self.card_since));
     }
 
     /// Moves the selection, or scrolls the card, by `by` rows.
     fn shift(&mut self, by: isize) {
         let len = match &self.card {
-            Some((_, lines)) if self.screen == Screen::Card => lines.len(),
+            Some((_, lines, _)) if self.screen == Screen::Card => card_height(lines),
             _ => self.listed().len(),
         };
         let pos = if self.screen == Screen::Card { &mut self.scroll } else { &mut self.selected };
@@ -681,7 +686,7 @@ impl App {
     /// The card's skill, or the selected one.
     fn chosen(&self) -> Option<String> {
         match &self.card {
-            Some((skill, _)) if self.screen == Screen::Card => Some(skill.clone()),
+            Some((skill, ..)) if self.screen == Screen::Card => Some(skill.clone()),
             _ => self.listed().get(self.selected).map(|s| s.to_string()),
         }
     }
@@ -958,7 +963,7 @@ impl App {
     /// gone closes.
     fn reload(&mut self) -> crate::Result<()> {
         self.data.reload()?;
-        if self.card.as_ref().is_some_and(|(skill, _)| !self.data.inv.skills.contains(skill)) {
+        if self.card.as_ref().is_some_and(|(skill, ..)| !self.data.inv.skills.contains(skill)) {
             self.card = None;
             if self.screen == Screen::Card {
                 self.screen = self.back;
@@ -982,7 +987,7 @@ impl App {
         if self.list() == Screen::Usage {
             self.clamp();
         }
-        if let Some((skill, _)) = self.card.take() {
+        if let Some((skill, ..)) = self.card.take() {
             self.open(&skill);
             self.shift(0);
         }
@@ -1019,7 +1024,7 @@ impl App {
         let [at, area] = split(area, logo.width());
         frame.render_widget(logo, at);
         let area = match (self.screen, &self.card) {
-            (Screen::Card, Some((skill, _))) => {
+            (Screen::Card, Some((skill, ..))) => {
                 let back = if self.back == Screen::Unused { "unused" } else { "usage" };
                 let trail =
                     Line::from(vec![muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]);
@@ -1089,8 +1094,8 @@ impl App {
             draw_job(frame, job, pane);
         }
         match (self.screen, &self.card) {
-            (Screen::Card, Some((skill, lines))) => {
-                self.page = draw_card(frame, skill, lines, self.scroll, body.union(info));
+            (Screen::Card, Some((skill, lines, chart))) => {
+                self.page = draw_card(frame, skill, lines, chart, self.card_since, self.scroll, body.union(info));
             }
             (Screen::Usage, _) if body.width >= WIDE => {
                 let side = Constraint::Length((body.width * 2 / 5).max(50));
@@ -1114,13 +1119,13 @@ impl App {
     /// The selected skill's card in `area`, behind a rule, from its top.
     fn draw_side(&mut self, frame: &mut Frame, area: Rect) {
         let Some(skill) = self.listed().get(self.selected).map(|s| s.to_string()) else { return };
-        if self.side.as_ref().is_none_or(|(s, _)| *s != skill) {
-            self.side = Some((skill.clone(), self.card_lines(&skill, self.usage_since)));
+        if self.side.as_ref().is_none_or(|(s, ..)| *s != skill) {
+            self.side = Some(self.shown(&skill, self.usage_since));
         }
         let rule = Block::new().borders(Borders::LEFT).border_style(theme::MUTED);
         frame.render_widget(&rule, area);
-        let (skill, lines) = self.side.as_ref().unwrap();
-        draw_card(frame, skill, lines, 0, rule.inner(area));
+        let (skill, lines, chart) = self.side.as_ref().unwrap();
+        draw_card(frame, skill, lines, chart, self.usage_since, 0, rule.inner(area));
     }
 
     /// The current list as a table in `body` from the row that keeps the
@@ -1357,13 +1362,76 @@ fn scrollbar(frame: &mut Frame, area: Rect, total: usize, first: usize, page: us
     frame.render_stateful_widget(bar, area, &mut state);
 }
 
-/// `skill`'s card `lines` in `area` from line `first`, inset, with a
-/// scrollbar when they overflow it; the lines a page shows.
-fn draw_card(frame: &mut Frame, skill: &str, lines: &[String], first: usize, area: Rect) -> usize {
-    let text: Vec<Line> = lines.iter().skip(first).map(|l| card_line(l, skill)).collect();
-    frame.render_widget(Paragraph::new(text), area.inner(Margin::new(2, 0)));
-    scrollbar(frame, area, lines.len(), first, area.height.into());
+/// The rows of a card's activity chart: its bars and their labels.
+const CHART_ROWS: usize = 6;
+
+/// The rows of a card: its lines, and its chart with a blank row under it.
+fn card_height(lines: &[String]) -> usize {
+    lines.len() + CHART_ROWS + 1
+}
+
+/// `skill`'s card `lines` in `area` from row `first`, inset, with its
+/// `chart` over `since` under the heading and a scrollbar when they overflow
+/// `area`; the rows a page shows. The whole card is drawn off screen, then
+/// the rows in view are copied, so the chart scrolls with the lines.
+fn draw_card(
+    frame: &mut Frame,
+    skill: &str,
+    lines: &[String],
+    chart: &[Bucket],
+    since: Since,
+    first: usize,
+    area: Rect,
+) -> usize {
+    let inset = area.inner(Margin::new(2, 0));
+    let total = card_height(lines);
+    // Under the heading and its blank line.
+    let at = lines.iter().position(|l| l.starts_with(&format!("{skill}: "))).map_or(0, |i| i + 2).min(lines.len());
+    let mut card = Buffer::empty(Rect::new(0, 0, inset.width, total as u16));
+    let rect = |y: usize, height: usize| Rect::new(0, y as u16, inset.width, height as u16);
+    let text = |lines: &[String]| Paragraph::new(lines.iter().map(|l| card_line(l, skill)).collect::<Vec<_>>());
+    text(&lines[..at]).render(rect(0, at), &mut card);
+    let shown = draw_activity(chart, rect(at, CHART_ROWS), &mut card);
+    // A chart cut to the newest buckets says so after the heading.
+    let heading = at.checked_sub(2).map(|i| lines[i].chars().count() as u16);
+    if let Some(x) = heading.filter(|x| shown < chart.len() && *x < inset.width) {
+        let note = format!(" · last {shown} {}", report::buckets_of(since));
+        card.set_stringn(x, at as u16 - 2, note, usize::from(inset.width.saturating_sub(x)), theme::MUTED);
+    }
+    text(&lines[at..]).render(rect(at + CHART_ROWS + 1, lines.len() - at), &mut card);
+    let buf = frame.buffer_mut();
+    for y in 0..inset.height.min(total.saturating_sub(first) as u16) {
+        for x in 0..inset.width {
+            buf[(inset.x + x, inset.y + y)] = card[(x, first as u16 + y)].clone();
+        }
+    }
+    scrollbar(frame, area, total, first, area.height.into());
     usize::from(area.height).max(1)
+}
+
+/// A card's activity chart in `area`: a bar per bucket as wide as the
+/// longest label or count, a column apart, the newest that fit; each
+/// labelled, with its session count, today's, still filling, muted. The
+/// buckets it shows.
+fn draw_activity(chart: &[Bucket], area: Rect, buf: &mut Buffer) -> usize {
+    let counts: Vec<String> = chart.iter().map(|b| b.sessions.to_string()).collect();
+    let width = chart.iter().map(|b| b.label.len()).chain(counts.iter().map(String::len)).max().unwrap_or(1) as u16;
+    let from = chart.len().saturating_sub(usize::from((area.width + 1) / (width + 1)));
+    let colour = |b: &Bucket| if b.partial { theme::MUTED } else { theme::ACCENT };
+    let bars: Vec<Bar> = chart[from..]
+        .iter()
+        .map(|b| {
+            // The count is written below: ratatui hides one as wide as a short bar, and any on an empty bar.
+            Bar::new(b.sessions as u64).label(Line::raw(b.label.clone()).fg(colour(b))).style(colour(b)).text_value("")
+        })
+        .collect();
+    BarChart::vertical(bars).bar_width(width).bar_gap(1).render(area, buf);
+    for (i, (b, count)) in chart[from..].iter().zip(&counts[from..]).enumerate() {
+        let x = area.x + i as u16 * (width + 1) + (width - count.len() as u16) / 2;
+        let style = if b.sessions == 0 { Style::new().fg(theme::MUTED) } else { Style::new().fg(colour(b)).reversed() };
+        buf.set_string(x, area.bottom() - 2, count, style);
+    }
+    chart.len() - from
 }
 
 /// A line of `skill`'s card as `show` prints it at a terminal: its `ESC [ n
