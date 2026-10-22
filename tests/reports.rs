@@ -694,8 +694,6 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
     assert!(text.contains("retros: 2 strong since the latest\n"), "{text}");
 }
 
-/// The card's sections after the events, in display order, with `$HOME` as
-/// `~` and short locators in text and full paths in `--json`.
 /// D5: the card's chart counts distinct (agent, session) pairs with a strong
 /// event per day over 30 days, per ISO week from Monday over 60, and per
 /// calendar month over all time, the bucket of today last and partial. NOW
@@ -724,8 +722,8 @@ fn the_cards_chart_buckets_strong_sessions_by_day_week_and_month() {
 
     let days = chart(Since::Days(30));
     assert_eq!(days.len(), 31, "from the window's first day, 09-13, to today: {days:?}");
-    assert_eq!(days[0], ("09-13".into(), 0, false));
-    assert_eq!(days[28..], [("10-11".into(), 1, false), ("10-12".into(), 1, false), ("10-13".into(), 2, true)]);
+    assert_eq!(days[0], ("13".into(), 0, false));
+    assert_eq!(days[28..], [("11".into(), 1, false), ("12".into(), 1, false), ("13".into(), 2, true)]);
     assert_eq!(days.iter().map(|d| d.1).sum::<usize>(), 4);
 
     let weeks = chart(Since::Days(60));
@@ -738,15 +736,12 @@ fn the_cards_chart_buckets_strong_sessions_by_day_week_and_month() {
     let months = chart(Since::All);
     assert_eq!(
         months,
-        [
-            ("2026-07".into(), 1, false),
-            ("2026-08".into(), 1, false),
-            ("2026-09".into(), 0, false),
-            ("2026-10".into(), 4, true)
-        ]
+        [("Jul".into(), 1, false), ("Aug".into(), 1, false), ("Sep".into(), 0, false), ("Oct".into(), 4, true)]
     );
 }
 
+/// The card's sections after the events, in display order, with `$HOME` as
+/// `~` and short locators in text and full paths in `--json`.
 #[test]
 fn show_prints_the_card() {
     let repo = report_repo();

@@ -395,56 +395,69 @@ fn chart_of(input: &Input, skill: &str, since: Since) -> Vec<report::Bucket> {
     report::skill_card(input, skill, &UsageArgs::new(since), report::SHOW_LIMIT).activity
 }
 
-/// The chart rows of `skill`'s card on `screen`, cut to `skip` columns in
-/// and `bars` rows under the heading, and the colour of each bar's label.
-fn chart_rows(screen: &[(String, Vec<Color>)], skill: &str, skip: usize, bars: usize) -> Vec<(String, Color)> {
-    let heading = format!("{skill}: ");
-    let at = screen.iter().position(|(l, _)| l.chars().skip(skip).collect::<String>().starts_with(&heading));
-    let at = at.unwrap_or_else(|| panic!("no {skill} heading in {screen:#?}")) + 2;
-    let cut = |l: &str| l.chars().skip(skip).take_while(|c| !matches!(c, '│' | '┃')).collect::<String>();
-    screen[at..at + bars].iter().map(|(l, colours)| (cut(l).trim_end().to_string(), colours[skip])).collect()
+/// The buckets of `skill`'s chart over `since` that `screen` shows, checked
+/// bar by bar: the chart's bottom row under the heading holds the labels, a
+/// column apart from `skip` within `room` columns, the row above each count;
+/// today's label muted, the others in the accent.
+fn check_chart(
+    input: &Input,
+    screen: &[(String, Vec<Color>)],
+    skip: usize,
+    room: usize,
+    since: Since,
+) -> Vec<report::Bucket> {
+    let chart = chart_of(input, "unslop", since);
+    assert!(chart.iter().any(|b| b.sessions > 0), "{chart:?}");
+    assert!(chart.last().unwrap().partial && chart.iter().filter(|b| b.partial).count() == 1);
+    let heading = screen.iter().position(|(l, _)| l.chars().skip(skip).collect::<String>().starts_with("unslop: "));
+    let labels = heading.unwrap_or_else(|| panic!("no heading in {screen:#?}")) + 2 + 5;
+    let cells = |y: usize| screen[y].0.chars().collect::<Vec<_>>();
+    let (names, counts) = (cells(labels), cells(labels - 1));
+    let width = chart.iter().map(|b| b.label.len()).max().unwrap();
+    let shown = &chart[chart.len().saturating_sub((room + 1) / (width + 1))..];
+    for (i, b) in shown.iter().enumerate() {
+        let x = skip + i * (width + 1);
+        assert_eq!(names[x..x + b.label.len()].iter().collect::<String>(), b.label, "{b:?}: {screen:#?}");
+        let count = b.sessions.to_string();
+        let at = x + (width - count.len()) / 2;
+        assert_eq!(counts[at..at + count.len()].iter().collect::<String>(), count, "{b:?}: {screen:#?}");
+        let expected = if b.partial { Color::DarkGray } else { Color::Cyan };
+        assert_eq!(screen[labels].1[x], expected, "{b:?}");
+    }
+    shown.to_vec()
 }
 
 /// D5: the card, full screen or beside a wide table, charts the skill's
-/// strong sessions per bucket of the w window, each bar labelled and showing
-/// its count, today's muted; w redraws it in days, ISO weeks, then months.
+/// strong sessions per bucket of the w window in a few rows, each bar
+/// labelled and showing its count, today's muted, the newest buckets that
+/// fit; w redraws it in days, ISO weeks, then months.
 #[test]
 fn the_card_charts_sessions_per_bucket_of_the_window_and_w_rebuckets_it() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
-    let check = |screen: &[(String, Vec<Color>)], skip: usize, since: Since| {
-        let chart = chart_of(&input, "unslop", since);
-        assert!(chart.iter().any(|b| b.sessions > 0), "{chart:?}");
-        let rows = chart_rows(screen, "unslop", skip, chart.len());
-        for ((row, colour), b) in rows.iter().zip(&chart) {
-            assert!(row.starts_with(&format!("{} {}", b.label, b.sessions)), "{b:?}: {row:?}");
-            let expected = if b.partial { Color::DarkGray } else { Color::Cyan };
-            assert_eq!(*colour, expected, "{b:?}");
-        }
-        assert!(chart.last().unwrap().partial && chart.iter().filter(|b| b.partial).count() == 1);
-        chart
-    };
-
     let mut app = app(&input);
     typed(&mut app, "/unslop");
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen(), Screen::Card);
-    let days = check(&draw(&mut app, 200, 100), 2, Since::Days(30));
-    assert_eq!(days.last().unwrap().label, &common::NOW[5..10]);
+    // Full screen: the inset either side.
+    let days = check_chart(&input, &draw(&mut app, 200, 40), 2, 196, Since::Days(30));
+    assert_eq!(days.len(), chart_of(&input, "unslop", Since::Days(30)).len(), "every day fits");
+    assert_eq!(days.last().unwrap().label, &common::NOW[8..10]);
     press(&mut app, KeyCode::Char('w'));
-    let weeks = check(&draw(&mut app, 200, 100), 2, Since::Days(60));
+    let weeks = check_chart(&input, &draw(&mut app, 200, 40), 2, 196, Since::Days(60));
     assert!(weeks.iter().all(|b| b.label.starts_with('W')) && weeks.len() < days.len(), "{weeks:?}");
     press(&mut app, KeyCode::Char('w'));
-    let months = check(&draw(&mut app, 200, 100), 2, Since::All);
-    assert!(months.iter().all(|b| b.label.len() == 7), "{months:?}");
+    let months = check_chart(&input, &draw(&mut app, 200, 40), 2, 196, Since::All);
+    assert!(months.iter().all(|b| b.label.len() == 3 && !b.label.starts_with('W')), "{months:?}");
 
-    // Beside a wide table: the rule and the inset, then the chart.
+    // Beside a wide table: the rule and the inset, then the newest days that fit.
     press(&mut app, KeyCode::Esc);
-    let skip = 200 - 80 + 3;
-    check(&draw(&mut app, 200, 100), skip, Since::Days(30));
+    let (skip, room) = (200 - 80 + 3, 80 - 5);
+    let days = check_chart(&input, &draw(&mut app, 200, 40), skip, room, Since::Days(30));
+    assert_eq!(days.len(), (room + 1) / 3);
     press(&mut app, KeyCode::Char('w'));
-    check(&draw(&mut app, 200, 100), skip, Since::Days(60));
+    check_chart(&input, &draw(&mut app, 200, 40), skip, room, Since::Days(60));
 }
 
 /// From 140 columns the usage table leaves 40% of the width, at least 50
@@ -459,7 +472,7 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
         report::usage_table(&input, &UsageArgs::new(Since::Days(30))).rows.into_iter().map(|r| r.skill).collect();
     let mut app = app(&input);
     for (width, side) in [(140, 56), (200, 80)] {
-        let screen = text(&mut app, width, 80);
+        let screen = text(&mut app, width, 40);
         let table = usize::from(width - side);
         // The side card's lines: right of the rule and the inset, down the body.
         let side: Vec<String> = screen[1..]
@@ -471,8 +484,8 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
         let card = card_of(&input, &skills[0]);
         // The chart and its blank row under the heading and its blank line.
         let at = card.iter().position(|l| l.starts_with(&format!("{}: since", skills[0]))).unwrap() + 2;
-        let bars = chart_of(&input, &skills[0], Since::Days(30)).len() + 1;
-        let side = [&side[..at], &side[at + bars..]].concat();
+        let side = [&side[..at], &side[at + 6 + 1..]].concat();
+        assert!(side.len() > at + 20, "the card's text shows under the chart: {width}: {screen:#?}");
         // The rule and an inset either side.
         let room = usize::from(width) - table - 5;
         for (shown, line) in side.iter().zip(&card) {

@@ -515,7 +515,7 @@ impl App {
     /// Moves the selection, or scrolls the card, by `by` rows.
     fn shift(&mut self, by: isize) {
         let len = match &self.card {
-            Some((_, lines, chart)) if self.screen == Screen::Card => card_height(lines, chart),
+            Some((_, lines, _)) if self.screen == Screen::Card => card_height(lines),
             _ => self.listed().len(),
         };
         let pos = if self.screen == Screen::Card { &mut self.scroll } else { &mut self.selected };
@@ -1362,9 +1362,12 @@ fn scrollbar(frame: &mut Frame, area: Rect, total: usize, first: usize, page: us
     frame.render_stateful_widget(bar, area, &mut state);
 }
 
+/// The rows of a card's activity chart: its bars and their labels.
+const CHART_ROWS: usize = 6;
+
 /// The rows of a card: its lines, and its chart with a blank row under it.
-fn card_height(lines: &[String], chart: &[Bucket]) -> usize {
-    lines.len() + chart.len() + 1
+fn card_height(lines: &[String]) -> usize {
+    lines.len() + CHART_ROWS + 1
 }
 
 /// `skill`'s card `lines` in `area` from row `first`, inset, with its
@@ -1373,15 +1376,15 @@ fn card_height(lines: &[String], chart: &[Bucket]) -> usize {
 /// view are copied, so the chart scrolls with the lines.
 fn draw_card(frame: &mut Frame, skill: &str, lines: &[String], chart: &[Bucket], first: usize, area: Rect) -> usize {
     let inset = area.inner(Margin::new(2, 0));
-    let total = card_height(lines, chart);
+    let total = card_height(lines);
     // Under the heading and its blank line.
     let at = lines.iter().position(|l| l.starts_with(&format!("{skill}: "))).map_or(0, |i| i + 2).min(lines.len());
     let mut card = Buffer::empty(Rect::new(0, 0, inset.width, total as u16));
     let rect = |y: usize, height: usize| Rect::new(0, y as u16, inset.width, height as u16);
     let text = |lines: &[String]| Paragraph::new(lines.iter().map(|l| card_line(l, skill)).collect::<Vec<_>>());
     text(&lines[..at]).render(rect(0, at), &mut card);
-    activity(chart).render(rect(at, chart.len()), &mut card);
-    text(&lines[at..]).render(rect(at + chart.len() + 1, lines.len() - at), &mut card);
+    draw_activity(chart, rect(at, CHART_ROWS), &mut card);
+    text(&lines[at..]).render(rect(at + CHART_ROWS + 1, lines.len() - at), &mut card);
     let buf = frame.buffer_mut();
     for y in 0..inset.height.min(total.saturating_sub(first) as u16) {
         for x in 0..inset.width {
@@ -1392,21 +1395,28 @@ fn draw_card(frame: &mut Frame, skill: &str, lines: &[String], chart: &[Bucket],
     usize::from(area.height).max(1)
 }
 
-/// A card's activity chart: a bar per bucket, labelled, with its session
-/// count; today's, still filling, muted.
-fn activity(chart: &[Bucket]) -> BarChart<'static> {
-    let bars: Vec<Bar> = chart
+/// A card's activity chart in `area`: a bar per bucket as wide as the
+/// longest label, a column apart, the newest that fit; each labelled, with
+/// its session count, today's, still filling, muted.
+fn draw_activity(chart: &[Bucket], area: Rect, buf: &mut Buffer) {
+    let width = chart.iter().map(|b| b.label.chars().count()).max().unwrap_or(1) as u16;
+    let shown = &chart[chart.len().saturating_sub(usize::from((area.width + 1) / (width + 1)))..];
+    let bars: Vec<Bar> = shown
         .iter()
         .map(|b| {
             let colour = if b.partial { theme::MUTED } else { theme::ACCENT };
             Bar::new(b.sessions as u64)
                 .label(Line::raw(b.label.clone()).fg(colour))
-                .text_value(b.sessions.to_string())
                 .style(colour)
                 .value_style(Style::new().reversed())
         })
         .collect();
-    BarChart::horizontal(bars).bar_gap(0)
+    BarChart::vertical(bars).bar_width(width).bar_gap(1).render(area, buf);
+    // ratatui writes no value on an empty bar.
+    for (i, _) in shown.iter().enumerate().filter(|(_, b)| b.sessions == 0) {
+        let x = area.x + i as u16 * (width + 1) + (width - 1) / 2;
+        buf.set_string(x, area.bottom() - 2, "0", Style::new().fg(theme::MUTED));
+    }
 }
 
 /// A line of `skill`'s card as `show` prints it at a terminal: its `ESC [ n

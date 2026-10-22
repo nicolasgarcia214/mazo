@@ -329,12 +329,12 @@ impl Unit {
         }
     }
 
-    /// `10-13`, `W42`, `2026-10`.
+    /// `13`, `W42`, `Oct`: short enough to sit under a chart's bar.
     fn label(self, d: Date) -> String {
         match self {
-            Unit::Day => d.strftime("%m-%d").to_string(),
+            Unit::Day => d.strftime("%d").to_string(),
             Unit::Week => format!("W{:02}", d.iso_week_date().week()),
-            Unit::Month => d.strftime("%Y-%m").to_string(),
+            Unit::Month => d.strftime("%b").to_string(),
         }
     }
 }
