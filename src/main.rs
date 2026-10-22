@@ -151,7 +151,8 @@ enum Cmd {
     Audit(AuditArgs),
     /// Install a skill from a local directory or a git repository into the store and link it into every home.
     Add {
-        /// A local path, a git URL (https, ssh, `git@host:owner/repo.git`), or GitHub `owner/repo[/path/to/skill]`.
+        /// A local path, a git URL (https, ssh, `git@host:owner/repo.git`), GitHub `owner/repo[/path/to/skill]`,
+        /// or a GitHub `…/tree/<ref>/<path>` or `…/blob/<ref>/<path>/SKILL.md` URL.
         source: String,
         /// Install under this name; rewrites the SKILL.md `name:` field.
         #[arg(long = "as", value_name = "NAME")]

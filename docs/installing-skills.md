@@ -27,6 +27,13 @@ root instead (see [project skills](project-skills.md)).
   (`https://host/owner/repo.git/skills/x`).
 - GitHub shorthand `owner/repo[/path/to/skill]`, cloned from
   `https://github.com/owner/repo.git`.
+- a GitHub browser URL to a directory, `https://github.com/owner/repo/tree/<ref>/<path>`,
+  or to its `SKILL.md`, `https://github.com/owner/repo/blob/<ref>/<path>/SKILL.md`.
+  The skill is `<path>` at `<ref>`, which `mazo.lock` records as `ref`. Since a
+  branch or tag may hold `/`, mazo runs `git ls-remote` on the repository before
+  cloning and takes the longest branch or tag that the URL's segments start
+  with; failing that, a full 40-hex commit id is cloned as that commit, which
+  needs git 2.49 or later.
 
 A git URL or GitHub shorthand containing `?`, `#` or `\` is a usage error.
 
@@ -83,8 +90,9 @@ matching rules. `--trust` installs without vetting. The vetting section covers
 
 `mazo update [names...] [--yes] [--force] [--project]` re-clones each
 git-sourced store skill, or every one when no name is given, from its recorded
-origin. It clones shallow and without prompting as `add` does, and reads the
-same subpath.
+origin. It clones shallow and without prompting as `add` does, at the
+recorded `ref` (the default branch when there is none), and reads the same
+subpath.
 
 - **Changed.** When the copy's content hash differs, mazo stages the new copy
   beside `store/<name>/` and swaps it in, so a failure leaves the old copy. It
