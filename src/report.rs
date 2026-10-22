@@ -282,6 +282,49 @@ pub struct UsageRow {
     #[serde(rename = "30d")]
     pub last_30d: Vec<usize>,
     pub grade: Option<GradeOut>,
+    /// The quality verdict ([`verdict_of`]); null when not judged.
+    pub verdict: Option<String>,
+    /// Where `verdict` comes from; null when not judged.
+    pub verdict_source: Option<VerdictSource>,
+}
+
+/// Where a usage row's verdict comes from.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VerdictSource {
+    Audit,
+    Vet,
+}
+
+/// The lockfile entry of `skill`'s store copy; a source skill of the same
+/// name shadows it.
+fn vet_of<'i>(inv: &'i Inventory, skill: &str) -> Option<&'i Locked> {
+    inv.installed.get(skill).filter(|_| inv.root(skill) != inv.source.as_deref())
+}
+
+/// `skill`'s quality verdict and its source (D18). The audit verdict is the
+/// `result.verdict` of the latest audit, the last `skill` record of `skill`
+/// in `audits.jsonl` ([`crate::audit::latest`]), as `show` prints it; else
+/// the vet verdict of its lockfile entry ([`vet_of`]) as
+/// [`crate::audit::VetVerdict::summary`] words it, led by `security:
+/// <finding>; ` when the judge found one, so a cut cell still shows it; else
+/// none.
+fn verdict_of(input: &Input, skill: &str) -> Option<(VerdictSource, String)> {
+    let vet = || {
+        let v = vet_of(input.inv, skill)?.verdict.as_ref()?;
+        let text = v.security.as_ref().map_or(v.summary(), |f| format!("security: {f}; {}", v.summary()));
+        Some((VerdictSource::Vet, text))
+    };
+    input.audits.get(skill).map(|a| (VerdictSource::Audit, a.result.verdict.clone())).or_else(vet)
+}
+
+/// The quality cell in full: `audit: <verdict>`, `vet: <verdict>` or
+/// `not judged`. The text table cuts it to [`VERDICT_CHARS`].
+pub fn verdict_text(r: &UsageRow) -> String {
+    match (r.verdict_source, &r.verdict) {
+        (Some(source), Some(v)) => format!("{}: {v}", name(source)),
+        _ => "not judged".into(),
+    }
 }
 
 /// The usage table: what `usage --json` emits.
@@ -319,6 +362,7 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
             let spark_from = input.now.checked_sub(SignedDuration::from_hours(24 * (SPARK_DAYS + 1))).ok();
             let last_30d = view.daily_strong(view.select(&f, Some(skill), spark_from), SPARK_DAYS);
             let grade = input.inv.skills.contains(skill).then(|| grade_out(&evals::load(input.inv, skill))).flatten();
+            let (verdict_source, verdict) = verdict_of(input, skill).unzip();
             UsageRow {
                 skill: skill.to_string(),
                 sess,
@@ -331,6 +375,8 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
                 last: last.map(|t| t.to_string()),
                 last_30d,
                 grade,
+                verdict,
+                verdict_source,
             }
         })
         .collect();
@@ -348,7 +394,7 @@ pub fn usage_table(input: &Input, args: &UsageArgs) -> Usage {
 }
 
 /// The usage table's columns.
-pub const USAGE_HEADER: [(&str, Align); 11] = [
+pub const USAGE_HEADER: [(&str, Align); 12] = [
     ("skill", Align::Left),
     ("sess", Align::Right),
     ("slash", Align::Right),
@@ -360,7 +406,12 @@ pub const USAGE_HEADER: [(&str, Align); 11] = [
     ("last", Align::Left),
     ("30d", Align::Left),
     ("grade", Align::Right),
+    ("quality", Align::Left),
 ];
+
+/// The usage table's quality cell is cut to this many characters with `…`:
+/// a vet cell always fits, a long audit verdict is cut.
+const VERDICT_CHARS: usize = 40;
 
 /// `r`'s cells under [`USAGE_HEADER`], the grade mark painted when `tty`.
 pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
@@ -376,6 +427,7 @@ pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
         r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)),
         render::sparkline(&r.last_30d),
         grade_cell(&r.grade, tty),
+        cut(&verdict_text(r), VERDICT_CHARS),
     ]
 }
 
@@ -605,14 +657,14 @@ const LABEL_WIDTH: usize = 10;
 const FOR_LINES: usize = 3;
 const ITEM_LINES: usize = 2;
 
-/// The first line of `text`, cut to [`USE_CHARS`] with `…`.
+/// `text` cut to `max` characters, the last a `…` when cut.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max { text.into() } else { text.chars().take(max - 1).chain(['…']).collect() }
+}
+
+/// The first line of `text`, cut to [`USE_CHARS`].
 fn first_line(text: &str) -> String {
-    let line = text.trim().lines().next().unwrap_or_default().trim();
-    if line.chars().count() <= USE_CHARS {
-        line.into()
-    } else {
-        line.chars().take(USE_CHARS - 1).chain(['…']).collect()
-    }
+    cut(text.trim().lines().next().unwrap_or_default().trim(), USE_CHARS)
 }
 
 /// `text` word-wrapped to `width` characters in at most `max` lines; a cut
@@ -830,9 +882,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
     let audit = view.input.audits.get(skill);
     examples.curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
 
-    // The lockfile's vet record is the store copy's; a source skill of the
-    // same name shadows it.
-    let vet = inv.installed.get(skill).filter(|_| inv.root(skill) != inv.source.as_deref());
+    let vet = vet_of(inv, skill);
     let (r#for, r#try) = Manual::guide(vet, audit, description.clone());
     let manual = Manual {
         r#for,

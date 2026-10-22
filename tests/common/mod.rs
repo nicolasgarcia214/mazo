@@ -126,6 +126,18 @@ pub fn report_world(source: &Path) -> World {
     w
 }
 
+/// A store skill `vetted` under `data`, its lockfile entry vetted weak and
+/// of low value.
+pub fn vetted(data: &Path) {
+    write(&data.join("store/vetted/SKILL.md"), "---\nname: vetted\n---\n");
+    write(
+        &data.join("mazo.lock"),
+        "[[skill]]\nname = \"vetted\"\norigin = \"/x\"\nsubpath = \".\"\ncontent_hash = \"h\"\n\
+         trusted = false\ninstalled_at = \"2026-01-01T00:00:00Z\"\nvetted_at = \"2026-01-01T00:00:00Z\"\n\
+         [skill.verdict]\nquality = \"weak\"\nvalue = \"low value\"\nreasons = []\n",
+    );
+}
+
 /// A skill record of `unslop` with `verdict`, written at `at`, with four
 /// ranked improvements and a hostile curated example.
 pub fn skill_record(verdict: &str, at: &str) -> String {

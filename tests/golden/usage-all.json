@@ -54,7 +54,9 @@
       "skill": "unslop",
       "slash": 1,
       "tool": 4,
-      "typed": 1
+      "typed": 1,
+      "verdict": "Good on <short> texts",
+      "verdict_source": "audit"
     },
     {
       "30d": [
@@ -106,7 +108,9 @@
       "skill": "writing-for-agents",
       "slash": 1,
       "tool": 0,
-      "typed": 0
+      "typed": 0,
+      "verdict": null,
+      "verdict_source": null
     },
     {
       "30d": [
@@ -150,7 +154,9 @@
       "skill": "goal-plan",
       "slash": 1,
       "tool": 0,
-      "typed": 0
+      "typed": 0,
+      "verdict": null,
+      "verdict_source": null
     },
     {
       "30d": [
@@ -194,7 +200,9 @@
       "skill": "goal-smart",
       "slash": 0,
       "tool": 1,
-      "typed": 0
+      "typed": 0,
+      "verdict": null,
+      "verdict_source": null
     },
     {
       "30d": [
@@ -238,7 +246,9 @@
       "skill": "fresh",
       "slash": 0,
       "tool": 0,
-      "typed": 0
+      "typed": 0,
+      "verdict": null,
+      "verdict_source": null
     },
     {
       "30d": [
@@ -282,7 +292,9 @@
       "skill": "goal-execute",
       "slash": 0,
       "tool": 0,
-      "typed": 0
+      "typed": 0,
+      "verdict": null,
+      "verdict_source": null
     },
     {
       "30d": [
@@ -326,7 +338,9 @@
       "skill": "pruned",
       "slash": 0,
       "tool": 0,
-      "typed": 0
+      "typed": 0,
+      "verdict": null,
+      "verdict_source": null
     },
     {
       "30d": [
@@ -370,7 +384,9 @@
       "skill": "wfa-helper",
       "slash": 0,
       "tool": 0,
-      "typed": 0
+      "typed": 0,
+      "verdict": null,
+      "verdict_source": null
     }
   ]
 }

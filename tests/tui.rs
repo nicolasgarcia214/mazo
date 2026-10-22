@@ -109,9 +109,27 @@ fn usage_row_shows_its_sessions_and_its_grade_mark_in_the_status_colour() {
     let sess = unslop.unwrap().sess;
     assert!(sess > 0);
     assert_eq!(row(&lines, "unslop")[1], sess.to_string());
-    assert!(row(&lines, "unslop").last().unwrap().ends_with("+1"), "{lines:#?}");
+    let words = row(&lines, "unslop");
+    let quality = words.iter().position(|w| w == "audit:").unwrap();
+    assert!(words[quality - 1].ends_with("+1"), "{lines:#?}");
     assert_eq!(colour_of(&screen, "unslop", "+1"), ratatui_colour("+1"));
     assert_eq!(colour_of(&screen, "unslop", "unslop"), Color::Reset);
+}
+
+/// The quality column shows `unslop`'s audit, a store skill's vet and
+/// `not judged` for the rest, cut as `usage` cuts it.
+#[test]
+fn usage_rows_show_the_audit_else_the_vet_else_not_judged() {
+    let mut golden = Golden::new();
+    let data = tempfile::tempdir().unwrap();
+    common::vetted(data.path());
+    golden.world.inv = store::inventory(Some(golden.repo.path()), data.path()).unwrap();
+    let input = golden.world.input(&golden.events);
+    let lines = text(&mut app(&input), 200, 40);
+    let tail = |skill: &str| row(&lines, skill).join(" ");
+    assert!(tail("unslop").ends_with(" audit: Good on <short> texts"), "{lines:#?}");
+    assert!(tail("vetted").ends_with(" vet: quality weak, value low value"), "{lines:#?}");
+    assert!(tail("goal-plan").ends_with(" not judged"), "{lines:#?}");
 }
 
 #[test]
