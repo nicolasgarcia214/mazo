@@ -2,6 +2,7 @@
 //! lockfile `<data dir>/mazo.lock`: `mazo add`, `mazo update`, and the entry
 //! `mazo retire` drops.
 
+use std::cell::OnceCell;
 use std::fs;
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -9,8 +10,8 @@ use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
 
-use crate::audit::{self, Caller, Vet, VetVerdict};
-use crate::config::{Config, Home};
+use crate::audit::{self, Backend, Caller, Vet, VetVerdict};
+use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
 use crate::{Error, Result};
 use crate::{ledger, links, policy, yaml};
@@ -236,13 +237,9 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         Some(judge) => Some((judge, audit::backend(judge, &cfg.homes)?)),
     };
     let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: None });
+    let consent = Consent { update: false, yes: args.yes, force: args.force };
     if let Some(c) = &caller {
-        // Refused before the judge is paid for an answer nobody can accept.
-        if !args.yes && !std::io::stdin().is_terminal() {
-            return Err(Error::Usage(
-                "add refused: a vetted install asks y/N; pass --yes when stdin is not a terminal".into(),
-            ));
-        }
+        consent.answerable().map_err(Error::Usage)?;
         c.login()?;
     }
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
@@ -281,7 +278,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     }
 
     let vetted = match &caller {
-        Some(c) => Some((gate(c, inv, args, &name, &src, &files, &skill_md)?, now()?)),
+        Some(c) => Some((gate(c, inv, consent, &name, contents(&src, &files, &skill_md)?, None)?, now()?)),
         None => None,
     };
 
@@ -343,18 +340,33 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mazo update [names…]`: re-clones each git-sourced store skill (every one
-/// when `names` is empty) and, when the copy at its subpath hashes
-/// differently, swaps it into the store and records the new commit and hash.
-/// A skill whose source is not trusted is skipped, since re-vetting is not
-/// available yet, and a local-path one is not updatable. A skill that fails
-/// is left as it was and the rest still run; any failure exits 1. A name that
-/// is not a store skill is a usage error.
-pub fn update(cfg: &Config, inv: &Inventory, data: &Path, names: &[String]) -> Result<ExitCode> {
+/// `mazo update`'s arguments.
+pub struct Update<'a> {
+    /// The store skills to update; every one when empty.
+    pub names: &'a [String],
+    /// Accept a re-vetted update without asking.
+    pub yes: bool,
+    /// Apply an update with a security finding.
+    pub force: bool,
+}
+
+/// `mazo update [names…] [--yes] [--force]`: re-clones each git-sourced
+/// store skill (every one when `names` is empty) and, when the copy at its
+/// subpath hashes differently, swaps it into the store and records the new
+/// commit and hash. A skill whose source is not trusted is first re-vetted
+/// by the judge on the diff from the installed copy ([`gate`]), and skipped
+/// when no judge is configured; a local-path one is not updatable. A skill
+/// that fails or is refused is left as it was and the rest still run; any
+/// failure exits 1. A name that is not a store skill is a usage error.
+pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<ExitCode> {
+    let names = args.names;
     let lock = Lock::load(data)?;
     if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
         return Err(Error::Usage(format!("update: not a store skill: {n}")));
     }
+    let consent = Consent { update: true, yes: args.yes, force: args.force };
+    let revet =
+        cfg.judge.as_ref().map(|judge| Revet { data, judge, homes: &cfg.homes, consent, backend: OnceCell::new() });
     let clone = Scratch(data.join(format!(".clone-{}", std::process::id())));
     let (mut updated, mut failed) = (false, false);
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
@@ -370,12 +382,19 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, names: &[String]) -> R
                 continue;
             }
         };
-        if !l.trusted && !remote.trusted_by(&cfg.trusted) {
-            println!("{}: skipped; {} is not trusted and re-vetting is not available yet", l.name, l.origin);
-            continue;
-        }
+        let vet = match &revet {
+            _ if l.trusted || remote.trusted_by(&cfg.trusted) => None,
+            None => {
+                println!(
+                    "{}: skipped; {} is not trusted and re-vetting it needs a [judge] in the config",
+                    l.name, l.origin
+                );
+                continue;
+            }
+            Some(r) => Some(r),
+        };
         remote.subpath = if l.subpath == "." { PathBuf::new() } else { l.subpath.clone().into() };
-        match refresh(cfg, inv, data, l, &remote, &clone.0) {
+        match refresh(cfg, inv, data, l, &remote, &clone.0, vet) {
             Ok(Some(commit)) => {
                 println!("updated {} to {commit}", dir(data).join(&l.name).display());
                 updated = true;
@@ -405,10 +424,11 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, names: &[String]) -> R
 }
 
 /// Clones `remote` into `clone` and, when the skill at its subpath hashes
-/// unlike `l`, swaps the copy in for `store/<name>` under the data lock and
-/// records the commit and hash: the new commit, or `None` when up to date. A
-/// sync that would fail with the new copy, or any failed write, puts the old
-/// one back and leaves the lockfile as it was.
+/// unlike `l`, passes it through the `vet` gate if there is one, then swaps
+/// the copy in for `store/<name>` under the data lock and records the commit
+/// and hash, and any new verdict: the new commit, or `None` when up to date.
+/// A refused vet, a sync that would fail with the new copy, or any failed
+/// write leaves the old copy and the lockfile as they were.
 fn refresh(
     cfg: &Config,
     inv: &Inventory,
@@ -416,6 +436,7 @@ fn refresh(
     l: &Locked,
     remote: &Remote,
     clone: &Path,
+    vet: Option<&Revet>,
 ) -> Result<Option<String>> {
     let _ = fs::remove_dir_all(clone);
     let commit = remote.clone_into(clone)?;
@@ -424,22 +445,35 @@ fn refresh(
 
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let store = dir(data);
-    let (to, staged, old) =
-        (store.join(&l.name), store.join(format!(".update-{}", l.name)), store.join(format!(".old-{}", l.name)));
-    let _lock = ledger::lock(data)?;
-    let content_hash = stage(&src, &files, &skill_md, &staged)?;
+    let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
+    // Staged under a name of this process's own, so that the judge and the
+    // y/N prompt run without the data lock.
+    let staged = Scratch(store.join(format!(".update-{}-{}", l.name, std::process::id())));
+    let content_hash = stage(&src, &files, &skill_md, &staged.0)?;
     if content_hash == l.content_hash {
-        fs::remove_dir_all(&staged).map_err(|e| err(&staged, e))?;
         return Ok(None);
     }
-    let _ = fs::remove_dir_all(&old);
-    let swapped = fs::rename(&to, &old)
-        .map_err(|e| err(&to, e))
-        .and_then(|()| fs::rename(&staged, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to))));
-    if let Err(e) = swapped {
-        let _ = fs::remove_dir_all(&staged);
-        return Err(e.into());
+    let vetted = match vet {
+        Some(r) => Some((r.vet(inv, &l.name, &skill_md, &store, &staged.0)?, now()?)),
+        None => None,
+    };
+
+    let _lock = ledger::lock(data)?;
+    // The judge saw the diff from the copy then installed, and ran unlocked.
+    if let Some(((_, diffed), _)) = &vetted
+        && self::content_hash(&to)? != *diffed
+    {
+        return Err(format!(
+            "update refused: {} changed while it was vetted; the skill was left as it was",
+            to.display()
+        )
+        .into());
     }
+    let _ = fs::remove_dir_all(&old);
+    let swapped = fs::rename(&to, &old).map_err(|e| err(&to, e)).and_then(|()| {
+        fs::rename(&staged.0, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to)))
+    });
+    swapped?;
 
     let homes: Vec<&Home> = cfg.homes.iter().collect();
     let errors = links::sync_errors(cfg, inv, &homes, &links::plan(cfg, inv, &homes, None));
@@ -448,6 +482,10 @@ fn refresh(
             let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;
             entry.commit = Some(commit.clone());
             entry.content_hash = content_hash;
+            if let Some(((vet, _), at)) = vetted {
+                (entry.vetted_at, entry.r#for, entry.r#try) = (Some(at), Some(vet.r#for), vet.r#try);
+                entry.verdict = Some(vet.verdict);
+            }
             lock.save(data)
         })
     } else {
@@ -463,6 +501,73 @@ fn refresh(
     // Installed and recorded; a hidden leftover is listed by no root.
     let _ = fs::remove_dir_all(&old);
     Ok(Some(commit))
+}
+
+/// `update`'s re-vets: the judge, set up and its login checked the first
+/// time a changed untrusted skill needs it, so that an update of trusted
+/// skills alone never touches it.
+struct Revet<'a> {
+    data: &'a Path,
+    judge: &'a Judge,
+    homes: &'a [Home],
+    consent: Consent,
+    backend: OnceCell<Box<dyn Backend>>,
+}
+
+impl Revet<'_> {
+    fn caller(&self) -> Result<Caller<'_>> {
+        if self.backend.get().is_none() {
+            let backend = audit::backend(self.judge, self.homes)?;
+            self.with(backend.as_ref()).login()?;
+            let _ = self.backend.set(backend);
+        }
+        Ok(self.with(self.backend.get().expect("set above").as_ref()))
+    }
+
+    fn with<'s>(&'s self, backend: &'s dyn Backend) -> Caller<'s> {
+        Caller { data: self.data, judge: self.judge, backend, pane: None }
+    }
+
+    /// The vet gate on an update of the store skill `name` to the copy
+    /// staged in `staged`: its new `skill_md` and the `git diff --no-index`
+    /// from `store/<name>`, with the staged copy's paths shown as the
+    /// installed one's. Binary files are diffed as text, so that none hides
+    /// behind "Binary files differ": a diff that is not text is withheld
+    /// whole. The verdict, and the [`content_hash`] of the copy diffed from.
+    fn vet(&self, inv: &Inventory, name: &str, skill_md: &str, store: &Path, staged: &Path) -> Result<(Vet, String)> {
+        self.consent.answerable()?;
+        let c = self.caller()?;
+        let diffed = content_hash(&store.join(name))?;
+        let staged = staged.file_name().ok_or("no staged copy")?.to_string_lossy().into_owned();
+        // Every flag that user config could otherwise change is set.
+        let out = std::process::Command::new("git")
+            .current_dir(store)
+            .args(["diff", "--no-index", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"])
+            .args(["--src-prefix=a/", "--dst-prefix=b/", "--", name, &staged])
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        // 1 means the copies differ, which the hash already said.
+        if !matches!(out.status.code(), Some(0 | 1)) {
+            return Err(format!("git diff: {}", String::from_utf8_lossy(&out.stderr).trim()).into());
+        }
+        let (from, to) = (format!("/{staged}/"), format!("/{name}/"));
+        let diff = out.stdout.split_inclusive(|b| *b == b'\n').flat_map(|line| {
+            let header = [&b"diff --git "[..], b"--- ", b"+++ "].iter().any(|h| line.starts_with(h));
+            match std::str::from_utf8(line) {
+                Ok(text) if header => text.replace(&from, &to).into_bytes(),
+                _ => line.to_vec(),
+            }
+        });
+        let vet = gate(
+            &c,
+            inv,
+            self.consent,
+            name,
+            vec![("SKILL.md".into(), skill_md.as_bytes().to_vec())],
+            Some(diff.collect()),
+        )?;
+        Ok((vet, diffed))
+    }
 }
 
 /// `src` resolved; inside `clone` when there is one, so that a symlink in the
@@ -516,36 +621,81 @@ fn now() -> Result<String> {
 const VET_FILE_BYTES: u64 = 64 * 1024;
 const VET_TOTAL_BYTES: u64 = 256 * 1024;
 
-/// The vet gate, before anything is copied: one judge call on the files of
-/// the skill at `src` (`files`, with `skill_md` as its `SKILL.md`) and the
-/// names and descriptions of every source and store skill, its verdict
-/// shown, then obeyed. A file withheld from the judge (not text, or past
-/// [`VET_FILE_BYTES`] or [`VET_TOTAL_BYTES`]) was never reviewed, so it is a
-/// security finding of mazo's own. A security finding refuses the install
-/// (exit 1) unless `--force`, a withheld file before the judge is called;
-/// then the user is asked y/N, defaulting to the verdict's
+/// What the vet gate guards, an add or an update, which words its prompt and
+/// refusals, and the flags that answer for the user.
+#[derive(Clone, Copy)]
+struct Consent {
+    update: bool,
+    /// `--yes`.
+    yes: bool,
+    /// `--force`.
+    force: bool,
+}
+
+impl Consent {
+    fn verb(self) -> &'static str {
+        if self.update { "update" } else { "add" }
+    }
+
+    fn act(self) -> &'static str {
+        if self.update { "update" } else { "install" }
+    }
+
+    fn kept(self) -> &'static str {
+        if self.update { "the skill was left as it was" } else { "nothing was installed" }
+    }
+
+    /// Refused before the judge is paid for an answer nobody can accept.
+    fn answerable(self) -> std::result::Result<(), String> {
+        if self.yes || std::io::stdin().is_terminal() {
+            return Ok(());
+        }
+        Err(format!(
+            "{} refused: a vetted {} asks y/N; pass --yes when stdin is not a terminal",
+            self.verb(),
+            self.act()
+        ))
+    }
+}
+
+/// Every file of `files` under `src` as `(relative path, bytes)`, with
+/// `skill_md` as its `SKILL.md`.
+fn contents(src: &Path, files: &[PathBuf], skill_md: &str) -> Result<Vec<(String, Vec<u8>)>> {
+    let files = files.iter().filter(|rel| !src.join(rel).is_dir());
+    files
+        .map(|rel| {
+            let bytes = if rel == Path::new("SKILL.md") {
+                skill_md.as_bytes().to_vec()
+            } else {
+                let path = src.join(rel);
+                fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?
+            };
+            Ok((rel.to_string_lossy().into_owned(), bytes))
+        })
+        .collect()
+}
+
+/// The vet gate, before anything is installed: one judge call on `files` of
+/// the skill `name` and, for an update, the `diff` from the installed copy,
+/// with the names and descriptions of every other source and store skill;
+/// its verdict shown, then obeyed. A file or diff withheld from the judge
+/// (not text, or past [`VET_FILE_BYTES`] or [`VET_TOTAL_BYTES`]) was never
+/// reviewed, so it is a security finding of mazo's own. A security finding
+/// refuses (exit 1) unless `--force`, a withheld one before the judge is
+/// called; then the user is asked y/N, defaulting to the verdict's
 /// [`VetVerdict::default_yes`], unless `--yes`. A judge that gives no valid
-/// answer, or a No, refuses the install.
+/// answer, or a No, refuses.
 fn gate(
     c: &Caller,
     inv: &Inventory,
-    args: &Add,
+    consent: Consent,
     name: &str,
-    src: &Path,
-    files: &[PathBuf],
-    skill_md: &str,
+    files: Vec<(String, Vec<u8>)>,
+    diff: Option<Vec<u8>>,
 ) -> Result<Vet> {
-    let (mut sent, mut withheld, mut total) = (Vec::new(), Vec::new(), 0);
-    for rel in files {
-        let path = src.join(rel);
-        if path.is_dir() {
-            continue;
-        }
-        let bytes = if rel == Path::new("SKILL.md") {
-            skill_md.as_bytes().to_vec()
-        } else {
-            fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?
-        };
+    let (verb, act, kept) = (consent.verb(), consent.act(), consent.kept());
+    let (mut withheld, mut total) = (Vec::new(), 0);
+    let mut sent = |label: &str, bytes: Vec<u8>| {
         let size = bytes.len() as u64;
         let why = if size > VET_FILE_BYTES {
             Err("over the per-file cap")
@@ -554,44 +704,45 @@ fn gate(
         } else {
             String::from_utf8(bytes).map_err(|_| "not text")
         };
-        let rel = rel.to_string_lossy().into_owned();
-        let text = match why {
+        match why {
             Ok(text) => {
                 total += size;
                 text
             }
             Err(why) => {
-                withheld.push(format!("{rel} ({size} bytes, {why})"));
+                withheld.push(format!("{label} ({size} bytes, {why})"));
                 format!("(withheld: {size} bytes, {why})")
             }
-        };
-        sent.push((rel, text));
-    }
+        }
+    };
+    let files: Vec<(String, String)> = files.into_iter().map(|(rel, bytes)| (rel.clone(), sent(&rel, bytes))).collect();
+    let diff = diff.map(|d| sent("the diff", d));
     let withheld = (!withheld.is_empty()).then(|| format!("not sent to the judge in full: {}", withheld.join(", ")));
     if let Some(withheld) = &withheld
-        && !args.force
+        && !consent.force
     {
-        return Err(format!("add refused: {withheld}; pass --force to install it anyway").into());
+        return Err(format!("{verb} refused: {withheld}; pass --force to {act} it anyway").into());
     }
+    let others = inv.skills.iter().filter(|s| *s != name);
     let existing: Vec<(String, String)> =
-        inv.skills.iter().map(|s| (s.clone(), inv.description(s).unwrap_or_default())).collect();
-    let input = audit::vet_input(name, &sent, &existing);
-    let names: Vec<&str> = inv.skills.iter().map(String::as_str).collect();
+        others.clone().map(|s| (s.clone(), inv.description(s).unwrap_or_default())).collect();
+    let input = audit::vet_input(name, &files, diff.as_deref(), &existing);
+    let names: Vec<&str> = others.map(String::as_str).collect();
     let mut vet = audit::vet(c, name, &input, &names)?
-        .map_err(|why| format!("add refused: vetting {name} failed: {why}; nothing was installed"))?;
+        .map_err(|why| format!("{verb} refused: vetting {name} failed: {why}; {kept}"))?;
     if let Some(withheld) = withheld {
         let found = vet.verdict.security.take();
         vet.verdict.security = Some(found.map_or_else(|| withheld.clone(), |f| format!("{f}; {withheld}")));
     }
     print!("{}", vet.text(name));
-    if vet.verdict.security.is_some() && !args.force {
-        return Err("add refused: the judge found a security issue; pass --force to install it anyway".into());
+    if vet.verdict.security.is_some() && !consent.force {
+        return Err(format!("{verb} refused: the judge found a security issue; pass --force to {act} it anyway").into());
     }
-    if args.yes {
+    if consent.yes {
         return Ok(vet);
     }
     let default = vet.verdict.default_yes();
-    eprint!("install {name}? {} ", if default { "[Y/n]" } else { "[y/N]" });
+    eprint!("{act} {name}? {} ", if default { "[Y/n]" } else { "[y/N]" });
     let mut answer = String::new();
     std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
     let yes = match answer.trim() {
@@ -599,7 +750,7 @@ fn gate(
         a => matches!(a, "y" | "Y" | "yes"),
     };
     if !yes {
-        return Err("add declined; nothing was installed".into());
+        return Err(format!("{verb} declined; {kept}").into());
     }
     Ok(vet)
 }

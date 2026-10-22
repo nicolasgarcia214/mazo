@@ -166,10 +166,16 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// Re-clone git-sourced store skills from trusted sources and install what changed.
+    /// Re-clone git-sourced store skills and install what changed; an untrusted source's change is re-vetted first.
     Update {
         /// The store skills to update; every one when omitted.
         names: Vec<String>,
+        /// Accept a re-vetted update without asking; required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+        /// Update even when the judge reports a security issue.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -265,7 +271,9 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
                 store::Add { source: &source, rename: name.as_deref(), pick: skill.as_deref(), trust, yes, force };
             store::add(&cfg, &inv, &data, &args)
         }
-        Cmd::Update { names } => store::update(&cfg, &inv, &data, &names),
+        Cmd::Update { names, yes, force } => {
+            store::update(&cfg, &inv, &data, &store::Update { names: &names, yes, force })
+        }
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
 }
