@@ -235,13 +235,33 @@ fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
 /// A strong event in this many days, the skill's, a holder's or a namer's, makes `retire` refuse.
 const RETIRE_DAYS: u32 = 30;
 
+/// What [`retire`] did. Nothing is written unless it is `Done`.
+pub enum Retired {
+    /// Why it refused without `force`: a strong event in the last 30 days of
+    /// the skill, a holder or a namer.
+    Blocked(Vec<String>),
+    /// The errors of the sync plan without the skill.
+    Refused(Vec<String>),
+    /// The lines reporting what it wrote.
+    Done(Vec<String>),
+}
+
 /// `mazo retire <name> [--force]`: scans first, refuses a held, named or
 /// recently used skill unless `force`, and refuses any conflict or policy error
 /// in the sync plan as if the skill were gone, all before any write. Then
 /// moves a source skill `<source>/<name>` to `<source>/.archive/<name>` (`git
 /// mv` when tracked) and applies that plan; or, for a store skill, applies
-/// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never commits.
-pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<ExitCode> {
+/// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never
+/// commits. Prints nothing: the scan's warnings go to `warnings`, kept even
+/// when a later step fails.
+pub fn retire(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &Path,
+    name: &str,
+    force: bool,
+    warnings: &mut Vec<String>,
+) -> Result<Retired> {
     let Some(root) = inv.root(name) else {
         // Only a store skill retires without a source.
         cfg.need_source(&format!("retire {name}"))?;
@@ -253,25 +273,21 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
     if let Some(to) = to.as_ref().filter(|t| t.symlink_metadata().is_ok()) {
         return Err(format!("retire refused: {} already exists", to.display()).into());
     }
-    let data = ledger::data_dir()?;
-    scan::scan(cfg, inv, &data, false)?.warn();
+    warnings.extend(scan::scan(cfg, inv, data, false)?.warnings());
     if !force {
-        let ledger = Ledger::load(&data)?;
-        let coverage = ledger::load_coverage(&data)?;
+        let ledger = Ledger::load(data)?;
+        let coverage = ledger::load_coverage(data)?;
         let now = jiff::Timestamp::now();
         let tz = jiff::tz::TimeZone::system();
         let input =
             report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &BTreeMap::new(), now, tz };
         let blockers = report::retire_blockers(&input, name, RETIRE_DAYS);
         if !blockers.is_empty() {
-            for b in &blockers {
-                eprintln!("{b}");
-            }
-            return Err("retire refused; pass --force to retire it anyway".into());
+            return Ok(Retired::Blocked(blockers));
         }
     }
     // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
-    let _lock = if to.is_some() { None } else { Some(ledger::lock(&data)?) };
+    let _lock = if to.is_some() { None } else { Some(ledger::lock(data)?) };
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
@@ -279,12 +295,10 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
     let plan = links::plan(cfg, &rest, &homes, Some(&from));
     let errors = links::sync_errors(cfg, &rest, &homes, &plan);
     if !errors.is_empty() {
-        for e in &errors {
-            eprintln!("{e}");
-        }
-        return Ok(ExitCode::from(1));
+        return Ok(Retired::Refused(errors));
     }
 
+    let mut out = Vec::new();
     if let Some(to) = &to {
         let archive = root.join(".archive");
         std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
@@ -293,27 +307,23 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
         } else {
             std::fs::rename(&from, to).map_err(|e| format!("{}: {e}", from.display()))?;
         }
-        println!("archived  {} -> {}", from.display(), to.display());
-        for line in links::apply(&plan)? {
-            println!("{line}");
-        }
+        out.push(format!("archived  {} -> {}", from.display(), to.display()));
+        out.extend(links::apply(&plan)?);
     } else {
         // Links first, then the lock entry, then the directory: a failure
         // leaves at worst an unrecorded store skill, never an entry for a
         // missing one.
-        for line in links::apply(&plan)? {
-            println!("{line}");
-        }
-        store::Lock::remove(&data, name)?;
+        out.extend(links::apply(&plan)?);
+        store::Lock::remove(data, name)?;
         std::fs::remove_dir_all(&from).map_err(|e| format!("{}: {e}", from.display()))?;
-        println!("removed   {}", from.display());
+        out.push(format!("removed   {}", from.display()));
     }
     if cfg.policy.claude_name_only {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
             if let Some(v) = policy::settings(h).ok().and_then(|s| s["skillOverrides"].get(name).cloned()) {
-                println!("{} can drop:\n  \"{name}\": {v}", h.settings().display());
+                out.push(format!("{} can drop:\n  \"{name}\": {v}", h.settings().display()));
             }
         }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(Retired::Done(out))
 }

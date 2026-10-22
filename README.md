@@ -146,13 +146,17 @@ The vetting `verdict` is optional and not written yet.
 | `mazo prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 | `mazo audit <skill>` | Has an agent judge how the skill performs in real sessions and writes a skill report; see [Auditing a skill](#auditing-a-skill). |
 
-Bare `mazo` at a terminal opens a read-only TUI over the same report model: the
+Bare `mazo` at a terminal opens a TUI over the same report model: the
 usage table, the unused list and a skill's card. Arrows or `hjkl` move, `Enter`
 opens a card and `Esc` goes back, `Tab` switches between usage and unused, `/`
 filters by name, `w` cycles the window (30 days, 60 days, all), `a` and `c`
 cycle the agent and channel filters and `A` toggles authoring reads (not on the
-unused list), and `q` quits. It scans first and writes nothing else. Off a
-terminal, bare `mazo` prints the help.
+unused list), and `q` quits. `r` retires the selected skill, or the card's, as
+`mazo retire` does; a skill `retire` refuses shows its blockers, and there is
+no `--force`. `s` shows the actions `mazo sync --dry-run` would print, or says
+the homes are in sync. Each action runs only on `y`; any other key cancels.
+The data is re-read after each action. It scans first and writes nothing
+but what an action writes. Off a terminal, bare `mazo` prints the help.
 
 Exit codes: 0 on success; 1 when the command failed or found a problem
 (a `status` error, a refused `sync`, `add`, `retire` or `prune`, a failed `update` of any skill, a failed audit run);

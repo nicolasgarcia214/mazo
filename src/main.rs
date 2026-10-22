@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use mazo::config::{self, Config, Home};
 use mazo::inventory::Inventory;
 use mazo::ledger::{self, Agent, Channel, Ledger};
+use mazo::lifecycle::{self, Retired};
 use mazo::report::{self, Since, UsageArgs};
 use mazo::{Error, audit, html, links, policy, render, scan, store, tui};
 
@@ -15,7 +16,7 @@ use mazo::{Error, audit, html, links, policy, render, scan, store, tui};
     name = "mazo",
     version,
     about = "Skill usage from agent transcripts, and sync of skill links",
-    after_help = "Bare `mazo` at a terminal opens a read-only TUI: usage, unused and skill cards.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
+    after_help = "Bare `mazo` at a terminal opens a TUI: usage, unused and skill cards, with retire and sync.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -220,8 +221,8 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let data = ledger::data_dir()?;
     let inv = store::inventory(cfg.source.as_deref(), &data)?;
     let Some(cmd) = cmd else {
-        return scanned(&cfg, &inv, |_, input| {
-            tui::run(input).map_err(|e| e.to_string())?;
+        return scanned(&cfg, &inv, |data, input| {
+            tui::run(input, data).map_err(|e| e.to_string())?;
             Ok(ExitCode::SUCCESS)
         });
     };
@@ -244,15 +245,11 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             cmd_status(&cfg, &inv, agent, json, render::colour(std::io::stderr().is_terminal(), no_color.as_deref()))
         }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
-        Cmd::New { name, description } => mazo::lifecycle::new(&cfg, &inv, &name, &description),
-        Cmd::Prune { name, yes, force } => mazo::lifecycle::prune(
-            cfg.need_source("prune")?,
-            name.as_deref(),
-            yes,
-            force,
-            std::io::stdin().is_terminal(),
-        ),
-        Cmd::Retire { name, force } => mazo::lifecycle::retire(&cfg, &inv, &name, force),
+        Cmd::New { name, description } => lifecycle::new(&cfg, &inv, &name, &description),
+        Cmd::Prune { name, yes, force } => {
+            lifecycle::prune(cfg.need_source("prune")?, name.as_deref(), yes, force, std::io::stdin().is_terminal())
+        }
+        Cmd::Retire { name, force } => cmd_retire(&cfg, &inv, &data, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Add { source, name, skill, trust } => {
             store::add(&cfg, &inv, &data, &source, name.as_deref(), skill.as_deref(), trust)
@@ -476,32 +473,58 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, c
 
 fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> mazo::Result<ExitCode> {
     let homes = selected(cfg, agent);
-    let plan = links::plan(cfg, inv, &homes, None);
-    let errors = links::sync_errors(cfg, inv, &homes, &plan);
-    if !errors.is_empty() {
-        for e in &errors {
-            eprintln!("{e}");
+    let plan = match links::checked(cfg, inv, &homes) {
+        Ok(plan) => plan,
+        Err(errors) => {
+            for e in &errors {
+                eprintln!("{e}");
+            }
+            return Ok(ExitCode::from(1));
         }
-        return Ok(ExitCode::from(1));
-    }
+    };
     if plan.actions.is_empty() {
         println!("in sync: {} homes, {} skills", homes.len(), inv.skills.len());
         return Ok(ExitCode::SUCCESS);
     }
-    if dry_run {
-        for a in &plan.actions {
-            match a {
-                links::Action::Mkdir(d) => println!("would create {}", d.display()),
-                links::Action::Link { path, .. } => println!("would link  {}", path.display()),
-                links::Action::Remove(p) => println!("would prune {}", p.display()),
-            }
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-    for line in links::apply(&plan)? {
+    for line in if dry_run { links::planned(&plan) } else { links::apply(&plan)? } {
         println!("{line}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `mazo retire`: the warnings and blockers on stderr, what it wrote on stdout.
+fn cmd_retire(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &std::path::Path,
+    name: &str,
+    force: bool,
+) -> mazo::Result<ExitCode> {
+    let mut warnings = Vec::new();
+    let retired = lifecycle::retire(cfg, inv, data, name, force, &mut warnings);
+    for w in &warnings {
+        eprintln!("{w}");
+    }
+    match retired? {
+        Retired::Blocked(blockers) => {
+            for b in &blockers {
+                eprintln!("{b}");
+            }
+            Err("retire refused; pass --force to retire it anyway".into())
+        }
+        Retired::Refused(errors) => {
+            for e in &errors {
+                eprintln!("{e}");
+            }
+            Ok(ExitCode::from(1))
+        }
+        Retired::Done(lines) => {
+            for l in &lines {
+                println!("{l}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 #[cfg(test)]
