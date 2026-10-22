@@ -165,7 +165,7 @@ reasons = ["Clear steps."]
 | `mazo init [--source <dir>]` | Writes the config, naming the skills directory when given: one home per existing agent directory, every policy rule off, and the first of claude, codex and pi found on `PATH` and logged in as `[judge]`, asking on a terminal when none is. Refuses to overwrite. |
 | `mazo new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry or a store skill of that name. Does not sync. |
 | `mazo add <source>` | Copies a skill into the store, records it in `mazo.lock` and links it into every home. `<source>` is a local path (one that exists, or starts with `.`, `/` or `~`); a git URL (`https://…`, `ssh://…`, `git@host:owner/repo.git`, `file://…`), where a path after the segment ending in `.git` is the subpath (`https://host/owner/repo.git/skills/x`); or GitHub shorthand `owner/repo[/path/to/skill]`, cloned from `https://github.com/owner/repo.git`. The recorded origin drops a trailing `/` and ends in `.git` (except a `file://` URL), so `https://github.com/owner/repo` and `owner/repo` record the same one. A repository is shallow-cloned with the system `git` into the data directory, without prompting (ssh runs with `BatchMode=yes` unless `GIT_SSH_COMMAND` is set), and the clone removed afterwards; a failed clone exits 1 with git's error and installs nothing. The source (at its subpath) is the skill when it holds a `SKILL.md`; otherwise its child directories holding one are its skills, and with several `--skill <name>` picks one (without it, exit 2 lists them). Refuses (exit 2, writing nothing) a name already in `source` or the store; `--as <name>` installs it under another name and rewrites its `SKILL.md` `name:`. A skill containing a symlink, or one a symlink leads outside the clone, is refused. A source not on the `trusted` list is vetted by the `[judge]` before anything is copied (see [Vetting a skill](#vetting-a-skill)); local paths are never on it. With no `[judge]` it is refused (exit 2) unless `--trust`, which installs without vetting. Installs nothing if the resulting sync would fail. |
-| `mazo update [names...]` | Re-clones each git-sourced store skill (every one when no name is given) from its recorded origin, shallow and without prompting as `add` does, and reads the same subpath. When the copy's content hash differs, it replaces `store/<name>/` (staged beside it and swapped in, so a failure leaves the old copy) and records the new `commit` and `content_hash`, keeping `installed_at`; then it links the way `add` does. An unchanged skill is reported up to date and its `mazo.lock` entry is left as it was. A skill with `trusted = false`, whose source is not on the `trusted` list either, is skipped, since re-vetting is not available yet; a local-path skill is not updatable. A failed clone, or an update the resulting sync would refuse, leaves that skill as it was; the rest still run and the command exits 1. A name that is not a store skill is a usage error. |
+| `mazo update [names...] [--yes] [--force]` | Re-clones each git-sourced store skill (every one when no name is given) from its recorded origin, shallow and without prompting as `add` does, and reads the same subpath. When the copy's content hash differs, it replaces `store/<name>/` (staged beside it and swapped in, so a failure leaves the old copy) and records the new `commit` and `content_hash`, keeping `installed_at`; then it links the way `add` does. An unchanged skill is reported up to date and its `mazo.lock` entry is left as it was. A changed skill with `trusted = false`, whose source is not on the `trusted` list either, is re-vetted before it is replaced (see [Re-vetting an update](#re-vetting-an-update)), and skipped when there is no `[judge]`; a trusted one is not vetted. A local-path skill is not updatable. A failed clone, a refused re-vet, or an update the resulting sync would refuse, leaves that skill and its entry as they were; the rest still run and the command exits 1. A name that is not a store skill is a usage error. |
 | `mazo retire <name>` | Moves a skill of `source` to `.archive/` (`git mv` when tracked) and prunes its links. A store skill is removed instead: its links, its `mazo.lock` entry and its store directory are deleted. Refuses a skill used, or held or named by a used skill, in the last 30 days unless `--force`, and writes nothing if the resulting sync would fail. Never commits. |
 | `mazo prune [<name>]` | Permanently deletes archived skills from `.archive/`. Asks first, or takes `--yes`; in a git repository it refuses a file whose content is in no `HEAD` path unless `--force`. |
 | `mazo audit <skill>` | Has an agent judge how the skill performs in real sessions and writes a skill report; see [Auditing a skill](#auditing-a-skill). |
@@ -228,6 +228,22 @@ breaks the schema is retried once. mazo prints the verdict, then:
 A refused or declined install, or a judge that gave no valid answer, leaves
 no store directory and no `mazo.lock` entry. An accepted one records the
 verdict in its `mazo.lock` entry.
+
+### Re-vetting an update
+
+`mazo update` re-vets a store skill whose `mazo.lock` entry has `trusted =
+false` and whose source is not on the `trusted` list, when its content
+changed; an unchanged skill, or a trusted one, makes no judge call. The one
+call sends the new `SKILL.md` and the output of `git diff --no-index` from the
+installed copy to the new one (binary files diffed as text), with the other
+skills as for `add`. The update is applied or refused by the same rules as
+`add`, with `update <name>? [Y/n]` as the prompt and `--yes` and `--force` on
+`update`: a security finding refuses it unless `--force`, a diff mazo did not
+send in full (not text, or over the caps) is a security finding of its own,
+and without a terminal and without `--yes` it is refused before the judge is
+called. A refused update leaves the installed copy and its `mazo.lock` entry
+as they were, the other skills still update, and the command exits 1. An
+accepted one replaces `vetted_at`, `for`, `try` and the verdict in the entry.
 
 ## Auditing a skill
 

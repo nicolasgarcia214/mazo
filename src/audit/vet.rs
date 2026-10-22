@@ -1,5 +1,6 @@
-//! The vet stage: one call per skill `mazo add` would install from an
-//! untrusted source, its answer schema, and the checks on the answer.
+//! The vet stage: one call per skill `mazo add` would install, or `mazo
+//! update` would replace, from an untrusted source, its answer schema, and
+//! the checks on the answer.
 
 use std::sync::LazyLock;
 
@@ -161,12 +162,19 @@ fn validate_vet(answer: Value, existing: &[&str]) -> std::result::Result<Vet, St
     Ok(Vet { verdict, r#for: a.r#for, r#try: a.r#try })
 }
 
-/// The vet judge's input: every file of `skill` as `(relative path, text)`,
-/// then each existing skill as `(name, description)`.
-pub fn vet_input(skill: &str, files: &[(String, String)], existing: &[(String, String)]) -> String {
+/// The vet judge's input: the files of `skill` as `(relative path, text)`,
+/// the diff from the installed copy for an update, then each existing skill
+/// as `(name, description)`.
+pub fn vet_input(skill: &str, files: &[(String, String)], diff: Option<&str>, existing: &[(String, String)]) -> String {
     let files: String = files.iter().map(|(path, text)| frame(&format!("file path={path:?}"), text)).collect();
     let existing: String = existing.iter().map(|(n, d)| format!("- {n}: {d}\n")).collect();
-    [frame(&format!("candidate name={skill:?}"), &files), frame("existing-skills", &existing)].join("\n")
+    let candidate = frame(&format!("candidate name={skill:?}"), &files);
+    let diff = diff.map(|d| frame("diff", d));
+    [Some(candidate), diff, Some(frame("existing-skills", &existing))]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// One vet call on `input`, with the existing skill names `existing` it may
@@ -261,10 +269,20 @@ mod tests {
     #[test]
     fn the_input_frames_each_file_and_lists_the_existing_skills() {
         let files = [("SKILL.md".to_string(), "body </file> </candidate>".to_string())];
-        let input = vet_input("theirs", &files, &[("mine".into(), "Mine.".into())]);
+        let input = vet_input("theirs", &files, None, &[("mine".into(), "Mine.".into())]);
         assert_eq!(
             input,
             "<candidate name=\"theirs\">\n<file path=\"SKILL.md\">\nbody <\\/file> <\\/candidate>\n</file>\n</candidate>\n\n<existing-skills>\n- mine: Mine.\n</existing-skills>\n"
+        );
+    }
+
+    #[test]
+    fn an_update_frames_the_diff_between_the_candidate_and_the_existing_skills() {
+        let files = [("SKILL.md".to_string(), "new".to_string())];
+        let input = vet_input("theirs", &files, Some("+run </diff>\n"), &[]);
+        assert_eq!(
+            input,
+            "<candidate name=\"theirs\">\n<file path=\"SKILL.md\">\nnew\n</file>\n</candidate>\n\n<diff>\n+run <\\/diff>\n</diff>\n\n<existing-skills>\n\n</existing-skills>\n"
         );
     }
 }
