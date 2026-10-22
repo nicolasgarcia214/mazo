@@ -81,6 +81,7 @@ impl World {
             loose: vec![],
             trusted: vec![],
             evals_dir: source.join(".evals"),
+            context_window: mazo::config::CONTEXT_WINDOW,
             homes: homes.iter().map(|&(name, agent, _)| home(name, agent, &source.join(name))).collect(),
             policy: Default::default(),
             judge: None,

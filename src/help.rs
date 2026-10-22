@@ -58,7 +58,7 @@ pub const MARKS: [(&str, &str, Option<&str>); 7] = [
 ];
 
 /// The questions the help answers, each with its answer's lines.
-pub const FAQ: [(&str, &[&str]); 6] = [
+pub const FAQ: [(&str, &[&str]); 7] = [
     (
         "Why are the counts lower than I expected?",
         &[
@@ -97,6 +97,14 @@ pub const FAQ: [(&str, &[&str]); 6] = [
         "Why does Codex's allow_implicit_invocation: false save no context?",
         &[
             "It stops implicit selection, so Codex never loads the skill on its own, but Codex still lists its name and description in every prompt: its ctx glyph stays ●.",
+        ],
+    ),
+    (
+        "What is the tok in context in the top bar?",
+        &[
+            "Each agent's skill listing: name plus description characters of its ● skills and the name of its ◐ ones, divided by 4; ○ and × cost nothing.",
+            "Claude lists skills within 1% of its context window and Codex within 2%; the context_window config key sets the window, 200000 by default.",
+            "Past its budget an agent trims the descriptions silently, so an agent's total turns the warning colour at 80% of it. Pi has no budget.",
         ],
     ),
 ];

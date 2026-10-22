@@ -31,6 +31,7 @@ use ratatui::widgets::{
 
 use crate::audit::{self, SkillRecord};
 use crate::config::{Config, Home};
+use crate::ctx::{self, Contexts, Tokens};
 use crate::help;
 use crate::inventory::Inventory;
 use crate::ledger::{self, Agent, Channel, Coverage, Ledger, name};
@@ -229,6 +230,8 @@ pub struct App {
     page: usize,
     usage: Usage,
     unused: Unused,
+    /// What the descriptions in context cost each agent, as the top bar shows.
+    tokens: Tokens,
     /// The open card.
     card: Option<Shown>,
     /// The card beside a wide usage table, as last drawn.
@@ -455,6 +458,7 @@ impl App {
             page: 1,
             usage: report::usage_table(input, &UsageArgs::new(usage_since)),
             unused: report::unused_list(input, unused_since),
+            tokens: Contexts::new(input.cfg, input.inv).tokens(input.inv),
             card: None,
             side: None,
             scroll: 0,
@@ -963,6 +967,7 @@ impl App {
     /// gone closes.
     fn reload(&mut self) -> crate::Result<()> {
         self.data.reload()?;
+        self.tokens = Contexts::new(&self.data.cfg, &self.data.inv).tokens(&self.data.inv);
         if self.card.as_ref().is_some_and(|(skill, ..)| !self.data.inv.skills.contains(skill)) {
             self.card = None;
             if self.screen == Screen::Card {
@@ -1013,7 +1018,8 @@ impl App {
 
     /// The top bar in `area`: the name, the tabs or the card's trail, then
     /// the count of listed skills and the filter, the window, and the agent,
-    /// channel and authoring filters when set.
+    /// channel and authoring filters when set, then the tokens in context,
+    /// each agent's in the warning colour near its listing budget.
     fn draw_top(&self, frame: &mut Frame, area: Rect) {
         let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
         // The first `width` columns of `area`, and the rest.
@@ -1070,7 +1076,25 @@ impl App {
             }
             spans.extend([muted(label), Span::raw(value).fg(theme::ACCENT)]);
         }
-        frame.render_widget(Line::from(spans), area);
+        let chips = Line::from(spans);
+        // The tokens at the right edge, their label shortened where the chips would crowd them.
+        let tokens = |label: &str| {
+            let total = format!("~{}", ctx::approx(self.tokens.total()));
+            let mut spans = vec![Span::raw(total).fg(theme::ACCENT), muted(label)];
+            for (i, (agent, tokens, near)) in self.tokens.agents(self.data.cfg.context_window).into_iter().enumerate() {
+                let colour = if near { theme::WARN } else { theme::ACCENT };
+                let sep = if i > 0 { " · " } else { "" };
+                spans.extend([muted(&format!("{sep}{} ", agent.letter())), Span::raw(ctx::approx(tokens)).fg(colour)]);
+            }
+            spans.push(Span::raw(" "));
+            Line::from(spans)
+        };
+        let long = tokens(" tok in context: ");
+        let line = if chips.width() + 2 + long.width() <= usize::from(area.width) { long } else { tokens(" tok: ") };
+        let [at, right] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(line.width() as u16)]).areas(area);
+        frame.render_widget(chips, at);
+        frame.render_widget(line, right);
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {

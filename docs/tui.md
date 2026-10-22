@@ -9,14 +9,19 @@ terminal, bare `mazo` prints the help. The TUI scans first and writes nothing
 but what an action writes, and it re-reads the data after each action.
 
 The top bar shows the view, the number of listed skills, the name filter, the
-window, and any agent, channel or authoring filter that is set. The footer
+window, any agent, channel or authoring filter that is set, and the
+approximate tokens the skill descriptions in context cost each agent, such as
+`~2.5k tok in context: C 400 · X 2.1k · P 0` at the right edge, shortened to
+`~2.5k tok: …` on a narrow terminal. An agent's total turns the
+warning colour at 80% of its listing budget; the help's FAQ explains the
+budgets. The footer
 lists the keys that work on the current screen; while a dialog is open, it
 lists the dialog's keys instead.
 
 `H` opens the help over any screen: what each column means, the current
 screen's first, the marks and glyphs, and a FAQ on why counts look low, what
 `not judged` and the agent letters mean, and how grade, retro and audit
-differ. `j`/`k` and `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it. In
+differ, and what the tokens in context cost. `j`/`k` and `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it. In
 the `/` filter and the add source, `H` is a literal `H`. The legend under
 `mazo usage` and `mazo unused` and the HTML report's legend are its marks and
 glyphs.

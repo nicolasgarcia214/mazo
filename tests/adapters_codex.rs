@@ -192,6 +192,7 @@ impl ForkMachine {
             loose: vec![],
             trusted: vec![],
             evals_dir: Default::default(),
+            context_window: mazo::config::CONTEXT_WINDOW,
             homes: vec![home(&codex_home)],
             policy: Default::default(),
             judge: None,

@@ -295,6 +295,7 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
         loose: vec![],
         trusted: vec![],
         evals_dir: Default::default(),
+        context_window: mazo::config::CONTEXT_WINDOW,
         homes: vec![],
         policy,
         judge: None,
