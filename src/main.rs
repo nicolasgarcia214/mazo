@@ -275,7 +275,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             store::add(&cfg, &inv, &data, &args)
         }
         Cmd::Update { names, yes, force } => {
-            store::update(&cfg, &inv, &data, &store::Update { names: &names, yes, force })
+            store::update(&cfg, &inv, &data, &store::Update { names: &names, yes, force, pane: None })
         }
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }

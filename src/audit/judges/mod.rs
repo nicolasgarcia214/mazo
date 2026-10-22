@@ -340,7 +340,7 @@ const KILL_GRACE: Duration = Duration::from_secs(5);
 /// and SIGKILL would orphan, then SIGKILL after [`KILL_GRACE`]. The pipes are read on
 /// detached threads given a second after the exit, so a grandchild left
 /// holding one costs its output, not a hang.
-fn wait(
+pub(crate) fn wait(
     mut child: Child,
     stdin: Option<String>,
     limit: Duration,

@@ -6,11 +6,13 @@ use std::cell::OnceCell;
 use std::fs;
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::audit::{self, Backend, Caller, Vet, VetVerdict};
+use crate::audit::{self, Backend, Caller, Pane, Vet, VetVerdict};
 use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
 use crate::ledger::Ledger;
@@ -68,6 +70,22 @@ pub struct Locked {
     pub r#try: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<VetVerdict>,
+}
+
+impl Locked {
+    /// The repository `mazo update` fetches it from; `None` when it was
+    /// installed from a local path.
+    fn remote(&self) -> std::result::Result<Option<Remote>, String> {
+        Ok(match Source::parse(&self.origin)? {
+            Source::Git(remote) => Some(remote),
+            Source::Local(_) => None,
+        })
+    }
+
+    /// Whether `mazo update` can fetch it again.
+    pub fn updatable(&self) -> bool {
+        !matches!(self.remote(), Ok(None))
+    }
 }
 
 impl Lock {
@@ -172,13 +190,22 @@ impl Remote {
 
     /// Shallow-clones the repository into `into` and returns the commit.
     /// Neither git nor ssh may prompt, unless the user's `GIT_SSH_COMMAND` says so.
-    fn clone_into(&self, into: &Path) -> Result<String> {
+    /// The clone is killed once `cancel` turns true, or after [`CLONE_LIMIT`].
+    fn clone_into(&self, into: &Path, cancel: &dyn Fn() -> bool) -> Result<String> {
         let mut git = std::process::Command::new("git");
         git.args(["clone", "--depth", "1", "--quiet", "--"]).arg(&self.url).arg(into).env("GIT_TERMINAL_PROMPT", "0");
         if std::env::var_os("GIT_SSH_COMMAND").is_none() {
             git.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
         }
-        let out = git.output().map_err(|e| format!("git: {e}"))?;
+        git.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let spawned = git.spawn().and_then(|child| audit::wait(child, None, CLONE_LIMIT, cancel));
+        let Some(out) = spawned.map_err(|e| format!("git: {e}"))? else {
+            if cancel() {
+                return Err(audit::CANCELLED.into());
+            }
+            let minutes = CLONE_LIMIT.as_secs() / 60;
+            return Err(format!("git clone {}: not done within {minutes} minutes; it was killed", self.url).into());
+        };
         if !out.status.success() {
             return Err(format!("git clone {}: {}", self.url, String::from_utf8_lossy(&out.stderr).trim()).into());
         }
@@ -186,6 +213,9 @@ impl Remote {
         head.map(|h| h.trim().to_string()).ok_or_else(|| format!("{}: no HEAD commit", self.url).into())
     }
 }
+
+/// How long a clone may run before it is killed.
+const CLONE_LIMIT: Duration = Duration::from_secs(10 * 60);
 
 /// A directory removed when dropped.
 struct Scratch(PathBuf);
@@ -278,7 +308,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
             fs::create_dir_all(data).map_err(|e| err(data, e))?;
             let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
             let _ = fs::remove_dir_all(clone);
-            let commit = remote.clone_into(clone)?;
+            let commit = remote.clone_into(clone, &|| false)?;
             (clone.join(&remote.subpath), remote.url.clone(), remote.subpath.clone(), Some(commit), remote.name())
         }
     };
@@ -406,6 +436,35 @@ pub struct Update<'a> {
     pub yes: bool,
     /// Apply an update with a security finding.
     pub force: bool,
+    /// The TUI's job pane: what the update reports, and its judge's
+    /// progress, go there instead of to stdout and stderr.
+    pub pane: Option<&'a Pane>,
+}
+
+/// Where an update reports: the TUI's job pane, else stdout, or stderr for
+/// an error.
+#[derive(Clone, Copy)]
+struct Out<'a>(Option<&'a Pane>);
+
+impl Out<'_> {
+    fn line(self, line: &str) {
+        match self.0 {
+            Some(pane) => _ = pane.lines.send(line.into()),
+            None => println!("{line}"),
+        }
+    }
+
+    fn error(self, line: &str) {
+        match self.0 {
+            Some(pane) => _ = pane.lines.send(line.into()),
+            None => eprintln!("{line}"),
+        }
+    }
+
+    /// Whether the pane asked the job to stop.
+    fn cancelled(self) -> bool {
+        self.0.is_some_and(|p| p.cancel.load(Ordering::Relaxed))
+    }
 }
 
 /// `mazo update [names…] [--yes] [--force]`: re-clones each git-sourced
@@ -417,25 +476,34 @@ pub struct Update<'a> {
 /// that fails or is refused is left as it was and the rest still run; any
 /// failure exits 1. A name that is not a store skill is a usage error.
 pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<ExitCode> {
-    let names = args.names;
+    let (names, out) = (args.names, Out(args.pane));
     let lock = Lock::load(data)?;
     if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
         return Err(Error::Usage(format!("update: not a store skill: {n}")));
     }
     let consent = Consent { update: true, yes: args.yes, force: args.force };
-    let revet =
-        cfg.judge.as_ref().map(|judge| Revet { data, judge, homes: &cfg.homes, consent, backend: OnceCell::new() });
-    let clone = Scratch(data.join(format!(".clone-{}", std::process::id())));
+    let revet = cfg.judge.as_ref().map(|judge| Revet {
+        data,
+        judge,
+        homes: &cfg.homes,
+        consent,
+        pane: args.pane,
+        backend: OnceCell::new(),
+    });
     let (mut updated, mut failed) = (false, false);
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
-        let mut remote = match Source::parse(&l.origin) {
-            Ok(Source::Git(remote)) => remote,
-            Ok(Source::Local(_)) => {
-                println!("{}: not updatable; installed from a local path", l.name);
+        // A cancelled job starts nothing more.
+        if out.cancelled() {
+            return Err(audit::CANCELLED.into());
+        }
+        let mut remote = match l.remote() {
+            Ok(Some(remote)) => remote,
+            Ok(None) => {
+                out.line(&format!("{}: not updatable; installed from a local path", l.name));
                 continue;
             }
             Err(e) => {
-                eprintln!("ERROR: update {}: {e}", l.name);
+                out.error(&format!("ERROR: update {}: {e}", l.name));
                 failed = true;
                 continue;
             }
@@ -443,23 +511,23 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         let vet = match &revet {
             _ if l.trusted || remote.trusted_by(&cfg.trusted) => None,
             None => {
-                println!(
+                out.line(&format!(
                     "{}: skipped; {} is not trusted and re-vetting it needs a [judge] in the config",
                     l.name, l.origin
-                );
+                ));
                 continue;
             }
             Some(r) => Some(r),
         };
         remote.subpath = if l.subpath == "." { PathBuf::new() } else { l.subpath.clone().into() };
-        match refresh(cfg, inv, data, l, &remote, &clone.0, vet) {
+        match refresh(cfg, inv, data, l, &remote, vet, out) {
             Ok(Some(commit)) => {
-                println!("updated {} to {commit}", dir(data).join(&l.name).display());
+                out.line(&format!("updated {} to {commit}", dir(data).join(&l.name).display()));
                 updated = true;
             }
-            Ok(None) => println!("{}: up to date", l.name),
+            Ok(None) => out.line(&format!("{}: up to date", l.name)),
             Err(e) => {
-                eprintln!("ERROR: update {}: {e}", l.name);
+                out.error(&format!("ERROR: update {}: {e}", l.name));
                 failed = true;
             }
         }
@@ -469,11 +537,11 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         let plan = links::plan(cfg, inv, &homes, None);
         let errors = links::sync_errors(cfg, inv, &homes, &plan);
         for e in &errors {
-            eprintln!("{e}");
+            out.error(e);
         }
         if errors.is_empty() {
             for line in links::apply(&plan)? {
-                println!("{line}");
+                out.line(&line);
             }
         }
         failed |= !errors.is_empty();
@@ -481,29 +549,37 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
     Ok(if failed { ExitCode::from(1) } else { ExitCode::SUCCESS })
 }
 
-/// Clones `remote` into `clone` and, when the skill at its subpath hashes
-/// unlike `l`, passes it through the `vet` gate if there is one, then swaps
-/// the copy in for `store/<name>` under the data lock and records the commit
-/// and hash, and any new verdict: the new commit, or `None` when up to date.
-/// A refused vet, a sync that would fail with the new copy, or any failed
-/// write leaves the old copy and the lockfile as they were.
+/// Clones `remote` into `<data>/.clone-<pid>` and, when the skill at its
+/// subpath hashes unlike `l`, passes it through the `vet` gate if there is
+/// one, then swaps the copy in for `store/<name>` under the data lock and
+/// records the commit and hash, and any new verdict: the new commit, or
+/// `None` when up to date. A refused vet, a sync that would fail with the new
+/// copy, or any failed write leaves the old copy and the lockfile as they
+/// were; the sync's errors go to `out`. A cancel stops it before the swap,
+/// and a copy an interrupted swap set aside is put back first ([`recover`]).
 fn refresh(
     cfg: &Config,
     inv: &Inventory,
     data: &Path,
     l: &Locked,
     remote: &Remote,
-    clone: &Path,
     vet: Option<&Revet>,
+    out: Out,
 ) -> Result<Option<String>> {
-    let _ = fs::remove_dir_all(clone);
-    let commit = remote.clone_into(clone)?;
-    let src = resolved(&clone.join(&remote.subpath), Some(clone))?;
-    let (skill_md, files) = checked(&src, &l.name, l.name != remote.name())?;
-
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let store = dir(data);
     let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
+    {
+        let _lock = ledger::lock(data)?;
+        recover(&to, &old).map_err(|e| err(&old, e))?;
+    }
+    let scratch = Scratch(data.join(format!(".clone-{}", std::process::id())));
+    let clone = scratch.0.as_path();
+    let _ = fs::remove_dir_all(clone);
+    let commit = remote.clone_into(clone, &|| out.cancelled())?;
+    let src = resolved(&clone.join(&remote.subpath), Some(clone))?;
+    let (skill_md, files) = checked(&src, &l.name, l.name != remote.name())?;
+
     // Staged under a name of this process's own, so that the judge and the
     // y/N prompt run without the data lock.
     let staged = Scratch(store.join(format!(".update-{}-{}", l.name, std::process::id())));
@@ -527,7 +603,10 @@ fn refresh(
         )
         .into());
     }
-    let _ = fs::remove_dir_all(&old);
+    if out.cancelled() {
+        return Err(audit::CANCELLED.into());
+    }
+    recover(&to, &old).map_err(|e| err(&old, e))?;
     let swapped = fs::rename(&to, &old).map_err(|e| err(&to, e)).and_then(|()| {
         fs::rename(&staged.0, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to)))
     });
@@ -552,13 +631,24 @@ fn refresh(
     if let Err(e) = recorded {
         fs::remove_dir_all(&to).and_then(|()| fs::rename(&old, &to)).map_err(|e| err(&to, e))?;
         for e in &errors {
-            eprintln!("{e}");
+            out.error(e);
         }
         return Err(e);
     }
     // Installed and recorded; a hidden leftover is listed by no root.
-    let _ = fs::remove_dir_all(&old);
+    let _ = recover(&to, &old);
     Ok(Some(commit))
+}
+
+/// Undoes a swap interrupted after it set `store/<name>` aside as `old`:
+/// `old` goes back to `to` when `to` is missing, and is removed only when
+/// `to` is there.
+fn recover(to: &Path, old: &Path) -> std::io::Result<()> {
+    match (old.symlink_metadata(), to.symlink_metadata()) {
+        (Err(_), _) => Ok(()),
+        (Ok(_), Ok(_)) => fs::remove_dir_all(old),
+        (Ok(_), Err(_)) => fs::rename(old, to),
+    }
 }
 
 /// `update`'s re-vets: the judge, set up and its login checked the first
@@ -569,6 +659,7 @@ struct Revet<'a> {
     judge: &'a Judge,
     homes: &'a [Home],
     consent: Consent,
+    pane: Option<&'a Pane>,
     backend: OnceCell<Box<dyn Backend>>,
 }
 
@@ -583,7 +674,7 @@ impl Revet<'_> {
     }
 
     fn with<'s>(&'s self, backend: &'s dyn Backend) -> Caller<'s> {
-        Caller { data: self.data, judge: self.judge, backend, pane: None }
+        Caller { data: self.data, judge: self.judge, backend, pane: self.pane }
     }
 
     /// The vet gate on an update of the store skill `name` to the copy
@@ -794,7 +885,7 @@ fn gate(
         let found = vet.verdict.security.take();
         vet.verdict.security = Some(found.map_or_else(|| withheld.clone(), |f| format!("{f}; {withheld}")));
     }
-    print!("{}", vet.text(name));
+    vet.text(name).lines().for_each(|l| Out(c.pane).line(l));
     if vet.verdict.security.is_some() && !consent.force {
         return Err(format!("{verb} refused: the judge found a security issue; pass --force to {act} it anyway").into());
     }

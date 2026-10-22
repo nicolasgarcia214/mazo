@@ -180,14 +180,22 @@ unused list), and `q` quits. `r` retires the selected skill, or the card's, as
 no `--force`. On the unused list, `Enter` on a store skill whose status is
 `unused` (its `new` window since install has ended) asks to retire it instead
 of opening its card. `s` shows the actions `mazo sync --dry-run` would print, or says
-the homes are in sync. `x` audits the selected skill, or the card's, as
+the homes are in sync. `u` updates the selected store skill, or the card's, and
+`U` every store skill, as `mazo update --yes` does; a source skill or one
+installed from a local path shows that it is not updatable. The update runs
+in the background pane, where no y/N can be answered, so its dialog names the
+judge and its cap and asks "update and accept judge verdicts?": `y` accepts
+the verdict of each re-vet of an untrusted skill that changed. There is no
+`--force`, so a security finding still refuses that skill's update. An
+up-to-date skill is reported without a judge call. `x` audits the selected
+skill, or the card's, as
 `mazo audit <skill>` does with its default caps: the dialog shows the cap (20
 sessions, and $1 for a judge that reports its cost) or the refusal `mazo audit`
 would give. The audit runs in the background and a pane above the footer
 shows its progress and result while the views keep working; `Esc` on a list
-closes the pane once the audit ends. One audit runs at a time. Quitting while
-one runs asks first, and on `y` its judge call is killed. Each action runs only
-on `y`; any other key cancels. The data is re-read after each action. It scans
+closes the pane once the audit ends. One job, an update or an audit, runs at
+a time. Quitting while one runs asks first, and on `y` its judge call is
+killed. Each action runs only on `y`; any other key cancels. The data is re-read after each action. It scans
 first and writes nothing but what an action writes. Off a terminal, bare `mazo`
 prints the help.
 
