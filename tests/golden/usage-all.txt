@@ -8,4 +8,4 @@ goal-execute          0     0    0     0    0   0        -       ·······�
 pruned                0     0    0     0    0   0        -       ······························     - not judged
 wfa-helper            0     0    0     0    0   0        -       ······························     - not judged
 coverage: claude since 2026-09-10 (typed since 2026-02-24) · codex since 2026-03-29
-legend: agents C Claude, X Codex, P Pi; · no events that day (a grey tick in HTML); +N commits since the grade; +wip uncommitted changes since the grade; (project) a project skill, counted apart
+legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade; (project) a project skill, counted apart

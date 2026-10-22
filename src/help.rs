@@ -31,13 +31,14 @@ pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
     ),
 ];
 
-/// The marks and glyphs in the cells, and what each means.
-pub const MARKS: [(&str, &str); 5] = [
-    ("agents", "C Claude, X Codex, P Pi"),
-    ("·", "no events that day (a grey tick in HTML)"),
-    ("+N", "commits since the grade"),
-    ("+wip", "uncommitted changes since the grade"),
-    ("(project)", "a project skill, counted apart"),
+/// The marks and glyphs in the cells, what each means, and how the HTML
+/// report says it when it draws the mark otherwise.
+pub const MARKS: [(&str, &str, Option<&str>); 5] = [
+    ("agents", "C Claude, X Codex, P Pi", None),
+    ("·", "no events that day", Some("a grey tick for a day with no events")),
+    ("+N", "commits since the grade", None),
+    ("+wip", "uncommitted changes since the grade", None),
+    ("(project)", "a project skill, counted apart", None),
 ];
 
 /// The questions the help answers, each with its answer's lines.
@@ -45,7 +46,7 @@ pub const FAQ: [(&str, &[&str]); 6] = [
     (
         "Why are the counts lower than I expected?",
         &[
-            "The w window: counts cover only the window in the top bar; w widens it to 60 days, then all.",
+            "The w window: counts cover only the window in the top bar; w cycles it through 30 days, 60 days and all.",
             "Log coverage: mazo reads only the logs on disk; the coverage line says how far back each home goes.",
             "sess counts distinct sessions, not loads: five loads in one session are 1.",
             "Reads and refs are weak loads, excluded from sess, last and 30d.",
@@ -82,9 +83,14 @@ pub const FAQ: [(&str, &[&str]); 6] = [
     ),
 ];
 
-/// The [`MARKS`] as one line, each `mark meaning`, joined with `sep`.
-pub fn legend(sep: &str) -> String {
-    MARKS.iter().map(|(mark, meaning)| format!("{mark} {meaning}")).collect::<Vec<_>>().join(sep)
+/// The [`MARKS`] as one line, each `mark meaning`, joined with `; `; in
+/// the HTML report's words when `html`.
+pub fn legend(html: bool) -> String {
+    let entry = |(mark, meaning, in_html): &(&str, &str, Option<&str>)| match in_html {
+        Some(said) if html => said.to_string(),
+        _ => format!("{mark} {meaning}"),
+    };
+    MARKS.iter().map(entry).collect::<Vec<_>>().join("; ")
 }
 
 /// The help as lines: Columns, the unused list's first when `unused_first`,
@@ -101,7 +107,7 @@ pub fn lines(unused_first: bool) -> Vec<String> {
         out.extend(columns.iter().map(|(name, meaning)| format!("    {name}  {meaning}")));
     }
     out.extend(["".into(), "Marks and glyphs".into()]);
-    out.extend(MARKS.iter().map(|(mark, meaning)| format!("  {mark}  {meaning}")));
+    out.extend(MARKS.iter().map(|(mark, meaning, _)| format!("  {mark}  {meaning}")));
     out.extend(["".into(), "FAQ".into()]);
     for (question, answer) in FAQ {
         out.push(format!("  {question}"));

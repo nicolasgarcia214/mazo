@@ -16,7 +16,7 @@ use mazo::{evals, render};
 use serde_json::Value;
 
 /// The last line of `usage` and `unused`: the help's marks and glyphs.
-const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day (a grey tick in HTML); \
+const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; \
                       +N commits since the grade; +wip uncommitted changes since the grade; \
                       (project) a project skill, counted apart";
 

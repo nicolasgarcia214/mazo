@@ -16,7 +16,7 @@ release-notes    3     3    0     0    0   0 C      1d ago ··········�
 triage           1     1    0     0    0   0 C      4d ago ·························█····     - not judged
 tidy-imports     0     0    0     0    0   0        -      ······························     - not judged
 coverage: claude since 2026-10-14
-legend: agents C Claude, X Codex, P Pi; · no events that day (a grey tick in HTML); +N commits since the grade; +wip uncommitted changes since the grade; (project) a project skill, counted apart
+legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade; (project) a project skill, counted apart
 ```
 
 ## What it does

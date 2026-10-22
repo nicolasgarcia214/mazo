@@ -80,7 +80,7 @@ pub const SHOW_LIMIT: usize = 20;
 
 /// The last line of `usage` and `unused`: the help's marks.
 fn legend() -> String {
-    format!("legend: {}\n", help::legend("; "))
+    format!("legend: {}\n", help::legend(false))
 }
 
 /// Days in the `30d` sparkline.
@@ -299,7 +299,7 @@ pub struct UsageRow {
     #[serde(rename = "30d")]
     pub last_30d: Vec<usize>,
     pub grade: Option<GradeOut>,
-    /// The quality verdict ([`verdict_of`]); null when not judged.
+    /// The audit verdict ([`verdict_of`]); null when not judged.
     pub verdict: Option<String>,
     /// Where `verdict` comes from; null when not judged.
     pub verdict_source: Option<VerdictSource>,
@@ -319,7 +319,7 @@ fn vet_of<'i>(inv: &'i Inventory, skill: &str) -> Option<&'i Locked> {
     inv.installed.get(skill).filter(|_| inv.root(skill) != inv.source.as_deref())
 }
 
-/// `skill`'s quality verdict and its source (D18). The audit verdict is the
+/// `skill`'s audit-column verdict and its source (D18). The audit verdict is the
 /// `result.verdict` of the latest audit, the last `skill` record of `skill`
 /// in `audits.jsonl` ([`crate::audit::latest`]), as `show` prints it; else
 /// the vet verdict of its lockfile entry ([`vet_of`]) as
@@ -341,7 +341,7 @@ fn verdict_of(input: &Input, skill: &str, scope: Scope) -> Option<(VerdictSource
     audit().map(|a| (VerdictSource::Audit, a.result.verdict.clone())).or_else(vet)
 }
 
-/// The quality cell in full: `audit: <verdict>`, `vet: <verdict>` or
+/// The audit cell in full: `audit: <verdict>`, `vet: <verdict>` or
 /// `not judged`. The text table cuts it to [`VERDICT_CHARS`].
 pub fn verdict_text(r: &UsageRow) -> String {
     match (r.verdict_source, &r.verdict) {

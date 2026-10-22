@@ -194,8 +194,12 @@ fn the_legend_lists_the_helps_marks() {
     let page = page(&world(repo.path()), &events());
     let legend = &page[page.find("legend: ").unwrap()..];
     let legend = &legend[..legend.find("</p>").unwrap()];
-    let marks: Vec<String> = mazo::help::MARKS.iter().map(|(mark, meaning)| format!("{mark} {meaning}")).collect();
-    assert_eq!(legend, format!("legend: {}", marks.join(" · ")));
+    assert_eq!(
+        legend,
+        "legend: agents C Claude, X Codex, P Pi; a grey tick for a day with no events; \
+         +N commits since the grade; +wip uncommitted changes since the grade; (project) a project skill, counted apart"
+    );
+    assert_eq!(legend, format!("legend: {}", mazo::help::legend(true)));
 }
 
 /// AC4: each missing or stale grade names `/grade <skill>`; a current grade
