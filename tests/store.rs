@@ -1840,3 +1840,69 @@ fn retire_project_removes_the_project_copy_of_a_name_the_global_store_also_holds
         assert_eq!(fs::read_link(link).unwrap(), global, "{}", link.display());
     }
 }
+
+#[test]
+fn status_and_usage_in_a_project_list_its_skills_and_outside_it_only_add_scope() {
+    let (fx, dir) = fixture();
+    let p = project(&fx);
+    // A git repository without a `mazo.lock` is no project: the output is as outside it.
+    let [status, usage] = ["status", "usage"].map(|args| {
+        let (outside, r) = (fx.mazo(&[args]), fx.mazo_in(&p, &[args]));
+        assert_eq!((r.code(), r.stdout(), r.stderr()), (outside.code(), outside.stdout(), outside.stderr()), "{args}");
+        outside.stdout()
+    });
+    add_project(&fx, &p, &[&s(&dir), "--trust"]).assert_ok();
+    // A read through the project's Claude link, which the scan, knowing no project, made other-origin.
+    let ts = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)).round(jiff::Unit::Second).unwrap();
+    let mut e = common::event("a", "theirs", mazo::ledger::Channel::Read, "s", &ts.to_string());
+    (e.origin, e.path) = (mazo::ledger::Origin::Other, Some(s(&p.join(".claude/skills/theirs/SKILL.md"))));
+    common::write(&fx.data.join("mazo/events.jsonl"), &format!("{}\n", serde_json::to_string(&e).unwrap()));
+    let json = |cwd: &Path, args: &[&str]| -> serde_json::Value {
+        serde_json::from_str(&fx.mazo_in(cwd, &[args, &["--json"]].concat()).stdout()).unwrap()
+    };
+    let inside = p.join("sub/dir");
+
+    let r = fx.mazo_in(&inside, &["status"]);
+    r.assert_ok();
+    assert!(r.stdout().contains("\nproject: theirs (project) in sync\n"), "{}", r.stdout());
+    let links = json(&inside, &["status"])["project"].clone();
+    let links: Vec<(&str, &str, &str)> = links
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["home"].as_str().unwrap(), l["state"].as_str().unwrap(), l["scope"].as_str().unwrap()))
+        .collect();
+    assert_eq!(links, [(".claude/skills", "ok", "project"), (".agents/skills", "ok", "project")]);
+    // Reached through a symlink, the project is found at its physical root.
+    let alias = fx.root.join("alias");
+    std::os::unix::fs::symlink(&p, &alias).unwrap();
+    let r = fx.mazo_in(&alias.join("sub/dir"), &["status"]);
+    assert!(r.stdout().contains("\nproject: theirs (project) in sync\n"), "{}", r.stdout());
+    let r = fx.mazo_in(&inside, &["usage"]);
+    assert!(r.stdout().lines().any(|l| l.starts_with("theirs (project) ")), "{}", r.stdout());
+    let rows = json(&inside, &["usage"])["rows"].clone();
+    let row = rows.as_array().unwrap().iter().find(|r| r["skill"] == "theirs").unwrap();
+    assert_eq!((&row["scope"], &row["read"]), (&"project".into(), &1.into()), "{row}");
+
+    // Outside the project the text is as it was, and the JSON rows are global.
+    assert_eq!((fx.mazo(&["status"]).stdout(), fx.mazo(&["usage"]).stdout()), (status, usage));
+    assert_eq!(json(&fx.root, &["status"]).get("project"), None);
+    let rows = json(&fx.root, &["usage"])["rows"].clone();
+    assert!(rows.as_array().unwrap().iter().all(|r| r["scope"] == "global" && r["skill"] != "theirs"), "{rows}");
+    fs::remove_file(fx.home.join(".claude/skills").join(&fx.skills[0])).unwrap();
+    let drift = json(&fx.root, &["status"])["drift"].clone();
+    assert_eq!((&drift[0]["state"], &drift[0]["scope"]), (&"missing".into(), &"global".into()), "{drift}");
+    fx.mazo(&["sync"]).assert_ok();
+
+    // A project link gone is drift of the project skill.
+    fs::remove_file(p.join(".agents/skills/theirs")).unwrap();
+    let r = fx.mazo_in(&inside, &["status"]);
+    assert_eq!(r.code(), 1, "{}", r.stdout());
+    assert!(r.stdout().contains("\n.agents/skills: theirs (project) is not linked (missing)\n"), "{}", r.stdout());
+    assert!(!r.stdout().contains("project: theirs (project) in sync"), "{}", r.stdout());
+    let drift = json(&inside, &["status"])["drift"].clone();
+    assert_eq!(
+        (&drift[0]["path"], &drift[0]["scope"]),
+        (&s(&p.join(".agents/skills/theirs")).into(), &"project".into())
+    );
+}

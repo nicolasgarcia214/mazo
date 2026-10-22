@@ -455,6 +455,81 @@ fn usage_quality_is_the_latest_audit_else_the_vet_else_not_judged() {
     assert_eq!(row(&json, "vetted")["verdict"], "Fine.");
 }
 
+/// The `--json` usage row of `skill` in `scope`.
+fn scoped(out: &str, skill: &str, scope: &str) -> Option<Value> {
+    let v: Value = serde_json::from_str(out).unwrap();
+    v["rows"].as_array().unwrap().iter().find(|r| r["skill"] == skill && r["scope"] == scope).cloned()
+}
+
+#[test]
+fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
+    let repo = report_repo();
+    // A git project whose store holds `vetted`, vetted in its `mazo.lock`, and an `unslop` of its own.
+    let project = tempfile::tempdir().unwrap();
+    let p = project.path();
+    git(p, &["init", "-q"], NOW);
+    common::vetted(p);
+    std::fs::create_dir(p.join(".mazo")).unwrap();
+    std::fs::rename(p.join("store"), p.join(".mazo/skills")).unwrap();
+    write(&p.join(".mazo/skills/unslop/SKILL.md"), "---\nname: unslop\n---\n");
+    let at = |rel: &str| Some(p.join(rel).display().to_string());
+    let other = |mut e: Event, path: Option<String>| {
+        e.origin = Origin::Other;
+        e.path = path;
+        e
+    };
+    let mut events = vec![
+        event("g", "unslop", Channel::Tool, "s1", &ago(1)),
+        other(event("pu", "unslop", Channel::Tool, "s2", &ago(1)), at(".agents/skills/unslop/SKILL.md")),
+        other(event("pr", "vetted", Channel::Read, "s3", &ago(2)), at(".claude/skills/vetted/SKILL.md")),
+        other(event("ps", "vetted", Channel::Slash, "s4", &ago(2)), at(".mazo/skills/vetted/SKILL.md")),
+        other(
+            event("x", "vetted", Channel::Slash, "s5", &ago(2)),
+            Some("/elsewhere/.claude/skills/vetted/SKILL.md".into()),
+        ),
+    ];
+    // The same project reached through a symlink.
+    let alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(p, alias.path().join("p")).unwrap();
+    let through = alias.path().join("p/.mazo/skills/unslop/SKILL.md").display().to_string();
+    events.push(other(event("pa", "unslop", Channel::Read, "s6", &ago(1)), Some(through)));
+    let mut w = report_world(repo.path());
+    let outside = report::usage(&w.input(&events), &args(), true, false);
+    let outside_text = report::usage(&w.input(&events), &args(), false, false);
+    w.inv.project = mazo::store::Project::at(p).unwrap();
+    let input = w.input(&events);
+
+    let json = report::usage(&input, &args(), true, false);
+    let global = scoped(&json, "unslop", "global").unwrap();
+    assert_eq!(counts(&global), [1, 0, 1, 0, 0, 0], "the project's load is not the global skill's: {global}");
+    let own = scoped(&json, "unslop", "project").unwrap();
+    assert_eq!(counts(&own), [1, 0, 1, 0, 1, 0], "the read through the symlink counts: {own}");
+    assert_eq!((&own["grade"], &own["verdict"]), (&Value::Null, &Value::Null));
+    let vetted = scoped(&json, "vetted", "project").unwrap();
+    assert_eq!(counts(&vetted), [1, 1, 0, 0, 1, 0], "through either link or the store, not elsewhere: {vetted}");
+    assert_eq!(
+        (&vetted["verdict_source"], &vetted["verdict"]),
+        (&"vet".into(), &"quality weak, value low value".into())
+    );
+    assert_eq!(scoped(&json, "vetted", "global"), None);
+    let all = report::usage(&input, &UsageArgs { all: true, ..args() }, true, false);
+    assert_eq!(scoped(&all, "vetted", "global"), None, "a name only the project has gets no global row");
+    assert!(scoped(&all, "vetted", "project").is_some());
+    let text = report::usage(&input, &args(), false, false);
+    for skill in ["unslop (project) ", "vetted (project) ", "unslop "] {
+        assert!(text.lines().any(|l| l.starts_with(skill)), "{skill}: {text}");
+    }
+    assert!(
+        text.lines().any(|l| l.starts_with("vetted (project) ") && l.ends_with(" vet: quality weak, value low value"))
+    );
+
+    // Outside the project every row is global, and the text names no project.
+    let rows = serde_json::from_str::<Value>(&outside).unwrap()["rows"].as_array().unwrap().clone();
+    assert!(rows.iter().all(|r| r["scope"] == "global"), "{outside}");
+    assert_eq!(counts(&row(&outside, "unslop")), [1, 0, 1, 0, 0, 0]);
+    assert!(!outside_text.contains("(project)"), "{outside_text}");
+}
+
 /// The text and JSON grade of `skill` in a fresh report, which reads the history again.
 fn grade_of(source: &Path, skill: &str) -> (String, Value) {
     let w = report_world(source);

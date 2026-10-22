@@ -5,9 +5,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Serialize;
+
 use crate::Result;
 use crate::history::History;
-use crate::store::Locked;
+use crate::store::{Locked, Project};
 
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
@@ -26,6 +28,26 @@ pub struct Inventory {
     pub history: Option<History>,
     /// Each store skill's lockfile entry.
     pub installed: BTreeMap<String, Locked>,
+    /// The project at the current directory, which `status` and `usage` list.
+    pub project: Option<Project>,
+}
+
+/// Where a skill is installed: the source and the store, or a project's store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    Global,
+    Project,
+}
+
+impl Scope {
+    /// What text output appends to a skill's name.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Scope::Global => "",
+            Scope::Project => " (project)",
+        }
+    }
 }
 
 impl Inventory {
@@ -61,6 +83,7 @@ impl Inventory {
             worktree,
             history,
             installed,
+            project: None,
         })
     }
 

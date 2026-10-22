@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::evals::{self, Eval, Evals, Grade};
 use crate::examples::{self, Examples};
 use crate::history::Commit;
-use crate::inventory::{self, Inventory};
+use crate::inventory::{self, Inventory, Scope};
 use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin, name};
 use crate::render::{self, Align};
 use crate::store::Locked;
@@ -86,13 +86,15 @@ const SPARK_DAYS: i64 = 30;
 /// The collapse key, within one skill.
 type Key<'e> = (Agent, &'e str, Channel);
 
-/// The ledger as reports see it: parsed timestamps, local days, and the
-/// report-time authoring sessions.
+/// The ledger as reports see it: parsed timestamps, local days, the
+/// report-time authoring sessions, and the events of project skills.
 struct View<'a> {
     input: &'a Input<'a>,
     today: Date,
     events: Vec<(&'a Event, Timestamp)>,
     authoring_sessions: HashSet<(Agent, &'a str)>,
+    /// The ids of the events whose path is in a project skill's directory.
+    project: HashSet<&'a str>,
 }
 
 /// Which events a report counts. The default is canonical origin, no probe
@@ -138,7 +140,16 @@ impl<'a> View<'a> {
             .filter(|e| e.channel.strong() && authoring.iter().any(|s| e.skill.rsplit(':').next() == Some(s.as_str())))
             .map(|e| (e.agent, e.session.as_str()))
             .collect();
-        View { input, today, events, authoring_sessions }
+        let project = input.inv.project.as_ref().map_or_else(HashSet::new, |p| {
+            let of = |e: &Event| e.path.as_deref().and_then(|path| p.skill_of(path)).is_some();
+            input.events.iter().filter(|e| of(e)).map(|e| e.id.as_str()).collect()
+        });
+        View { input, today, events, authoring_sessions, project }
+    }
+
+    /// A project skill's event is one in its directory; every other is global.
+    fn scope(&self, e: &Event) -> Scope {
+        if self.project.contains(e.id.as_str()) { Scope::Project } else { Scope::Global }
     }
 
     fn date(&self, t: Timestamp) -> Date {
@@ -159,7 +170,9 @@ impl<'a> View<'a> {
     }
 
     fn kept(&self, e: &Event, f: &Filter) -> bool {
-        (f.all || (e.origin == Origin::Canonical && e.actor != Actor::Probe))
+        // A project skill's event is canonical whatever the scan, which knows no project, made it.
+        let canonical = e.origin == Origin::Canonical || self.scope(e) == Scope::Project;
+        (f.all || (canonical && e.actor != Actor::Probe))
             && (f.authoring || !self.is_authoring(e))
             && f.agent.is_none_or(|a| e.agent == a)
             && f.channel.is_none_or(|c| e.channel == c)
@@ -270,6 +283,7 @@ fn grade_cell(g: &Option<GradeOut>, colour: bool) -> String {
 #[derive(Serialize)]
 pub struct UsageRow {
     pub skill: String,
+    pub scope: Scope,
     pub sess: usize,
     pub slash: usize,
     pub tool: usize,
@@ -308,14 +322,20 @@ fn vet_of<'i>(inv: &'i Inventory, skill: &str) -> Option<&'i Locked> {
 /// the vet verdict of its lockfile entry ([`vet_of`]) as
 /// [`crate::audit::VetVerdict::summary`] words it, led by `security:
 /// <finding>; ` when the judge found one, so a cut cell still shows it; else
-/// none.
-fn verdict_of(input: &Input, skill: &str) -> Option<(VerdictSource, String)> {
+/// none. A project skill has no audit, and its entry is in the project's
+/// lockfile.
+fn verdict_of(input: &Input, skill: &str, scope: Scope) -> Option<(VerdictSource, String)> {
     let vet = || {
-        let v = vet_of(input.inv, skill)?.verdict.as_ref()?;
+        let locked = match scope {
+            Scope::Global => vet_of(input.inv, skill),
+            Scope::Project => input.inv.project.as_ref()?.installed.get(skill),
+        };
+        let v = locked?.verdict.as_ref()?;
         let text = v.security.as_ref().map_or(v.summary(), |f| format!("security: {f}; {}", v.summary()));
         Some((VerdictSource::Vet, text))
     };
-    input.audits.get(skill).map(|a| (VerdictSource::Audit, a.result.verdict.clone())).or_else(vet)
+    let audit = || input.audits.get(skill).filter(|_| scope == Scope::Global);
+    audit().map(|a| (VerdictSource::Audit, a.result.verdict.clone())).or_else(vet)
 }
 
 /// The quality cell in full: `audit: <verdict>`, `vet: <verdict>` or
@@ -340,31 +360,43 @@ fn json_line<T: Serialize>(value: &T) -> String {
     format!("{}\n", serde_json::to_value(value).expect("report serialises"))
 }
 
-/// The `usage` rows, most used first.
+/// The `usage` rows, most used first: one per global skill, then one per
+/// project skill, so a name in both has two.
 fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
     let input = view.input;
     let f = Filter::from(args);
     let start = view.start(args.since);
     let mut skills: BTreeSet<&str> = input.inv.skills.iter().map(String::as_str).collect();
+    let project = input.inv.project.as_ref();
     if args.all {
-        // Every skill in the ledger, so a retired or pruned one keeps a row.
-        skills.extend(input.events.iter().map(|e| e.skill.as_str()));
+        // Every skill in the ledger, so a retired or pruned one keeps a row;
+        // a name only the project has keeps its project row alone.
+        let project_only = |s: &str| project.is_some_and(|p| p.skills.contains(s));
+        let ledger = input.events.iter().filter(|e| view.scope(e) == Scope::Global).map(|e| e.skill.as_str());
+        skills.extend(ledger.filter(|s| !project_only(s)));
     }
+    let project = project.into_iter().flat_map(|p| &p.skills).map(|s| (s.as_str(), Scope::Project));
     let mut rows: Vec<UsageRow> = skills
         .into_iter()
-        .map(|skill| {
-            let window: Vec<_> = view.select(&f, Some(skill), start).collect();
+        .map(|s| (s, Scope::Global))
+        .chain(project)
+        .map(|(skill, scope)| {
+            let select = |start| view.select(&f, Some(skill), start).filter(move |(e, _)| view.scope(e) == scope);
+            let window: Vec<_> = select(start).collect();
             let keys: HashSet<Key> = window.iter().map(|(e, _)| (e.agent, e.session.as_str(), e.channel)).collect();
             let count = |c: Channel| keys.iter().filter(|k| k.2 == c).count();
             let sess = keys.iter().filter(|k| k.2.strong()).map(|k| (k.0, k.1)).collect::<HashSet<_>>().len();
             let agents: BTreeSet<Agent> = window.iter().map(|(e, _)| e.agent).collect();
             let last = window.iter().filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
             let spark_from = input.now.checked_sub(SignedDuration::from_hours(24 * (SPARK_DAYS + 1))).ok();
-            let last_30d = view.daily_strong(view.select(&f, Some(skill), spark_from), SPARK_DAYS);
-            let grade = input.inv.skills.contains(skill).then(|| grade_out(&evals::load(input.inv, skill))).flatten();
-            let (verdict_source, verdict) = verdict_of(input, skill).unzip();
+            let last_30d = view.daily_strong(select(spark_from), SPARK_DAYS);
+            // Grades are the source's.
+            let global = scope == Scope::Global && input.inv.skills.contains(skill);
+            let grade = global.then(|| grade_out(&evals::load(input.inv, skill))).flatten();
+            let (verdict_source, verdict) = verdict_of(input, skill, scope).unzip();
             UsageRow {
                 skill: skill.to_string(),
+                scope,
                 sess,
                 slash: count(Channel::Slash),
                 tool: count(Channel::Tool),
@@ -380,7 +412,11 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
             }
         })
         .collect();
-    rows.sort_by(|a, b| (b.sess, b.read + b.ref_).cmp(&(a.sess, a.read + a.ref_)).then_with(|| a.skill.cmp(&b.skill)));
+    rows.sort_by(|a, b| {
+        (b.sess, b.read + b.ref_)
+            .cmp(&(a.sess, a.read + a.ref_))
+            .then_with(|| (&a.skill, a.scope).cmp(&(&b.skill, b.scope)))
+    });
     rows
 }
 
@@ -416,7 +452,7 @@ const VERDICT_CHARS: usize = 40;
 /// `r`'s cells under [`USAGE_HEADER`], the grade mark painted when `tty`.
 pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
     vec![
-        r.skill.clone(),
+        format!("{}{}", r.skill, r.scope.suffix()),
         r.sess.to_string(),
         r.slash.to_string(),
         r.tool.to_string(),

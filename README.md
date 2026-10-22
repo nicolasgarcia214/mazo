@@ -178,6 +178,18 @@ the project copy, which `--force` overrides. Without `--project`, `update` and
 when given one. Outside a git repository, `--project` exits 2 and writes
 nothing.
 
+Run inside a git repository with a `mazo.lock` at its root, `mazo status`
+and `mazo usage` list that project's skills beside the global ones, with
+` (project)` after the name. `status` checks each one's two project links:
+`project: <name> (project) in sync`, else one drift line per bad link, such as
+`.agents/skills: <name> (project) is not linked (missing)`, which fails it
+like home drift; `--json` lists every project link under `project`. `usage`
+counts a project skill's loads through either project link or its
+`.mazo/skills/<name>` directory, and its quality is the vet in the project's
+`mazo.lock`; it has no grade. A name both global and in the project gets one
+row per scope, counted apart. `--json` rows of both commands carry `scope`,
+`global` or `project`; outside a project that field is the only change.
+
 ## Commands
 
 | Command | What it does |
@@ -187,7 +199,7 @@ nothing.
 | `mazo unused` | Skills with no strong load in the window, with `held`, `cluster`, `named by`, `new` and `weak-only` notes. |
 | `mazo show <skill>` | The skill card. It opens with a manual of at most 15 lines at 80 columns: For, what the skill is for, and Try, up to three uses to try, both from the latest skill audit when it is newer than the vet or there is no vet, else from the vet in the lockfile, else For is the frontmatter description; and between them Your use, the first line of up to three real prompts, cut to 100 characters. An empty part is left out. Then the daily histogram and recent events, each with the log line it came from, then description, git history, every grade and retro, cites and cited-by, usage by agent, channel and project, then examples: the invocation on each agent, the manifest's `default_prompt`, up to three real prompts read from transcripts at display time and never stored, and up to three curated examples from the latest audit; then that audit's date, session count, verdict, rates and top three improvements. `--json` emits the whole card. |
 | `mazo report` | Writes one self-contained HTML page: the `usage --all` table with each skill's quality verdict in full, the grades to run as `/grade <skill>`, and every skill's card. It goes to `report.html` in the data directory with mode `0600` and is overwritten on each run. `--out <path>` writes elsewhere and warns inside a git worktree, because the page shows cwds; `--open` opens it. |
-| `mazo status` | Drift and policy for every home. Writes nothing. |
+| `mazo status` | Drift and policy for every home, and inside a project its skills' links (see [Project skills](#project-skills)). Writes nothing. |
 | `mazo sync` | Links every skill into every home. Checks everything first and writes nothing if any check fails. |
 | `mazo init [--source <dir>]` | Writes the config, naming the skills directory when given: one home per existing agent directory, every policy rule off, and the first of claude, codex and pi found on `PATH` and logged in as `[judge]`, asking on a terminal when none is. Refuses to overwrite. |
 | `mazo new <name> --description <text>` | Creates `<name>/SKILL.md`, plus `agents/openai.yaml` when `codex_manifest` is on, and prints the `skillOverrides` line to add to each Claude home when `claude_name_only` is on. Refuses an existing entry or a store skill of that name. Does not sync. |
