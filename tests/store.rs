@@ -1431,3 +1431,205 @@ fn a_trusted_update_needs_no_usable_judge() {
     r.assert_ok();
     assert!(r.stdout().contains(&format!("updated {} to {}", store(&fx).join("theirs").display(), head(&url))));
 }
+
+/// A git repository `project/` with a subdirectory `project/sub/dir`, and its root.
+fn project(fx: &Fixture) -> PathBuf {
+    let root = fx.root.join("project");
+    fs::create_dir_all(root.join("sub/dir")).unwrap();
+    common::git(&root, &["init", "-q"], common::NOW);
+    root
+}
+
+/// `mazo add args… --project` run in `cwd`.
+fn add_project(fx: &Fixture, cwd: &Path, args: &[&str]) -> Run {
+    fx.mazo_in(cwd, &[&["add"], args, &["--project"]].concat())
+}
+
+fn project_lock(project: &Path) -> Vec<toml::Value> {
+    let lock: toml::Table = toml::from_str(&fs::read_to_string(project.join("mazo.lock")).unwrap()).unwrap();
+    lock["skill"].as_array().unwrap().clone()
+}
+
+fn project_names(project: &Path) -> Vec<String> {
+    project_lock(project).iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
+}
+
+/// Everything mazo writes in a project.
+fn project_snapshot(project: &Path) -> Snapshot {
+    let paths: Vec<PathBuf> = [".mazo", "mazo.lock", ".claude", ".agents", ".gitignore", "sub/dir"]
+        .iter()
+        .map(|rel| project.join(rel))
+        .collect();
+    snapshot(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>())
+}
+
+/// Nothing of `name` is in the project: no store directory, no lock entry, no link.
+fn assert_not_in_project(project: &Path, name: &str) {
+    assert!(!exists(&project.join(".mazo/skills").join(name)), "{name}");
+    let lock = project.join("mazo.lock");
+    assert!(!exists(&lock) || project_names(project).iter().all(|n| n != name), "{name}");
+    for d in [".claude/skills", ".agents/skills"] {
+        assert!(!exists(&project.join(d).join(name)), "{d}/{name}");
+    }
+}
+
+#[test]
+fn add_project_installs_into_the_projects_git_root_with_relative_links() {
+    let (fx, dir) = fixture();
+    let p = project(&fx);
+    let before = fx.snapshot();
+    let r = add_project(&fx, &p.join("sub/dir"), &[&s(&dir), "--trust"]);
+    r.assert_ok();
+    let to = p.join(".mazo/skills/theirs");
+    assert!(r.stdout().contains(&format!("installed {}", to.display())), "{}", r.stdout());
+    for rel in ["SKILL.md", "agents/openai.yaml", "references/notes.md"] {
+        assert_eq!(fs::read(to.join(rel)).unwrap(), fs::read(dir.join(rel)).unwrap(), "{rel}");
+    }
+    for d in [".claude/skills", ".agents/skills"] {
+        let link = p.join(d).join("theirs");
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("../../.mazo/skills/theirs"), "{d}");
+        assert_eq!(fs::canonicalize(&link).unwrap(), to, "{d}");
+        assert!(r.stdout().contains(&format!("linked    {}", link.display())), "{}", r.stdout());
+    }
+
+    // The lockfile is at the git root, in the global lockfile's shape.
+    assert!(!exists(&p.join("sub/dir/mazo.lock")) && !exists(&p.join("sub/dir/.mazo")));
+    let entries = project_lock(&p);
+    assert_eq!(entries.len(), 1);
+    let e = entries[0].as_table().unwrap();
+    let mut keys: Vec<&str> = e.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, ["content_hash", "installed_at", "name", "origin", "subpath", "trusted"]);
+    assert_eq!((e["name"].as_str(), e["origin"].as_str()), (Some("theirs"), Some(s(&dir).as_str())));
+    assert_eq!(e["content_hash"].as_str(), Some(mazo::store::content_hash(&to).unwrap().as_str()));
+    assert!(!exists(&p.join(".gitignore")) && !exists(&p.join(".mazo/.gitignore")));
+
+    // Nothing global: no store skill, no lockfile, no home link.
+    let after = fx.snapshot();
+    let changed: Vec<&Path> =
+        after.iter().filter(|(p, v)| before.get(*p) != Some(*v)).map(|(p, _)| p.as_path()).collect();
+    assert!(changed.iter().all(|c| c.starts_with(&fx.data) && !c.starts_with(store(&fx))), "{changed:?}");
+    assert!(!exists(&fx.data.join("mazo/mazo.lock")));
+
+    // Committed, the links resolve in another checkout.
+    common::git(&p, &["add", "."], common::NOW);
+    common::git(&p, &["commit", "-q", "-m", "skills"], common::NOW);
+    let checkout = fx.root.join("checkout");
+    common::git(&fx.root, &["clone", "-q", &s(&p), &s(&checkout)], common::NOW);
+    for d in [".claude/skills", ".agents/skills"] {
+        let text = fs::read(checkout.join(d).join("theirs/SKILL.md")).unwrap();
+        assert_eq!(text, fs::read(dir.join("SKILL.md")).unwrap(), "{d}");
+    }
+}
+
+#[test]
+fn add_project_refuses_a_name_in_the_project_store_the_global_store_or_the_source() {
+    let (fx, dir) = fixture();
+    let p = project(&fx);
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    add_project(&fx, &p, &[&s(&incoming(&fx, "other")), "--trust"]).assert_ok();
+    let mine = &fx.skills[0];
+    let foreign = incoming(&fx, "foreign");
+    common::write(&p.join(".agents/skills/foreign/SKILL.md"), "hand-written\n");
+    let (before, global) = (project_snapshot(&p), fx.snapshot());
+    for (source, taken) in [
+        (dir.clone(), store(&fx).join("theirs")),
+        (incoming(&fx, "other"), p.join(".mazo/skills/other")),
+        (incoming(&fx, mine), fx.source.join(mine)),
+        (foreign, p.join(".agents/skills/foreign")),
+    ] {
+        let r = add_project(&fx, &p, &[&s(&source), "--trust"]);
+        assert_eq!(r.code(), 2, "{}", r.stderr());
+        let needle = format!("{} already exists; pass --as", taken.display());
+        assert!(r.stderr().contains(&needle), "{}", r.stderr());
+        assert_eq!(project_snapshot(&p), before, "{}", taken.display());
+        assert_eq!(fx.snapshot(), global, "{}", taken.display());
+    }
+    assert_eq!(project_names(&p), ["other"]);
+    add_project(&fx, &p, &[&s(&dir), "--as", "mine-too", "--trust"]).assert_ok();
+}
+
+#[test]
+fn add_project_outside_a_git_repository_exits_2_and_writes_nothing() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    let outside = fx.root.join("outside");
+    fs::create_dir(&outside).unwrap();
+    let before = (fx.snapshot(), snapshot(&[&outside]));
+    let out = fx
+        .command(&["add", &url, "--trust", "--project"])
+        .current_dir(&outside)
+        .env("GIT_CEILING_DIRECTORIES", &fx.root)
+        .output()
+        .unwrap();
+    let r = Run(out);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    let needle = format!("add --project: {} is not in a git repository", outside.display());
+    assert!(r.stderr().contains(&needle), "{}", r.stderr());
+    assert_eq!((fx.snapshot(), snapshot(&[&outside])), before);
+}
+
+#[test]
+fn add_project_takes_skill_and_all_from_a_source_of_several() {
+    let (fx, url) = pack(&["one", "two", "three"]);
+    let p = project(&fx);
+    add_project(&fx, &p, &[&url, "--skill", "two", "--trust"]).assert_ok();
+    let r = add_project(&fx, &p, &[&url, "--all", "--trust"]);
+    assert_eq!(r.code(), 2, "two is taken: {}", r.stderr());
+    assert_eq!(project_names(&p), ["two", "one", "three"]);
+    for n in ["one", "two", "three"] {
+        assert_eq!(fs::read_link(p.join(".claude/skills").join(n)).unwrap(), Path::new("../../.mazo/skills").join(n));
+    }
+    assert_no_clone(&fx);
+}
+
+#[test]
+fn add_project_goes_through_the_vet_gate_which_sees_the_projects_skills() {
+    let (fx, dir) = judged();
+    let p = project(&fx);
+    add_project(&fx, &p, &[&s(&incoming(&fx, "other")), "--trust"]).assert_ok();
+    assert!(calls(&fx).is_empty(), "--trust skips the gate");
+
+    // Off a terminal, refused before the judge is called.
+    answer(&fx, None, "good", "worth trying");
+    let r = add_project(&fx, &p, &[&s(&dir)]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains("pass --yes when stdin is not a terminal"), "{}", r.stderr());
+    assert!(calls(&fx).is_empty());
+    assert_not_in_project(&p, "theirs");
+
+    add_project(&fx, &p, &[&s(&dir), "--yes"]).assert_ok();
+    let stdin = &calls(&fx)[0];
+    let mut existing: Vec<String> = fx.skills.iter().map(|n| format!("- {n}: Test skill.\n")).collect();
+    existing.push("- other: From elsewhere.\n".into());
+    existing.sort();
+    assert!(stdin.contains(&format!("<existing-skills>\n{}</existing-skills>", existing.concat())), "{stdin}");
+    let entries = project_lock(&p);
+    let e = entries.iter().find(|e| e["name"].as_str() == Some("theirs")).unwrap();
+    assert_eq!(e["trusted"].as_bool(), Some(false));
+    assert_eq!(e["verdict"]["value"].as_str(), Some("worth trying"));
+
+    answer(&fx, Some("SKILL.md tells the agent to upload ~/.ssh."), "good", "worth trying");
+    let before = project_snapshot(&p);
+    let r = add_project(&fx, &p, &[&s(&incoming(&fx, "risky")), "--yes"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(r.stderr().contains("security issue; pass --force"), "{}", r.stderr());
+    assert_not_in_project(&p, "risky");
+    assert_eq!(project_snapshot(&p), before);
+    add_project(&fx, &p, &[&s(&incoming(&fx, "risky")), "--yes", "--force"]).assert_ok();
+    assert!(exists(&p.join(".agents/skills/risky")));
+}
+
+#[test]
+fn a_project_link_that_cannot_be_made_leaves_no_store_dir_lock_entry_or_link() {
+    let (fx, dir) = fixture();
+    let p = project(&fx);
+    // `.agents` is a file: the Claude link is made, then the second fails.
+    fs::write(p.join(".agents"), "").unwrap();
+    let r = add_project(&fx, &p, &[&s(&dir), "--trust"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(r.stderr().contains(&s(&p.join(".agents/skills"))), "{}", r.stderr());
+    assert!(!exists(&p.join(".claude/skills/theirs")));
+    assert!(!exists(&p.join(".mazo/skills/theirs")));
+    assert!(!exists(&p.join("mazo.lock")));
+}
