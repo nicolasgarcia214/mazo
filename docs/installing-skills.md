@@ -51,16 +51,25 @@ git's error and installs nothing.
 ### Picking skills
 
 The source, at its subpath, is the skill when it holds a `SKILL.md`. Otherwise
-its child directories that hold one are its skills. With several:
+its skills are the directories below it, at any depth, that hold one. The
+search skips `.git`, `node_modules` and every directory whose name starts with
+a dot, and does not descend into a skill. Each skill is named for its
+directory and known by its path relative to the source, such as
+`skills/b/foo`, which `mazo.lock` records as its subpath. With several:
 
-- `--skill <name>` installs one and `--all` installs every one.
+- `--skill <name>` installs one and `--all` installs every one. `--skill` also
+  takes a skill's path; a name two skills share is a usage error listing their
+  paths.
 - Without either, at a terminal (stdin and stdout), a picker lists each skill's
-  name and `description`. ↑↓ or `j`/`k` move, Space selects, `a` selects all or
+  path and `description`. ↑↓ or `j`/`k` move, Space selects, `a` selects all or
   none, Enter installs the selected, and Esc or `q` cancels. Selecting nothing,
   or cancelling, installs nothing and exits 0.
 - Without either and off a terminal, mazo lists them and exits 2.
 - `--all` cannot be combined with `--skill` or `--as`, and `--as` with several
   picked skills is a usage error.
+- Of two picked skills sharing a name, the one whose path sorts first installs
+  and the other is refused as taken; install it on its own with `--skill
+  <path> --as <name>`.
 
 mazo installs and vets each selected skill on its own. A refused skill leaves
 the others to install. The exit code is the highest among the refusals (2 for

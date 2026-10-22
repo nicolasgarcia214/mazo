@@ -1,5 +1,5 @@
 //! The multi-select `mazo add` opens at a terminal, or in the TUI's add
-//! dialog, on a source holding several skills: each skill's name and
+//! dialog, on a source holding several skills: each skill's path and
 //! description, and the ones to install.
 
 use ratatui::Frame;
@@ -17,7 +17,7 @@ const KEYS: &str = "↑↓/jk move · Space select · a all · Enter install · 
 /// The skills on offer, the cursor and which are selected; no rendering state.
 #[derive(Debug)]
 pub struct Picker {
-    /// Each skill's name and description, in list order.
+    /// Each skill's path and description, in list order.
     items: Vec<(String, String)>,
     cursor: usize,
     selected: Vec<bool>,
@@ -27,7 +27,7 @@ pub struct Picker {
 #[derive(Debug, PartialEq)]
 pub enum Step {
     Open,
-    /// The selected names in list order; none when cancelled.
+    /// The selected paths in list order; none when cancelled.
     Done(Vec<String>),
 }
 
@@ -107,7 +107,7 @@ impl Picker {
 }
 
 /// Runs a [`Picker`] over `items` until it is confirmed or cancelled: the
-/// selected names. The terminal is restored on every return, and on a panic
+/// selected paths. The terminal is restored on every return, and on a panic
 /// by the hook `ratatui::try_init` installs.
 pub fn pick(items: Vec<(String, String)>) -> std::io::Result<Vec<String>> {
     let mut picker = Picker::new(items);
