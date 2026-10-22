@@ -16,7 +16,10 @@ use std::time::{Duration, Instant};
 
 use clap::ValueEnum;
 use ratatui::Frame;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
+use ratatui::crossterm::execute;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
@@ -408,9 +411,13 @@ impl App {
                     Step::Done(names) => _ = reply.send(names),
                 },
                 Some(Ask::Answer(reply, default)) => match key.code {
+                    // A Ctrl or Alt chord answers nothing.
+                    _ if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                        self.dialog = Some(Dialog { lines, ask: Some(Ask::Answer(reply, default)) })
+                    }
                     KeyCode::Enter => _ = reply.send(default),
-                    KeyCode::Char('y') => _ = reply.send(true),
-                    KeyCode::Char('n') | KeyCode::Esc => _ = reply.send(false),
+                    KeyCode::Char('y' | 'Y') => _ = reply.send(true),
+                    KeyCode::Char('n' | 'N') | KeyCode::Esc => _ = reply.send(false),
                     // The unanswered question is No.
                     KeyCode::Char('q') => return self.quit(),
                     _ => self.dialog = Some(Dialog { lines, ask: Some(Ask::Answer(reply, default)) }),
@@ -610,7 +617,7 @@ impl App {
     /// picker and y/N questions answered in dialogs, or shows the refusal
     /// `add` gives before reading the source. There is no `--force`.
     fn add(&mut self, source: String) {
-        if let Err(e) = store::vets(&self.data.cfg, &source) {
+        if let Err(e) = store::precheck(&self.data.cfg, &source) {
             self.dialog = Some(Dialog { lines: vec![format!("ERROR: {e}")], ask: None });
             return;
         }
@@ -683,6 +690,14 @@ impl App {
                 Err(e) => (format!("ERROR: {e}"), false),
             }
         });
+    }
+
+    /// Inserts pasted `text`, its line breaks dropped, into an open source
+    /// dialog; anywhere else a paste does nothing.
+    pub fn paste(&mut self, text: &str) {
+        if let Some(Dialog { ask: Some(Ask::Source(source)), .. }) = &mut self.dialog {
+            source.extend(text.chars().filter(|c| !matches!(c, '\r' | '\n')));
+        }
     }
 
     /// Takes the lines the job reported, and opens its next question when no
@@ -879,6 +894,9 @@ impl App {
             }
             let room = usize::from(area.height.saturating_sub(2)).max(1);
             let mut lines: Vec<Line> = dialog.lines.iter().flat_map(|l| l.lines()).map(Line::raw).collect();
+            if let Some(Ask::Source(source)) = &dialog.ask {
+                lines.push(Line::raw(typed_line(source, area.width.saturating_sub(2).into())));
+            }
             if lines.len() > room {
                 let more = lines.len() - room + 1;
                 lines.truncate(room - 1);
@@ -942,8 +960,19 @@ impl App {
 
 /// The dialog that takes an add's source.
 fn source_dialog(source: String) -> Dialog {
-    let lines = vec!["add a skill from a local path, a git URL or owner/repo[/path]:".into(), format!("> {source}_")];
+    let lines = vec!["add a skill from a local path, a git URL or owner/repo[/path]:".into()];
     Dialog { lines, ask: Some(Ask::Source(source)) }
+}
+
+/// The source as typed, `> source_`, cut to its last `width` columns with
+/// `…` marking the cut, so the cursor stays in view.
+fn typed_line(source: &str, width: usize) -> String {
+    let line = format!("> {source}_");
+    let n = line.chars().count();
+    if n <= width {
+        return line;
+    }
+    format!("…{}", line.chars().skip(n + 1 - width.max(1)).collect::<String>())
 }
 
 /// What `job`, the `verb` run, returns, or a failure naming its panic: the
@@ -955,18 +984,22 @@ fn caught(verb: &str, job: impl FnOnce() -> (String, bool)) -> (String, bool) {
     })
 }
 
-/// Opens the TUI on `input` and the data directory `data` and runs it until
-/// `q` or Ctrl-C, asking first while a job runs. `ratatui::init` installs a
-/// panic hook that restores the terminal, run here only on this thread: a
-/// job's panic is [`caught`] and shown in its pane while the screen stays up.
-/// The terminal shows the cursor again when it drops, after the restore
-/// leaves the alternate screen.
+/// Opens the TUI on `input` and the data directory `data`, with bracketed
+/// paste on, and runs it until `q` or Ctrl-C, asking first while a job
+/// runs. `ratatui::init` installs a panic hook that restores the terminal,
+/// run here only on this thread, after paste is turned off again: a job's
+/// panic is [`caught`] and shown in its pane while the screen stays up. The
+/// terminal shows the cursor again when it drops, after the restore leaves
+/// the alternate screen.
 pub fn run(input: &Input, data: &Path) -> std::io::Result<()> {
     let mut app = App::new(input, data);
     let mut terminal = ratatui::init();
+    // A paste arrives as one event, so a newline in it cannot submit a dialog.
+    _ = execute!(std::io::stdout(), EnableBracketedPaste);
     let (restore, ui) = (std::panic::take_hook(), std::thread::current().id());
     std::panic::set_hook(Box::new(move |info| {
         if std::thread::current().id() == ui {
+            _ = execute!(std::io::stdout(), DisableBracketedPaste);
             restore(info);
         }
     }));
@@ -982,13 +1015,14 @@ pub fn run(input: &Input, data: &Path) -> std::io::Result<()> {
             if app.busy() && !event::poll(Duration::from_millis(100))? {
                 continue;
             }
-            if let Event::Key(key) = event::read()?
-                && !app.key(key)
-            {
-                return Ok(());
+            match event::read()? {
+                Event::Key(key) if !app.key(key) => return Ok(()),
+                Event::Paste(text) => app.paste(&text),
+                _ => {}
             }
         }
     })();
+    _ = execute!(std::io::stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
 }

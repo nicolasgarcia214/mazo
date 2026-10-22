@@ -301,10 +301,9 @@ fn resolve(cfg: &Config, arg: &str, trust: bool) -> Result<(Source, bool)> {
     Ok((source, trusted))
 }
 
-/// Whether `mazo add <arg>` vets what it installs, or the refusal it gives
-/// before reading the source.
-pub fn vets(cfg: &Config, arg: &str) -> Result<bool> {
-    resolve(cfg, arg, false).map(|(_, trusted)| !trusted)
+/// The refusal `mazo add <arg>` gives before reading the source, if any.
+pub fn precheck(cfg: &Config, arg: &str) -> Result<()> {
+    resolve(cfg, arg, false).map(drop)
 }
 
 /// What `add` reads skills from: the source resolved, and cloned when it is a repository.

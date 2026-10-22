@@ -1326,3 +1326,45 @@ fn q_on_the_verdict_answers_no_and_asks_to_quit() {
     assert!(text(&mut app, 200, 30).iter().any(|l| l.contains("add declined; nothing was installed")));
     assert_eq!(fx.disk(), before);
 }
+
+#[test]
+fn a_paste_inserts_its_text_without_submitting_and_a_long_source_shows_its_tail() {
+    let fx = Actions::new(true);
+    let mut app = fx.app();
+    press(&mut app, KeyCode::Char('i'));
+    app.paste("owner/\r\nrepo\n");
+    assert!(!app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains("> owner/repo_")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "Enter add · Esc cancels"), "{screen:#?}");
+    let long = format!("https://example.com/{}/tail-end", "x".repeat(100));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('i'));
+    app.paste(&long);
+    let screen = text(&mut app, 60, 30);
+    let line = screen.iter().find(|l| l.contains("tail-end_")).unwrap_or_else(|| panic!("{screen:#?}"));
+    assert!(line.contains('…') && !line.contains("https"), "{line}");
+    // Outside the source dialog a paste does nothing.
+    press(&mut app, KeyCode::Esc);
+    app.paste("q");
+    assert_eq!(app.screen(), Screen::Usage);
+}
+
+#[test]
+fn capital_y_accepts_the_verdict_and_a_ctrl_or_alt_chord_answers_nothing() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let url = fx.repo("theirs");
+    let mut app = fx.app();
+    add(&mut app, &url);
+    shown(&mut app, "make 1 judge call? [y/N]");
+    press(&mut app, KeyCode::Char('Y'));
+    shown(&mut app, "install theirs? [Y/n]");
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        app.key(KeyEvent::new(KeyCode::Char('n'), modifiers));
+        assert!(text(&mut app, 200, 30).iter().any(|l| l.contains("install theirs? [Y/n]")), "{modifiers:?}");
+    }
+    app.key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT));
+    until(&mut app, |app| !app.busy());
+    assert!(fx.locked("theirs").is_some());
+}
