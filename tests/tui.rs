@@ -757,7 +757,8 @@ impl Actions {
 
     /// Installs the skill at `url` into the store, recorded as `trusted` or not.
     fn install(&self, url: &str, trusted: bool) {
-        let args = store::Add { source: url, rename: None, pick: None, trust: true, yes: false, force: false };
+        let args =
+            store::Add { source: url, rename: None, pick: None, all: false, trust: true, yes: false, force: false };
         store::add(&self.cfg, &self.inv(), &self.data, &args).unwrap();
         if !trusted {
             let name = url.rsplit('/').next().unwrap().trim_end_matches(".git");
@@ -779,12 +780,18 @@ impl Actions {
     }
 
     /// Adds a command `[judge]` that appends its pid to `<root>/pids` and
-    /// gives a vet verdict with `security` as its finding.
+    /// gives a vet verdict with `security` as its finding, or, while
+    /// `<root>/hang` exists, sleeps until it is killed.
     fn vetter(&mut self, security: Option<&str>) {
         let root = self.data.parent().unwrap().to_path_buf();
         let r = root.display();
         let path = root.join("bin/vet");
-        common::write(&path, &format!("#!/bin/sh\necho $$ >> {r}/pids\ncat > /dev/null\ncat {r}/verdict.json\n"));
+        common::write(
+            &path,
+            &format!(
+                "#!/bin/sh\necho $$ >> {r}/pids\ncat > /dev/null\n[ -f {r}/hang ] && exec sleep 600\ncat {r}/verdict.json\n"
+            ),
+        );
         Command::new("chmod").arg("+x").arg(&path).status().unwrap();
         let verdict = serde_json::json!({
             "security": security,
@@ -868,6 +875,46 @@ fn u_updates_a_trusted_skill_without_the_judge_and_re_vets_an_untrusted_one_in_t
         assert!(screen.iter().any(|l| l.contains(line)), "{line}: {screen:#?}");
     }
     assert_eq!(fx.pids().len(), 1);
+}
+
+#[test]
+fn quitting_during_an_update_of_every_skill_leaves_every_store_skill_in_place() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    // `one` is re-vetted by a judge that hangs; trusted `two` needs no judge.
+    for (name, trusted) in [("one", false), ("two", true)] {
+        let url = fx.repo(name);
+        fx.install(&url, trusted);
+        fx.push(name, "v2\n");
+    }
+    common::write(&fx.data.parent().unwrap().join("hang"), "");
+    let commits = (fx.commit("one"), fx.commit("two"));
+    let mut app = fx.app();
+    press(&mut app, KeyCode::Char('U'));
+    press(&mut app, KeyCode::Char('y'));
+    until(&mut app, |_| !fx.pids().is_empty());
+    let pid = fx.pids()[0].clone();
+    assert!(alive(&pid));
+    press(&mut app, KeyCode::Char('q'));
+    let screen = text(&mut app, 200, 30);
+    let ask = "the update of every store skill is running; stop its judge and quit?";
+    assert!(screen.iter().any(|l| l.contains(ask)), "{screen:#?}");
+    assert!(!press(&mut app, KeyCode::Char('y')));
+    assert!(!alive(&pid), "the judge outlived the TUI");
+    assert_eq!(fx.pids().len(), 1, "no re-vet started after the cancel");
+
+    let store = store::dir(&fx.data);
+    for name in ["stored", "one", "two"] {
+        assert!(store.join(name).join("SKILL.md").is_file(), "{name} is gone");
+    }
+    let hidden: Vec<_> = std::fs::read_dir(&store)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .collect();
+    assert!(hidden.is_empty(), "{hidden:?}");
+    assert_eq!((fx.commit("one"), fx.commit("two")), commits, "nothing was swapped");
 }
 
 #[test]

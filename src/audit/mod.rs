@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 
 pub use command::{Args, LIMIT, Planned, command, plan};
 use judges::NoAnswer;
+pub(crate) use judges::wait;
 pub use judges::{Backend, backend};
 pub use select::{Candidate, MAX_CHARS, SkillText, input, select, skill_at};
 pub use session::{Finding, Followed, Outcome, SESSION_PROMPT, SESSION_SCHEMA, Verdict, validate};
@@ -56,7 +57,7 @@ pub const CENT: u64 = 10_000;
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
 
 /// Why a run the pane cancelled failed.
-const CANCELLED: &str = "the audit was cancelled";
+pub(crate) const CANCELLED: &str = "cancelled";
 
 /// The fields of an `audits.jsonl` line that later runs read back.
 #[derive(Deserialize)]

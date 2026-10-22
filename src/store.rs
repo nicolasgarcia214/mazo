@@ -6,7 +6,9 @@ use std::cell::OnceCell;
 use std::fs;
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -71,10 +73,18 @@ pub struct Locked {
 }
 
 impl Locked {
-    /// Whether `mazo update` can fetch it again: it was not installed from a
-    /// local path.
+    /// The repository `mazo update` fetches it from; `None` when it was
+    /// installed from a local path.
+    fn remote(&self) -> std::result::Result<Option<Remote>, String> {
+        Ok(match Source::parse(&self.origin)? {
+            Source::Git(remote) => Some(remote),
+            Source::Local(_) => None,
+        })
+    }
+
+    /// Whether `mazo update` can fetch it again.
     pub fn updatable(&self) -> bool {
-        !matches!(Source::parse(&self.origin), Ok(Source::Local(_)))
+        !matches!(self.remote(), Ok(None))
     }
 }
 
@@ -180,13 +190,22 @@ impl Remote {
 
     /// Shallow-clones the repository into `into` and returns the commit.
     /// Neither git nor ssh may prompt, unless the user's `GIT_SSH_COMMAND` says so.
-    fn clone_into(&self, into: &Path) -> Result<String> {
+    /// The clone is killed once `cancel` turns true, or after [`CLONE_LIMIT`].
+    fn clone_into(&self, into: &Path, cancel: &dyn Fn() -> bool) -> Result<String> {
         let mut git = std::process::Command::new("git");
         git.args(["clone", "--depth", "1", "--quiet", "--"]).arg(&self.url).arg(into).env("GIT_TERMINAL_PROMPT", "0");
         if std::env::var_os("GIT_SSH_COMMAND").is_none() {
             git.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
         }
-        let out = git.output().map_err(|e| format!("git: {e}"))?;
+        git.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let spawned = git.spawn().and_then(|child| audit::wait(child, None, CLONE_LIMIT, cancel));
+        let Some(out) = spawned.map_err(|e| format!("git: {e}"))? else {
+            if cancel() {
+                return Err(audit::CANCELLED.into());
+            }
+            let minutes = CLONE_LIMIT.as_secs() / 60;
+            return Err(format!("git clone {}: not done within {minutes} minutes; it was killed", self.url).into());
+        };
         if !out.status.success() {
             return Err(format!("git clone {}: {}", self.url, String::from_utf8_lossy(&out.stderr).trim()).into());
         }
@@ -194,6 +213,9 @@ impl Remote {
         head.map(|h| h.trim().to_string()).ok_or_else(|| format!("{}: no HEAD commit", self.url).into())
     }
 }
+
+/// How long a clone may run before it is killed.
+const CLONE_LIMIT: Duration = Duration::from_secs(10 * 60);
 
 /// A directory removed when dropped.
 struct Scratch(PathBuf);
@@ -286,7 +308,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
             fs::create_dir_all(data).map_err(|e| err(data, e))?;
             let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
             let _ = fs::remove_dir_all(clone);
-            let commit = remote.clone_into(clone)?;
+            let commit = remote.clone_into(clone, &|| false)?;
             (clone.join(&remote.subpath), remote.url.clone(), remote.subpath.clone(), Some(commit), remote.name())
         }
     };
@@ -438,6 +460,11 @@ impl Out<'_> {
             None => eprintln!("{line}"),
         }
     }
+
+    /// Whether the pane asked the job to stop.
+    fn cancelled(self) -> bool {
+        self.0.is_some_and(|p| p.cancel.load(Ordering::Relaxed))
+    }
 }
 
 /// `mazo update [names…] [--yes] [--force]`: re-clones each git-sourced
@@ -465,9 +492,13 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
     });
     let (mut updated, mut failed) = (false, false);
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
-        let mut remote = match Source::parse(&l.origin) {
-            Ok(Source::Git(remote)) => remote,
-            Ok(Source::Local(_)) => {
+        // A cancelled job starts nothing more.
+        if out.cancelled() {
+            return Err(audit::CANCELLED.into());
+        }
+        let mut remote = match l.remote() {
+            Ok(Some(remote)) => remote,
+            Ok(None) => {
                 out.line(&format!("{}: not updatable; installed from a local path", l.name));
                 continue;
             }
@@ -524,7 +555,8 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
 /// records the commit and hash, and any new verdict: the new commit, or
 /// `None` when up to date. A refused vet, a sync that would fail with the new
 /// copy, or any failed write leaves the old copy and the lockfile as they
-/// were; the sync's errors go to `out`.
+/// were; the sync's errors go to `out`. A cancel stops it before the swap,
+/// and a copy an interrupted swap set aside is put back first ([`recover`]).
 fn refresh(
     cfg: &Config,
     inv: &Inventory,
@@ -534,16 +566,20 @@ fn refresh(
     vet: Option<&Revet>,
     out: Out,
 ) -> Result<Option<String>> {
-    let scratch = Scratch(data.join(format!(".clone-{}", std::process::id())));
-    let clone = scratch.0.as_path();
-    let _ = fs::remove_dir_all(clone);
-    let commit = remote.clone_into(clone)?;
-    let src = resolved(&clone.join(&remote.subpath), Some(clone))?;
-    let (skill_md, files) = checked(&src, &l.name, l.name != remote.name())?;
-
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let store = dir(data);
     let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
+    {
+        let _lock = ledger::lock(data)?;
+        recover(&to, &old).map_err(|e| err(&old, e))?;
+    }
+    let scratch = Scratch(data.join(format!(".clone-{}", std::process::id())));
+    let clone = scratch.0.as_path();
+    let _ = fs::remove_dir_all(clone);
+    let commit = remote.clone_into(clone, &|| out.cancelled())?;
+    let src = resolved(&clone.join(&remote.subpath), Some(clone))?;
+    let (skill_md, files) = checked(&src, &l.name, l.name != remote.name())?;
+
     // Staged under a name of this process's own, so that the judge and the
     // y/N prompt run without the data lock.
     let staged = Scratch(store.join(format!(".update-{}-{}", l.name, std::process::id())));
@@ -567,7 +603,10 @@ fn refresh(
         )
         .into());
     }
-    let _ = fs::remove_dir_all(&old);
+    if out.cancelled() {
+        return Err(audit::CANCELLED.into());
+    }
+    recover(&to, &old).map_err(|e| err(&old, e))?;
     let swapped = fs::rename(&to, &old).map_err(|e| err(&to, e)).and_then(|()| {
         fs::rename(&staged.0, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to)))
     });
@@ -597,8 +636,19 @@ fn refresh(
         return Err(e);
     }
     // Installed and recorded; a hidden leftover is listed by no root.
-    let _ = fs::remove_dir_all(&old);
+    let _ = recover(&to, &old);
     Ok(Some(commit))
+}
+
+/// Undoes a swap interrupted after it set `store/<name>` aside as `old`:
+/// `old` goes back to `to` when `to` is missing, and is removed only when
+/// `to` is there.
+fn recover(to: &Path, old: &Path) -> std::io::Result<()> {
+    match (old.symlink_metadata(), to.symlink_metadata()) {
+        (Err(_), _) => Ok(()),
+        (Ok(_), Ok(_)) => fs::remove_dir_all(old),
+        (Ok(_), Err(_)) => fs::rename(old, to),
+    }
 }
 
 /// `update`'s re-vets: the judge, set up and its login checked the first

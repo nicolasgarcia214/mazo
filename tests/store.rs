@@ -746,6 +746,28 @@ fn an_update_the_sync_would_refuse_leaves_the_skill_as_it_was() {
 }
 
 #[test]
+fn update_puts_back_a_copy_an_interrupted_swap_set_aside() {
+    let (fx, _, _) = two_installed();
+    let (to, old) = (store(&fx).join("one"), store(&fx).join(".old-one"));
+    let was = fs::read_to_string(to.join("SKILL.md")).unwrap();
+    // Stopped between the swap's renames: only the copy set aside is left.
+    fs::rename(&to, &old).unwrap();
+    let r = fx.mazo(&["update", "one"]);
+    r.assert_ok();
+    assert!(r.stdout().contains("one: up to date\n"), "{}", r.stdout());
+    assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), was);
+    assert_no_leftovers(&fx);
+
+    // Stopped after them: the copy set aside is a leftover beside the installed one.
+    common::write(&old.join("SKILL.md"), "stale\n");
+    push_change(&fx, "one", "references/new.md", "new\n");
+    fx.mazo(&["update", "one"]).assert_ok();
+    assert!(exists(&to.join("references/new.md")));
+    assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), was);
+    assert_no_leftovers(&fx);
+}
+
+#[test]
 fn update_keeps_the_name_an_as_install_rewrote() {
     let mut fx = git_fixture();
     fx.allow("other");
