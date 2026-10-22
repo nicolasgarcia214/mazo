@@ -686,7 +686,7 @@ fn add_at_terminal(fx: &Fixture, args: &[&str], typed: &str) -> Run {
     let (mut controller, mut terminal) = (0, 0);
     // SAFETY: openpty writes two new descriptors, owned below.
     let rc = unsafe {
-        libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null(), std::ptr::null())
+        libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut())
     };
     assert_eq!(rc, 0, "openpty");
     let (controller, terminal) = unsafe { (OwnedFd::from_raw_fd(controller), OwnedFd::from_raw_fd(terminal)) };
