@@ -31,6 +31,7 @@ use crate::{ledger, links};
 pub use ask::Question;
 pub use lock::{Lock, Locked, content_hash};
 pub use project::{Project, project_dir, project_hint, project_inventory, project_root};
+pub use source::github_repo;
 pub use update::{Update, update};
 
 use ask::{Consent, confirm_calls, name as skill_name, skills_in};

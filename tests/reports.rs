@@ -703,6 +703,7 @@ fn show_prints_the_card() {
         "total_events",
         "description",
         "path",
+        "origin",
         "history",
         "grades",
         "retros",
@@ -1052,4 +1053,52 @@ fn evals_latest_date_and_staleness() {
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v3\n---\n");
     assert!(load().grades.pop().unwrap().stale(), "uncommitted skill changes make any grade stale");
+}
+
+/// `show --json`'s origin (D24): a store skill's lockfile entry when its
+/// origin is on github.com, a source skill's `origin` remote on github.com
+/// at HEAD, else null.
+#[test]
+fn show_gives_the_github_origin_of_store_and_source_skills() {
+    let repo = report_repo();
+    let data = tempfile::tempdir().unwrap();
+    let entries = [
+        ("pinned", "git@github.com:o/r.git", "skills/pinned", "ref = \"v1\"\ncommit = \"abc\"\n"),
+        ("tip", "https://github.com/o/r", ".", "commit = \"def\"\n"),
+        ("local", "/x", ".", ""),
+        ("elsewhere", "https://gitlab.com/o/r.git", ".", "commit = \"abc\"\n"),
+    ];
+    let mut lock = String::new();
+    for (name, origin, subpath, rest) in entries {
+        write(&data.path().join(format!("store/{name}/SKILL.md")), &format!("---\nname: {name}\n---\n"));
+        lock.push_str(&format!(
+            "[[skill]]\nname = \"{name}\"\norigin = \"{origin}\"\nsubpath = \"{subpath}\"\n{rest}\
+             content_hash = \"h\"\ntrusted = true\ninstalled_at = \"2026-01-01T00:00:00Z\"\n"
+        ));
+    }
+    write(&data.path().join("mazo.lock"), &lock);
+    let origin = |skill: &str| {
+        let mut w = report_world(repo.path());
+        w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
+        let input = w.input(&[]);
+        let v: Value =
+            serde_json::from_str(&report::show(&input, skill, Since::Days(30), 20, true, false).unwrap()).unwrap();
+        v["origin"].clone()
+    };
+    let store = |subpath: &str, r#ref: Value, commit: &str| serde_json::json!({"repo": "https://github.com/o/r.git", "subpath": subpath, "ref": r#ref, "commit": commit});
+    assert_eq!(origin("pinned"), store("skills/pinned", "v1".into(), "abc"));
+    assert_eq!(origin("tip"), store(".", Value::Null, "def"));
+    assert_eq!(origin("local"), Value::Null, "a local install");
+    assert_eq!(origin("elsewhere"), Value::Null, "a lock origin off github.com");
+
+    assert_eq!(origin("unslop"), Value::Null, "no origin remote");
+    let head = inventory::git(repo.path(), &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+    let source =
+        serde_json::json!({"repo": "https://github.com/o/s.git", "subpath": "unslop", "ref": null, "commit": head});
+    git(repo.path(), &["remote", "add", "origin", "https://github.com/o/s"], NOW);
+    assert_eq!(origin("unslop"), source, "an https remote");
+    git(repo.path(), &["remote", "set-url", "origin", "git@github.com:o/s.git"], NOW);
+    assert_eq!(origin("unslop"), source, "a git@github.com: remote");
+    git(repo.path(), &["remote", "set-url", "origin", "git@gitlab.com:o/s.git"], NOW);
+    assert_eq!(origin("unslop"), Value::Null, "a remote off github.com");
 }

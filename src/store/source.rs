@@ -79,6 +79,18 @@ impl Source {
     }
 }
 
+/// `url`, a git remote URL naming a repository on github.com over https,
+/// ssh or the `git@github.com:` form, as `https://github.com/<owner>/<repo>.git`;
+/// `None` for a local path, `owner/repo` shorthand or another host.
+pub fn github_repo(url: &str) -> Option<String> {
+    // Shorthand has no `:`, and parses as GitHub whatever wrote it.
+    let (true, Ok(Source::Git(remote))) = (url.contains(':'), Source::parse(url)) else { return None };
+    let [owner, repo] = remote.path.as_slice() else { return None };
+    let bare = remote.subpath.as_os_str().is_empty() && remote.r#ref.is_none();
+    (bare && remote.host()?.eq_ignore_ascii_case("github.com"))
+        .then(|| format!("https://github.com/{owner}/{repo}.git"))
+}
+
 /// A GitHub browser URL, `https://github.com/owner/repo/tree/<ref>/<path>`
 /// or `…/blob/<ref>/<path>/SKILL.md`, naming `<path>` at `<ref>`, its query
 /// or fragment (`?plain=1`, `#L1`) dropped; `None` for any other source. A
@@ -257,7 +269,7 @@ pub(super) fn local(path: &Path, home: &str) -> Result<PathBuf> {
 mod tests {
     use std::path::Path;
 
-    use super::{Remote, Source, local};
+    use super::{Remote, Source, github_repo, local};
 
     fn remote(arg: &str) -> Remote {
         match Source::parse(arg) {
@@ -281,6 +293,22 @@ mod tests {
             ["https://github.com/owner/repo", "https://github.com/owner/repo/", "https://github.com/owner/repo.git"]
         {
             assert_eq!(remote(same).url, remote("owner/repo").url, "{same}");
+        }
+    }
+
+    #[test]
+    fn github_remotes_normalise_and_others_do_not() {
+        let repo = Some("https://github.com/o/r.git".to_string());
+        for url in [
+            "https://github.com/o/r.git",
+            "https://github.com/o/r",
+            "git@github.com:o/r.git",
+            "ssh://git@GitHub.com/o/r",
+        ] {
+            assert_eq!(github_repo(url), repo, "{url}");
+        }
+        for url in ["/x", "o/r", "git@gitlab.com:o/r.git", "https://github.com/o/r.git/sub", "file:///o/r.git"] {
+            assert_eq!(github_repo(url), None, "{url}");
         }
     }
 
