@@ -39,19 +39,26 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    /// Prints the read errors and the malformed lines of each home. A line is
-    /// read once, so its warning comes once, or again on `--reparse`.
-    pub fn warn(&self) {
+    /// The read errors and the malformed lines of each home. A line is read
+    /// once, so its warning comes once, or again on `--reparse`.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut out = Vec::new();
         for (home, h) in &self.homes {
-            for e in &h.io_errors {
-                eprintln!("warning: {home}: {e}");
-            }
+            out.extend(h.io_errors.iter().map(|e| format!("warning: {home}: {e}")));
             if h.malformed > 0 {
-                eprintln!(
+                out.push(format!(
                     "warning: {home}: transcript lines that are not JSON: {}; a load in one is not counted",
                     h.malformed
-                );
+                ));
             }
+        }
+        out
+    }
+
+    /// Prints [`ScanReport::warnings`].
+    pub fn warn(&self) {
+        for w in self.warnings() {
+            eprintln!("{w}");
         }
     }
 }

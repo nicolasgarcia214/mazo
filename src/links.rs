@@ -263,6 +263,25 @@ pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) 
         .collect()
 }
 
+/// `sync`'s plan over `homes`, or the [`sync_errors`] that stop it.
+pub fn checked(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Result<Plan, Vec<String>> {
+    let plan = plan(cfg, inv, homes, None);
+    let errors = sync_errors(cfg, inv, homes, &plan);
+    if errors.is_empty() { Ok(plan) } else { Err(errors) }
+}
+
+/// The line `sync --dry-run` prints for each action of `plan`.
+pub fn planned(plan: &Plan) -> Vec<String> {
+    plan.actions
+        .iter()
+        .map(|a| match a {
+            Action::Mkdir(d) => format!("would create {}", d.display()),
+            Action::Link { path, .. } => format!("would link  {}", path.display()),
+            Action::Remove(p) => format!("would prune {}", p.display()),
+        })
+        .collect()
+}
+
 /// Performs a conflict-free plan. Returns the lines to print.
 pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
     assert!(plan.conflicts.is_empty(), "apply() is only called on a conflict-free plan");

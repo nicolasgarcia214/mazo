@@ -1,6 +1,10 @@
-//! The read-only TUI of bare `mazo`: the usage table, the unused list and
-//! one skill's card, rendered from the typed report model over a finished
-//! scan. It writes nothing.
+//! The TUI of bare `mazo`: the usage table, the unused list and one skill's
+//! card, rendered from the typed report model over a finished scan. Its
+//! actions, `retire` and `sync`, each ask y/N first and run the CLI command's
+//! own code path; the data is re-read after each.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
 use ratatui::Frame;
@@ -8,9 +12,14 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Clear, Paragraph};
 
-use crate::ledger::{Agent, Channel, name};
+use crate::audit::{self, SkillRecord};
+use crate::config::{Config, Home};
+use crate::inventory::Inventory;
+use crate::ledger::{self, Agent, Channel, Coverage, Ledger, name};
+use crate::lifecycle::{self, Retired};
+use crate::links::{self, Plan};
 use crate::render::{self, Align, Colour};
 use crate::report::{self, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
 
@@ -18,7 +27,7 @@ use crate::report::{self, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
 const WINDOWS: [Since; 3] = [Since::Days(30), Since::Days(60), Since::All];
 
 /// The keys, as the footer lists them.
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 12] = [
     "↑↓←→/hjkl move",
     "Enter card",
     "Esc back",
@@ -28,6 +37,8 @@ const KEYS: [&str; 10] = [
     "a agent",
     "c channel",
     "A authoring",
+    "r retire",
+    "s sync",
     "q quit",
 ];
 
@@ -50,9 +61,62 @@ pub enum Screen {
     Card,
 }
 
+/// What an [`Input`] borrows, owned, so an action can re-read it.
+struct Data {
+    cfg: Config,
+    inv: Inventory,
+    events: Vec<ledger::Event>,
+    coverage: BTreeMap<String, Coverage>,
+    audits: BTreeMap<String, SkillRecord>,
+    now: jiff::Timestamp,
+    tz: jiff::tz::TimeZone,
+    /// The data directory the actions write and [`Data::reload`] reads.
+    dir: PathBuf,
+}
+
+impl Data {
+    fn input(&self) -> Input<'_> {
+        Input {
+            cfg: &self.cfg,
+            inv: &self.inv,
+            events: &self.events,
+            coverage: &self.coverage,
+            audits: &self.audits,
+            now: self.now,
+            tz: self.tz.clone(),
+        }
+    }
+
+    /// Re-reads the inventory over the same roots, the ledger, the coverage
+    /// and the audits, as of now.
+    fn reload(&mut self) -> crate::Result<()> {
+        let roots: Vec<&Path> = self.inv.roots.iter().map(PathBuf::as_path).collect();
+        self.inv = Inventory::load_roots(self.inv.source.as_deref(), &roots)?;
+        self.events = Ledger::load(&self.dir)?.events().to_vec();
+        self.coverage = ledger::load_coverage(&self.dir)?;
+        self.audits = audit::latest(&self.dir)?;
+        self.now = jiff::Timestamp::now();
+        Ok(())
+    }
+}
+
+/// What `y` runs in a dialog.
+enum Act {
+    Retire(String),
+    /// The plan the dialog shows, applied as shown.
+    Sync(Plan),
+}
+
+/// Lines over the screen that take the next key: `y` runs `act`, any other
+/// key closes it.
+struct Dialog {
+    lines: Vec<String>,
+    act: Option<Act>,
+}
+
 /// The TUI's state over one report input.
-pub struct App<'a> {
-    input: &'a Input<'a>,
+pub struct App {
+    data: Data,
     screen: Screen,
     /// The list a card goes back to.
     back: Screen,
@@ -72,8 +136,11 @@ pub struct App<'a> {
     usage: Usage,
     unused: Unused,
     /// The open card's skill and its `show` lines.
-    card: Option<(&'a str, Vec<String>)>,
+    card: Option<(String, Vec<String>)>,
     scroll: usize,
+    dialog: Option<Dialog>,
+    /// Whether an action ran since the last draw: it may have written under the screen.
+    clear: bool,
 }
 
 /// The next of `all` after `cur`, `None` (no filter) after the last.
@@ -164,12 +231,22 @@ fn table(header: &[(&str, Align)], rows: &[Vec<String>], width: usize) -> Vec<Li
     out
 }
 
-impl<'a> App<'a> {
-    /// The usage view, over each command's default window and filter.
-    pub fn new(input: &'a Input<'a>) -> App<'a> {
+impl App {
+    /// The usage view of `input`, over each command's default window and
+    /// filter. The actions write under, and re-read from, the data directory `data`.
+    pub fn new(input: &Input, data: &Path) -> App {
         let (usage_since, unused_since) = (Since::Days(30), Since::Days(60));
         App {
-            input,
+            data: Data {
+                cfg: input.cfg.clone(),
+                inv: input.inv.clone(),
+                events: input.events.to_vec(),
+                coverage: input.coverage.clone(),
+                audits: input.audits.clone(),
+                now: input.now,
+                tz: input.tz.clone(),
+                dir: data.to_path_buf(),
+            },
             screen: Screen::Usage,
             back: Screen::Usage,
             usage_since,
@@ -186,6 +263,8 @@ impl<'a> App<'a> {
             unused: report::unused_list(input, unused_since),
             card: None,
             scroll: 0,
+            dialog: None,
+            clear: false,
         }
     }
 
@@ -216,10 +295,11 @@ impl<'a> App<'a> {
         skills.into_iter().filter(|s| self.matches(s)).collect()
     }
 
-    fn open(&mut self, skill: &'a str) {
-        let card = report::skill_card(self.input, skill, &self.args(self.card_since), SHOW_LIMIT);
-        let lines = report::card_text(self.input, &card, false).lines().map(String::from).collect();
-        self.card = Some((skill, lines));
+    fn open(&mut self, skill: &str) {
+        let input = self.data.input();
+        let card = report::skill_card(&input, skill, &self.args(self.card_since), SHOW_LIMIT);
+        let lines = report::card_text(&input, &card, false).lines().map(String::from).collect();
+        self.card = Some((skill.to_string(), lines));
     }
 
     /// Moves the selection, or scrolls the card, by `by` rows.
@@ -240,6 +320,16 @@ impl<'a> App<'a> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return false;
         }
+        if let Some(dialog) = self.dialog.take() {
+            if let Some(act) = dialog.act
+                && key.code == KeyCode::Char('y')
+                && key.modifiers.is_empty()
+            {
+                let lines = self.act(act);
+                self.dialog = Some(Dialog { lines, act: None });
+            }
+            return true;
+        }
         if self.typing {
             match key.code {
                 KeyCode::Char(c) if (key.modifiers - KeyModifiers::SHIFT).is_empty() => self.filter.push(c),
@@ -259,12 +349,10 @@ impl<'a> App<'a> {
             KeyCode::Left | KeyCode::Char('h') => self.shift(-(self.page as isize)),
             KeyCode::Right | KeyCode::Char('l') => self.shift(self.page as isize),
             KeyCode::Enter if list => {
-                let input = self.input;
-                let skill = self.listed().get(self.selected).and_then(|s| input.inv.skills.get(*s));
-                if let Some(skill) = skill {
+                if let Some(skill) = self.listed().get(self.selected).map(|s| s.to_string()) {
                     (self.back, self.screen, self.card_since, self.scroll) =
                         (self.screen, Screen::Card, self.usage_since, 0);
-                    self.open(skill);
+                    self.open(&skill);
                 }
             }
             KeyCode::Esc if !list => self.screen = self.back,
@@ -280,7 +368,7 @@ impl<'a> App<'a> {
                 }
                 Screen::Unused => {
                     self.unused_since = next_window(self.unused_since);
-                    self.unused = report::unused_list(self.input, self.unused_since);
+                    self.unused = report::unused_list(&self.data.input(), self.unused_since);
                     self.clamp();
                 }
                 Screen::Card => {
@@ -296,9 +384,76 @@ impl<'a> App<'a> {
                 }
                 self.refresh();
             }
+            KeyCode::Char('r') => {
+                let skill = match &self.card {
+                    Some((skill, _)) if !list => Some(skill.clone()),
+                    _ => self.listed().get(self.selected).map(|s| s.to_string()),
+                };
+                if let Some(skill) = skill {
+                    let what = match self.data.cfg.source.as_deref() {
+                        Some(source) if self.data.inv.root(&skill) == Some(source) => {
+                            format!("move it to {}", source.join(".archive").join(&skill).display())
+                        }
+                        _ => "remove it from the store".into(),
+                    };
+                    let lines = vec![format!("retire {skill}: {what} and prune its links?")];
+                    self.dialog = Some(Dialog { lines, act: Some(Act::Retire(skill)) });
+                }
+            }
+            KeyCode::Char('s') => {
+                let homes: Vec<&Home> = self.data.cfg.homes.iter().collect();
+                self.dialog = Some(match links::checked(&self.data.cfg, &self.data.inv, &homes) {
+                    Err(errors) => Dialog { lines: [vec!["sync refused:".into()], errors].concat(), act: None },
+                    Ok(plan) if plan.actions.is_empty() => {
+                        Dialog { lines: vec!["in sync: nothing to apply".into()], act: None }
+                    }
+                    Ok(plan) => Dialog { lines: links::planned(&plan), act: Some(Act::Sync(plan)) },
+                });
+            }
             _ => {}
         }
         true
+    }
+
+    /// Runs `act` through the CLI command's code path, never forced, then
+    /// re-reads the data. The lines it reports.
+    fn act(&mut self, act: Act) -> Vec<String> {
+        self.clear = true;
+        let d = &self.data;
+        let ran = match act {
+            Act::Retire(skill) => lifecycle::retire(&d.cfg, &d.inv, &d.dir, &skill, false).map(|(mut out, retired)| {
+                match retired {
+                    Retired::Blocked(lines) | Retired::Refused(lines) => {
+                        out.push(format!("retire {skill} refused:"));
+                        out.extend(lines);
+                    }
+                    Retired::Done(lines) => out.extend(lines),
+                }
+                out
+            }),
+            Act::Sync(plan) => links::apply(&plan),
+        };
+        let mut out = ran.unwrap_or_else(|e| vec![format!("ERROR: {e}")]);
+        if let Err(e) = self.reload() {
+            out.push(format!("ERROR: {e}"));
+        }
+        out
+    }
+
+    /// Re-reads the data and recounts every view; a card whose skill is
+    /// gone closes.
+    fn reload(&mut self) -> crate::Result<()> {
+        self.data.reload()?;
+        if self.card.as_ref().is_some_and(|(skill, _)| !self.data.inv.skills.contains(skill)) {
+            self.card = None;
+            if self.screen == Screen::Card {
+                self.screen = self.back;
+            }
+        }
+        self.unused = report::unused_list(&self.data.input(), self.unused_since);
+        self.refresh();
+        self.clamp();
+        Ok(())
     }
 
     /// Keeps the selection on a row of the current list.
@@ -308,18 +463,23 @@ impl<'a> App<'a> {
 
     /// Recounts the usage view and the open card under the current filter.
     fn refresh(&mut self) {
-        self.usage = report::usage_table(self.input, &self.args(self.usage_since));
+        self.usage = report::usage_table(&self.data.input(), &self.args(self.usage_since));
         if self.list() == Screen::Usage {
             self.clamp();
         }
-        if let Some((skill, _)) = self.card {
-            self.open(skill);
+        if let Some((skill, _)) = self.card.take() {
+            self.open(&skill);
             self.shift(0);
         }
     }
 
     /// The footer's first line: the view, its window and the active filters.
     fn status(&self) -> String {
+        match &self.dialog {
+            Some(Dialog { act: Some(_), .. }) => return "y apply · any other key cancels".into(),
+            Some(_) => return "any key closes".into(),
+            None => {}
+        }
         let counts = |since: Since| {
             let agent = self.agent.map_or("all".into(), name);
             let channel = self.channel.map_or("all".into(), name);
@@ -347,6 +507,19 @@ impl<'a> App<'a> {
         let [body, info, footer] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(1), height]).areas(frame.area());
         frame.render_widget(Paragraph::new(footer_lines), footer);
+        if let Some(dialog) = &self.dialog {
+            let area = body.union(info);
+            let room = usize::from(area.height.saturating_sub(2)).max(1);
+            let mut lines: Vec<Line> = dialog.lines.iter().flat_map(|l| l.lines()).map(Line::raw).collect();
+            if lines.len() > room {
+                let more = lines.len() - room + 1;
+                lines.truncate(room - 1);
+                lines.push(Line::raw(format!("… and {more} more")));
+            }
+            frame.render_widget(Clear, area);
+            frame.render_widget(Paragraph::new(lines).block(Block::bordered()), area);
+            return;
+        }
         if let (Screen::Card, Some((_, lines))) = (self.screen, &self.card) {
             let area = body.union(info);
             let text: Vec<Line> = lines.iter().skip(self.scroll).map(|l| Line::raw(l.as_str())).collect();
@@ -354,6 +527,7 @@ impl<'a> App<'a> {
             self.page = usize::from(area.height).max(1);
             return;
         }
+        let input = self.data.input();
         let (mut lines, note) = match self.screen {
             Screen::Unused => {
                 let rows: Vec<Vec<String>> = self
@@ -374,7 +548,7 @@ impl<'a> App<'a> {
                     .rows
                     .iter()
                     .filter(|r| self.matches(&r.skill))
-                    .map(|r| report::usage_cells(self.input, r, false))
+                    .map(|r| report::usage_cells(&input, r, false))
                     .collect();
                 (
                     table(&report::USAGE_HEADER, &rows, body.width.into()),
@@ -398,14 +572,19 @@ impl<'a> App<'a> {
     }
 }
 
-/// Opens the TUI on `input` and runs it until `q` or Ctrl-C. `ratatui::init`
-/// installs a panic hook that restores the terminal; the terminal shows the
-/// cursor again when it drops, after the restore leaves the alternate screen.
-pub fn run(input: &Input) -> std::io::Result<()> {
-    let mut app = App::new(input);
+/// Opens the TUI on `input` and the data directory `data` and runs it until
+/// `q` or Ctrl-C. `ratatui::init` installs a panic hook that restores the
+/// terminal; the terminal shows the cursor again when it drops, after the
+/// restore leaves the alternate screen.
+pub fn run(input: &Input, data: &Path) -> std::io::Result<()> {
+    let mut app = App::new(input, data);
     let mut terminal = ratatui::init();
     let result = (|| {
         loop {
+            // A scan's progress line may have been written under the screen.
+            if std::mem::take(&mut app.clear) {
+                terminal.clear()?;
+            }
             terminal.draw(|frame| app.draw(frame))?;
             if let Event::Key(key) = event::read()?
                 && !app.key(key)

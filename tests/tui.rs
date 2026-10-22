@@ -1,8 +1,11 @@
 //! The TUI of bare `mazo`: its views rendered into ratatui's `TestBackend`
-//! from the golden fixture, and the binary opening and quitting it on a
+//! from the golden fixture, its retire and sync actions driven by key events
+//! against a temp config, and the binary opening and quitting it on a
 //! pseudo-terminal.
 
 mod common;
+
+use std::path::{Path, PathBuf};
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -10,10 +13,17 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 
 use common::golden::Golden;
-use mazo::ledger::{Agent, Channel};
+use mazo::inventory::Inventory;
+use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::render::{self, Colour};
 use mazo::report::{self, Input, Since, UsageArgs};
 use mazo::tui::{App, Screen};
+use mazo::{config, links, store};
+
+/// The app over the golden fixture, whose views read no data directory.
+fn app(input: &Input) -> App {
+    App::new(input, Path::new("/nonexistent"))
+}
 
 /// The screen of `app` at `width`×`height`: each row's text and the
 /// foreground colour of each of its cells.
@@ -89,7 +99,7 @@ fn colour_of(screen: &[(String, Vec<Color>)], line: &str, token: &str) -> Color 
 fn usage_row_shows_its_sessions_and_its_grade_mark_in_the_status_colour() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
-    let mut app = App::new(&input);
+    let mut app = app(&input);
     let screen = draw(&mut app, 200, 40);
     let lines: Vec<String> = screen.iter().map(|(t, _)| t.clone()).collect();
     let unslop =
@@ -106,7 +116,7 @@ fn usage_row_shows_its_sessions_and_its_grade_mark_in_the_status_colour() {
 fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
-    let mut app = App::new(&input);
+    let mut app = app(&input);
     typed(&mut app, "/unslop");
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Enter);
@@ -140,7 +150,7 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
 fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
-    let mut app = App::new(&input);
+    let mut app = app(&input);
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.screen(), Screen::Unused);
     let screen = draw(&mut app, 200, 40);
@@ -179,7 +189,7 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
 fn slash_leaves_only_the_rows_whose_name_matches() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
-    let mut app = App::new(&input);
+    let mut app = app(&input);
     let all = rows(&text(&mut app, 200, 40)).len();
     typed(&mut app, "/goal");
     app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
@@ -202,7 +212,7 @@ fn w_a_c_and_capital_a_change_the_footer_and_counts_as_the_usage_flags_do() {
         ('A', "authoring on", UsageArgs { authoring: true, ..UsageArgs::new(Since::Days(30)) }),
     ];
     for (key, footer, args) in cases {
-        let mut app = App::new(&input);
+        let mut app = app(&input);
         let words = |screen: &[String]| {
             rows(screen).iter().map(|r| r.split_whitespace().map(String::from).collect()).collect::<Vec<Vec<String>>>()
         };
@@ -219,10 +229,10 @@ fn w_a_c_and_capital_a_change_the_footer_and_counts_as_the_usage_flags_do() {
 fn a_narrow_terminal_drops_columns_from_the_right_and_keeps_skill_and_sess() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
-    let mut app = App::new(&input);
+    let mut app = app(&input);
     let screen = text(&mut app, 60, 30);
     let keys = screen.iter().rev().take_while(|l| !l.starts_with("usage · ")).flat_map(|l| l.split(" · ")).count();
-    assert_eq!(keys, 10, "every key shows: {screen:#?}");
+    assert_eq!(keys, 12, "every key shows: {screen:#?}");
     let header: Vec<&str> = screen[0].split_whitespace().collect();
     assert_eq!(header[..2], ["skill", "sess"]);
     assert!(!header.contains(&"grade"), "{screen:#?}");
@@ -234,10 +244,188 @@ fn a_narrow_terminal_drops_columns_from_the_right_and_keeps_skill_and_sess() {
 fn q_and_ctrl_c_quit() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
-    let mut app = App::new(&input);
+    let mut app = app(&input);
     assert!(press(&mut app, KeyCode::Char('j')));
     assert!(!press(&mut app, KeyCode::Char('q')));
     assert!(!app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+}
+
+/// A source of `idle`, `busy` used 3 days ago and `held` cited by `busy`;
+/// the store skill `stored`; one Claude home with every skill linked into it.
+struct Actions {
+    _temp: tempfile::TempDir,
+    source: PathBuf,
+    skills: PathBuf,
+    data: PathBuf,
+    cfg: config::Config,
+}
+
+impl Actions {
+    fn new() -> Actions {
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let (source, home, data) = (root.join("skills"), root.join("home/.claude"), root.join("data"));
+        for (name, body) in [("idle", ""), ("held", ""), ("busy", "Run the held skill.\n")] {
+            common::write(
+                &source.join(name).join("SKILL.md"),
+                &format!("---\nname: {name}\ndescription: X.\n---\n\n{body}"),
+            );
+        }
+        common::write(&root.join("in/stored/SKILL.md"), "---\nname: stored\ndescription: X.\n---\n");
+        let toml = format!(
+            "source = \"{}\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"{}\"\n",
+            source.display(),
+            home.display()
+        );
+        common::write(&root.join("mazo.toml"), &toml);
+        common::write(&home.join("settings.json"), "{}\n");
+        let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(72)).unwrap().to_string();
+        let e = Event { cwd: None, ..common::event("e1", "busy", Channel::Slash, "s1", &ts) };
+        common::write(&data.join("events.jsonl"), &(serde_json::to_string(&e).unwrap() + "\n"));
+        let cfg = config::load(&root.join("mazo.toml")).unwrap().unwrap();
+        let fx = Actions { _temp: temp, skills: home.join("skills"), source, data, cfg };
+        // `add` links every skill.
+        store::add(&fx.cfg, &fx.inv(), &fx.data, &root.join("in/stored"), None, true).unwrap();
+        fx
+    }
+
+    fn inv(&self) -> Inventory {
+        Inventory::load_roots(&self.source, &[&self.source, &store::dir(&self.data)]).unwrap()
+    }
+
+    /// The app over what is on disk now.
+    fn app(&self) -> App {
+        let (inv, ledger) = (self.inv(), Ledger::load(&self.data).unwrap());
+        let coverage = ledger::load_coverage(&self.data).unwrap();
+        let audits = Default::default();
+        let input = Input {
+            cfg: &self.cfg,
+            inv: &inv,
+            events: ledger.events(),
+            coverage: &coverage,
+            audits: &audits,
+            now: jiff::Timestamp::now(),
+            tz: jiff::tz::TimeZone::UTC,
+        };
+        App::new(&input, &self.data)
+    }
+
+    /// The source, the store, the lockfile and the home's links.
+    fn disk(&self) -> common::sync::Snapshot {
+        common::sync::snapshot(&[&self.source, &store::dir(&self.data), &self.data.join("mazo.lock"), &self.skills])
+    }
+
+    fn linked(&self, name: &str) -> bool {
+        self.skills.join(name).symlink_metadata().is_ok()
+    }
+}
+
+/// Selects `skill` on the current list through the filter.
+fn select(app: &mut App, skill: &str) {
+    typed(app, &format!("/{skill}"));
+    press(app, KeyCode::Enter);
+}
+
+#[test]
+fn r_retires_a_source_skill_from_usage_after_y_and_the_list_drops_it() {
+    let fx = Actions::new();
+    assert!(fx.linked("idle"));
+    let mut app = fx.app();
+    select(&mut app, "idle");
+    press(&mut app, KeyCode::Char('r'));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("retire idle: move it to ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "y apply · any other key cancels"), "{screen:#?}");
+    press(&mut app, KeyCode::Char('y'));
+    assert!(fx.source.join(".archive/idle/SKILL.md").is_file());
+    assert!(!fx.source.join("idle").exists());
+    assert!(!fx.linked("idle"));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("archived ")), "{screen:#?}");
+
+    // Any key closes the result; the list was re-read.
+    press(&mut app, KeyCode::Char('j'));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.starts_with("usage · ") && l.contains("0 skills · filter /idle")), "{screen:#?}");
+}
+
+#[test]
+fn r_retires_a_store_skill_from_its_card() {
+    let fx = Actions::new();
+    assert!(fx.linked("stored"));
+    let mut app = fx.app();
+    select(&mut app, "stored");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen(), Screen::Card);
+    press(&mut app, KeyCode::Char('r'));
+    assert!(text(&mut app, 200, 20).iter().any(|l| l.contains("retire stored: remove it from the store")));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(!store::dir(&fx.data).join("stored").exists());
+    assert!(store::Lock::load(&fx.data).unwrap().skills.is_empty());
+    assert!(!fx.linked("stored"));
+    // The card of a retired skill closes to its list.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen(), Screen::Usage);
+}
+
+#[test]
+fn any_key_but_y_cancels_a_retire() {
+    let fx = Actions::new();
+    let before = fx.disk();
+    let mut app = fx.app();
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.screen(), Screen::Unused);
+    select(&mut app, "idle");
+    for key in [KeyCode::Char('n'), KeyCode::Char('Y'), KeyCode::Enter, KeyCode::Esc] {
+        press(&mut app, KeyCode::Char('r'));
+        assert!(text(&mut app, 200, 20).iter().any(|l| l.contains("retire idle")));
+        press(&mut app, key);
+        assert!(!text(&mut app, 200, 20).iter().any(|l| l.contains("retire idle")), "{key:?}");
+    }
+    assert_eq!(fx.disk(), before);
+}
+
+#[test]
+fn a_blocked_retire_shows_its_blockers_and_changes_nothing() {
+    let fx = Actions::new();
+    let before = fx.disk();
+    let mut app = fx.app();
+    for (skill, why) in [("busy", "busy has a strong event in the last 30 days"), ("held", "held is held by busy")] {
+        select(&mut app, skill);
+        press(&mut app, KeyCode::Char('r'));
+        press(&mut app, KeyCode::Char('y'));
+        let screen = text(&mut app, 200, 20);
+        assert!(screen.iter().any(|l| l.contains(&format!("retire {skill} refused:"))), "{screen:#?}");
+        assert!(screen.iter().any(|l| l.contains(why)), "{screen:#?}");
+        assert!(!screen.iter().any(|l| l.contains("--force")), "{screen:#?}");
+        press(&mut app, KeyCode::Esc);
+    }
+    assert_eq!(fx.disk(), before);
+}
+
+#[test]
+fn s_shows_the_dry_run_plan_and_y_applies_it() {
+    let fx = Actions::new();
+    std::fs::remove_file(fx.skills.join("idle")).unwrap();
+    let homes: Vec<_> = fx.cfg.homes.iter().collect();
+    let plan = links::planned(&links::checked(&fx.cfg, &fx.inv(), &homes).unwrap());
+    assert_eq!(plan, [format!("would link  {}", fx.skills.join("idle").display())]);
+    let mut app = fx.app();
+    press(&mut app, KeyCode::Char('s'));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains(&plan[0])), "{screen:#?}");
+    let before = fx.disk();
+    press(&mut app, KeyCode::Char('n'));
+    assert_eq!(fx.disk(), before);
+
+    press(&mut app, KeyCode::Char('s'));
+    press(&mut app, KeyCode::Char('y'));
+    assert_eq!(std::fs::read_link(fx.skills.join("idle")).unwrap(), fx.source.join("idle"));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('s'));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("in sync: nothing to apply")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "any key closes"), "{screen:#?}");
 }
 
 /// A source with one skill and one Claude home never scanned.
