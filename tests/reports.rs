@@ -696,6 +696,57 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
 
 /// The card's sections after the events, in display order, with `$HOME` as
 /// `~` and short locators in text and full paths in `--json`.
+/// D5: the card's chart counts distinct (agent, session) pairs with a strong
+/// event per day over 30 days, per ISO week from Monday over 60, and per
+/// calendar month over all time, the bucket of today last and partial. NOW
+/// is Tuesday 2026-10-13, in ISO week 42.
+#[test]
+fn the_cards_chart_buckets_strong_sessions_by_day_week_and_month() {
+    let repo = report_repo();
+    let w = report_world(repo.path());
+    let mut codex = event("x1", "unslop", Channel::Tool, "A", &ago(0));
+    codex.agent = Agent::Codex;
+    let events = vec![
+        event("a1", "unslop", Channel::Tool, "A", &ago(0)),
+        event("a2", "unslop", Channel::Slash, "A", &ago(0)), // the same pair
+        codex,
+        event("r1", "unslop", Channel::Read, "R", &ago(0)),   // weak
+        event("c1", "unslop", Channel::Tool, "C", &ago(1)),   // Monday of week 42
+        event("d1", "unslop", Channel::Tool, "D", &ago(2)),   // Sunday of week 41
+        event("e1", "unslop", Channel::Tool, "E", &ago(45)),  // 2026-08-29, week 35
+        event("f1", "unslop", Channel::Tool, "F", &ago(100)), // 2026-07-05
+    ];
+    let input = w.input(&events);
+    let chart = |since| {
+        let card = report::skill_card(&input, "unslop", &UsageArgs::new(since), report::SHOW_LIMIT);
+        card.activity.into_iter().map(|b| (b.label, b.sessions, b.partial)).collect::<Vec<_>>()
+    };
+
+    let days = chart(Since::Days(30));
+    assert_eq!(days.len(), 31, "from the window's first day, 09-13, to today: {days:?}");
+    assert_eq!(days[0], ("09-13".into(), 0, false));
+    assert_eq!(days[28..], [("10-11".into(), 1, false), ("10-12".into(), 1, false), ("10-13".into(), 2, true)]);
+    assert_eq!(days.iter().map(|d| d.1).sum::<usize>(), 4);
+
+    let weeks = chart(Since::Days(60));
+    let labels: Vec<&str> = weeks.iter().map(|w| w.0.as_str()).collect();
+    assert_eq!(labels, ["W33", "W34", "W35", "W36", "W37", "W38", "W39", "W40", "W41", "W42"]);
+    let counts: Vec<usize> = weeks.iter().map(|w| w.1).collect();
+    assert_eq!(counts, [0, 0, 1, 0, 0, 0, 0, 0, 1, 3]);
+    assert_eq!(weeks.iter().map(|w| w.2).collect::<Vec<_>>(), [&[false; 9][..], &[true]].concat());
+
+    let months = chart(Since::All);
+    assert_eq!(
+        months,
+        [
+            ("2026-07".into(), 1, false),
+            ("2026-08".into(), 1, false),
+            ("2026-09".into(), 0, false),
+            ("2026-10".into(), 4, true)
+        ]
+    );
+}
+
 #[test]
 fn show_prints_the_card() {
     let repo = report_repo();

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
-use jiff::{SignedDuration, Timestamp};
+use jiff::{SignedDuration, Timestamp, ToSpan};
 use serde::Serialize;
 
 use crate::audit::SkillRecord;
@@ -233,6 +233,27 @@ impl<'a> View<'a> {
         per_day.iter().map(HashSet::len).collect()
     }
 
+    /// Distinct (agent, session) pairs with a strong event per bucket of
+    /// `since`'s [`Unit`], from the bucket of the window's start (of the first
+    /// event, for all time) to today's.
+    fn buckets<'s>(&self, events: impl Iterator<Item = &'s (&'s Event, Timestamp)>, since: Since) -> Vec<Bucket> {
+        let unit = Unit::of(since);
+        let mut per: BTreeMap<Date, HashSet<(Agent, &str)>> = BTreeMap::new();
+        for (e, t) in events.filter(|(e, _)| e.channel.strong()) {
+            per.entry(unit.start(self.date(*t))).or_default().insert((e.agent, &e.session));
+        }
+        let today = unit.start(self.today);
+        let first = self.start(since).map(|s| unit.start(self.date(s)));
+        let mut at = first.or_else(|| per.keys().next().copied()).unwrap_or(today).min(today);
+        let mut out = Vec::new();
+        while at <= today {
+            let sessions = per.get(&at).map_or(0, HashSet::len);
+            out.push(Bucket { label: unit.label(at), sessions, partial: at == today });
+            at = unit.next(at);
+        }
+        out
+    }
+
     /// Per home: the effective window start, the later of the report window
     /// and the home's coverage, with the earliest typed event.
     fn coverage(&self, start: Option<Timestamp>) -> Vec<(String, String)> {
@@ -270,6 +291,62 @@ impl<'a> View<'a> {
     fn coverage_line(&self, label: &str, start: Option<Timestamp>) -> String {
         coverage_note(label, self.coverage(start).iter().map(|(h, t)| (h, t))) + "\n"
     }
+}
+
+/// What one bar of a card's activity chart spans: a day over 30 days or
+/// fewer, an ISO week from Monday over a longer window, a calendar month
+/// over all time.
+#[derive(Clone, Copy)]
+enum Unit {
+    Day,
+    Week,
+    Month,
+}
+
+impl Unit {
+    fn of(since: Since) -> Unit {
+        match since {
+            Since::Days(..=30) => Unit::Day,
+            Since::Days(_) => Unit::Week,
+            Since::All => Unit::Month,
+        }
+    }
+
+    /// The first day of the bucket holding `d`.
+    fn start(self, d: Date) -> Date {
+        match self {
+            Unit::Day => d,
+            Unit::Week => d - i64::from(d.weekday().to_monday_zero_offset()).days(),
+            Unit::Month => d.first_of_month(),
+        }
+    }
+
+    fn next(self, d: Date) -> Date {
+        match self {
+            Unit::Day => d + 1.day(),
+            Unit::Week => d + 1.week(),
+            Unit::Month => d + 1.month(),
+        }
+    }
+
+    /// `10-13`, `W42`, `2026-10`.
+    fn label(self, d: Date) -> String {
+        match self {
+            Unit::Day => d.strftime("%m-%d").to_string(),
+            Unit::Week => format!("W{:02}", d.iso_week_date().week()),
+            Unit::Month => d.strftime("%Y-%m").to_string(),
+        }
+    }
+}
+
+/// A bar of a card's activity chart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bucket {
+    pub label: String,
+    /// Distinct (agent, session) pairs with a strong event in the bucket.
+    pub sessions: usize,
+    /// Whether the bucket holds today, so is still filling.
+    pub partial: bool,
 }
 
 /// `label: home window · …`: the coverage note under `usage` and `unused`.
@@ -858,6 +935,9 @@ pub struct Card<'a> {
     pub manual: Manual,
     pub since: Option<String>,
     pub histogram: Vec<Day>,
+    /// The TUI's chart: strong sessions per day, week or month of the window.
+    #[serde(skip)]
+    pub activity: Vec<Bucket>,
     /// The newest `limit` events in the window.
     pub events: Vec<ShownEvent<'a>>,
     pub total_events: usize,
@@ -1060,6 +1140,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         manual,
         since: start.map(|s| view.date(s).to_string()),
         histogram,
+        activity: view.buckets(view.select(&f, Some(skill), start), args.since),
         events,
         total_events: window.len(),
         description,

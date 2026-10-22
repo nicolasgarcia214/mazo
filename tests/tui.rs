@@ -180,11 +180,9 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     assert!(card.contains(&line), "{line:?} not in {screen:#?}");
 
     // A page is the card's visible height, not the list's.
-    let card = report::skill_card(&input, "unslop", &UsageArgs::new(report::SHOW_SINCE), report::SHOW_LIMIT);
-    let card = report::card_text(&input, &card, false);
     let height = text(&mut app, 200, 30).iter().position(|l| l.starts_with("↑↓←→/hjkl move")).unwrap() - 1;
     press(&mut app, KeyCode::Char('l'));
-    assert_eq!(body(&text(&mut app, 200, 30)[1]), card.lines().nth(height).unwrap());
+    assert_eq!(body(&text(&mut app, 200, 30)[1]), card[height]);
 
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen(), Screen::Usage);
@@ -393,6 +391,62 @@ fn card_of(input: &Input, skill: &str) -> Vec<String> {
     report::card_text(input, &card, false).lines().map(String::from).collect()
 }
 
+fn chart_of(input: &Input, skill: &str, since: Since) -> Vec<report::Bucket> {
+    report::skill_card(input, skill, &UsageArgs::new(since), report::SHOW_LIMIT).activity
+}
+
+/// The chart rows of `skill`'s card on `screen`, cut to `skip` columns in
+/// and `bars` rows under the heading, and the colour of each bar's label.
+fn chart_rows(screen: &[(String, Vec<Color>)], skill: &str, skip: usize, bars: usize) -> Vec<(String, Color)> {
+    let heading = format!("{skill}: ");
+    let at = screen.iter().position(|(l, _)| l.chars().skip(skip).collect::<String>().starts_with(&heading));
+    let at = at.unwrap_or_else(|| panic!("no {skill} heading in {screen:#?}")) + 2;
+    let cut = |l: &str| l.chars().skip(skip).take_while(|c| !matches!(c, '│' | '┃')).collect::<String>();
+    screen[at..at + bars].iter().map(|(l, colours)| (cut(l).trim_end().to_string(), colours[skip])).collect()
+}
+
+/// D5: the card, full screen or beside a wide table, charts the skill's
+/// strong sessions per bucket of the w window, each bar labelled and showing
+/// its count, today's muted; w redraws it in days, ISO weeks, then months.
+#[test]
+fn the_card_charts_sessions_per_bucket_of_the_window_and_w_rebuckets_it() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let check = |screen: &[(String, Vec<Color>)], skip: usize, since: Since| {
+        let chart = chart_of(&input, "unslop", since);
+        assert!(chart.iter().any(|b| b.sessions > 0), "{chart:?}");
+        let rows = chart_rows(screen, "unslop", skip, chart.len());
+        for ((row, colour), b) in rows.iter().zip(&chart) {
+            assert!(row.starts_with(&format!("{} {}", b.label, b.sessions)), "{b:?}: {row:?}");
+            let expected = if b.partial { Color::DarkGray } else { Color::Cyan };
+            assert_eq!(*colour, expected, "{b:?}");
+        }
+        assert!(chart.last().unwrap().partial && chart.iter().filter(|b| b.partial).count() == 1);
+        chart
+    };
+
+    let mut app = app(&input);
+    typed(&mut app, "/unslop");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen(), Screen::Card);
+    let days = check(&draw(&mut app, 200, 100), 2, Since::Days(30));
+    assert_eq!(days.last().unwrap().label, &common::NOW[5..10]);
+    press(&mut app, KeyCode::Char('w'));
+    let weeks = check(&draw(&mut app, 200, 100), 2, Since::Days(60));
+    assert!(weeks.iter().all(|b| b.label.starts_with('W')) && weeks.len() < days.len(), "{weeks:?}");
+    press(&mut app, KeyCode::Char('w'));
+    let months = check(&draw(&mut app, 200, 100), 2, Since::All);
+    assert!(months.iter().all(|b| b.label.len() == 7), "{months:?}");
+
+    // Beside a wide table: the rule and the inset, then the chart.
+    press(&mut app, KeyCode::Esc);
+    let skip = 200 - 80 + 3;
+    check(&draw(&mut app, 200, 100), skip, Since::Days(30));
+    press(&mut app, KeyCode::Char('w'));
+    check(&draw(&mut app, 200, 100), skip, Since::Days(60));
+}
+
 /// From 140 columns the usage table leaves 40% of the width, at least 50
 /// columns, to the selected skill's card behind a rule; the card follows the
 /// selection, and Enter opens the same card full screen. Narrower, there is
@@ -405,7 +459,7 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
         report::usage_table(&input, &UsageArgs::new(Since::Days(30))).rows.into_iter().map(|r| r.skill).collect();
     let mut app = app(&input);
     for (width, side) in [(140, 56), (200, 80)] {
-        let screen = text(&mut app, width, 40);
+        let screen = text(&mut app, width, 80);
         let table = usize::from(width - side);
         // The side card's lines: right of the rule and the inset, down the body.
         let side: Vec<String> = screen[1..]
@@ -415,6 +469,10 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
             .collect();
         assert!(side.len() > 30, "{width}: {screen:#?}");
         let card = card_of(&input, &skills[0]);
+        // The chart and its blank row under the heading and its blank line.
+        let at = card.iter().position(|l| l.starts_with(&format!("{}: since", skills[0]))).unwrap() + 2;
+        let bars = chart_of(&input, &skills[0], Since::Days(30)).len() + 1;
+        let side = [&side[..at], &side[at + bars..]].concat();
         // The rule and an inset either side.
         let room = usize::from(width) - table - 5;
         for (shown, line) in side.iter().zip(&card) {
@@ -433,7 +491,9 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
     assert_eq!(app.screen(), Screen::Card);
     let screen = text(&mut app, 140, 40);
     let card = card_of(&input, &skills[1]);
-    assert_eq!(screen[1..].iter().map(|l| body(l)).take(5).collect::<Vec<_>>(), card[..5], "{screen:#?}");
+    // Down to the chart under the heading.
+    let at = card.iter().position(|l| l.starts_with(&heading)).unwrap() + 2;
+    assert_eq!(screen[1..].iter().map(|l| body(l)).take(at).collect::<Vec<_>>(), card[..at], "{screen:#?}");
     assert!(screen.iter().all(|l| !l.contains(" skills · ")), "{screen:#?}");
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen(), Screen::Usage);
@@ -475,7 +535,7 @@ fn help(app: &mut App, width: u16, height: u16) -> Option<Vec<String>> {
     let lines: Vec<String> = screen[top + 1..]
         .iter()
         .take_while(|l| !l.contains('╰'))
-        .map(|l| l.trim().trim_matches(['│', '┃']).trim().to_string())
+        .map(|l| l.trim_matches(['│', '┃', ' ']).to_string())
         .collect();
     // Less the padding rows.
     Some(lines[1..lines.len() - 1].to_vec())
@@ -1025,7 +1085,7 @@ fn y_audits_in_the_background_and_the_pane_shows_the_result() {
 
     // The data was re-read: the card shows the new audit.
     press(&mut app, KeyCode::Enter);
-    let screen = text(&mut app, 200, 60);
+    let screen = text(&mut app, 200, 100);
     assert!(screen.iter().any(|l| body(l).starts_with("audit: ") && l.contains(", 1 sessions, ")), "{screen:#?}");
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
