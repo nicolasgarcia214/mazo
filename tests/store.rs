@@ -752,13 +752,17 @@ fn a_security_finding_refuses_the_install_unless_force() {
     assert!(r.stderr().contains("security issue; pass --force"), "{}", r.stderr());
     assert_not_installed(&fx, "theirs");
 
-    // With --force the verdict is still shown and the y/N prompt still applies.
+    // With --force the verdict is still shown and the y/N prompt still
+    // applies: off a terminal it is refused before the judge is called.
     let r = add(&fx, &[&s(&dir), "--force"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
-    assert!(r.stdout().contains("security: "), "{}", r.stdout());
+    assert_eq!(r.stdout(), "");
+    assert_eq!(calls(&fx).len(), 1);
     assert_not_installed(&fx, "theirs");
     let r = add_at_terminal(&fx, &[&s(&dir), "--force"], "n\n");
     assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(r.stdout().contains("security: "), "{}", r.stdout());
+    assert!(r.stderr().contains("install theirs? [Y/n]"), "{}", r.stderr());
     assert_not_installed(&fx, "theirs");
 
     add(&fx, &[&s(&dir), "--force", "--yes"]).assert_ok();
@@ -786,15 +790,19 @@ fn every_verdict_asks_y_n_and_refuses_without_a_terminal_unless_yes() {
         answer(&fx, None, quality, value);
         let case = format!("{quality} {value}");
 
+        // Off a terminal, refused before the judge is called.
+        let before = calls(&fx).len();
         let r = add(&fx, &[&s(&dir)]);
         assert_eq!(r.code(), 2, "{case}: {}", r.stderr());
-        assert!(r.stdout().starts_with(&format!("vet {name}: quality {quality}, value {value}\n")), "{}", r.stdout());
+        assert_eq!(r.stdout(), "");
         assert!(r.stderr().contains("pass --yes when stdin is not a terminal"), "{}", r.stderr());
+        assert_eq!(calls(&fx).len(), before, "{case}: no judge call");
         assert_not_installed(&fx, &name);
 
         // Enter takes the default; the prompt names it.
         let prompt = if default_yes { "[Y/n]" } else { "[y/N]" };
         let r = add_at_terminal(&fx, &[&s(&dir)], "\n");
+        assert!(r.stdout().starts_with(&format!("vet {name}: quality {quality}, value {value}\n")), "{}", r.stdout());
         assert!(r.stderr().contains(&format!("install {name}? {prompt}")), "{case}: {}", r.stderr());
         if default_yes {
             r.assert_ok();
@@ -811,7 +819,7 @@ fn every_verdict_asks_y_n_and_refuses_without_a_terminal_unless_yes() {
             assert_eq!(e["verdict"]["redundant_with"].as_str(), Some(fx.skills[0].as_str()));
         }
     }
-    assert_eq!(calls(&fx).len(), 6 * 2 + 4, "one call per add");
+    assert_eq!(calls(&fx).len(), 6 + 4, "one call per add at a terminal");
 }
 
 #[test]
@@ -841,4 +849,26 @@ fn a_judge_without_a_valid_answer_refuses_the_install() {
     assert_not_installed(&fx, "theirs");
     assert!(!exists(&store(&fx)));
     assert!(!exists(&fx.data.join("mazo/mazo.lock")));
+}
+
+#[test]
+fn files_past_the_size_caps_are_sent_as_their_size() {
+    let (fx, dir) = judged();
+    answer(&fx, None, "good", "worth trying");
+    // One file over the per-file cap, then files that reach the total cap.
+    common::write(&dir.join("references/big.md"), &"b".repeat(64 * 1024 + 1));
+    for i in 0..5 {
+        common::write(&dir.join(format!("references/part{i}.md")), &format!("{i}").repeat(60 * 1024));
+    }
+    add(&fx, &[&s(&dir), "--yes"]).assert_ok();
+    let stdin = &calls(&fx)[0];
+    assert!(stdin.contains("<file path=\"references/big.md\">\n(not sent: 65537 bytes, over the size cap)\n</file>"));
+    for i in 0..4 {
+        assert!(stdin.contains(&format!("{i}").repeat(60 * 1024)), "part{i} fits the total cap");
+    }
+    let last = "<file path=\"references/part4.md\">\n(not sent: 61440 bytes, over the size cap)\n</file>";
+    assert!(stdin.contains(last), "part4 is past the total cap");
+    assert!(stdin.len() < 256 * 1024 + 16 * 1024, "{} bytes sent", stdin.len());
+    // The install itself copies every file.
+    assert!(exists(&store(&fx).join("theirs/references/big.md")));
 }

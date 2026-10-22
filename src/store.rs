@@ -237,6 +237,12 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     };
     let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref() });
     if let Some(c) = &caller {
+        // Refused before the judge is paid for an answer nobody can accept.
+        if !args.yes && !std::io::stdin().is_terminal() {
+            return Err(Error::Usage(
+                "add refused: a vetted install asks y/N; pass --yes when stdin is not a terminal".into(),
+            ));
+        }
         c.login()?;
     }
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
@@ -505,14 +511,19 @@ fn now() -> Result<String> {
     Ok(jiff::Timestamp::now().round(jiff::Unit::Second).map_err(|e| e.to_string())?.to_string())
 }
 
+/// The most bytes of one file, and of all files, the vet judge is sent; a
+/// file past either is sent as its size alone.
+const VET_FILE_BYTES: u64 = 64 * 1024;
+const VET_TOTAL_BYTES: u64 = 256 * 1024;
+
 /// The vet gate, before anything is copied: one judge call on the files of
-/// the skill at `src` (`files`, with `skill_md` as its `SKILL.md`) and the
-/// names and descriptions of every source and store skill, its verdict
-/// shown, then obeyed. A security finding refuses the install (exit 1)
-/// unless `--force`; then the user is asked y/N, defaulting to the verdict's
-/// [`VetVerdict::default_yes`], unless `--yes`. With no terminal on stdin and
-/// no `--yes` it is a usage error. A judge that gives no valid answer, or a
-/// No, refuses the install.
+/// the skill at `src` (`files`, with `skill_md` as its `SKILL.md`, within
+/// [`VET_FILE_BYTES`] and [`VET_TOTAL_BYTES`]) and the names and descriptions
+/// of every source and store skill, its verdict shown, then obeyed. A
+/// security finding refuses the install (exit 1) unless `--force`; then the
+/// user is asked y/N, defaulting to the verdict's
+/// [`VetVerdict::default_yes`], unless `--yes`. A judge that gives no valid
+/// answer, or a No, refuses the install.
 fn gate(
     c: &Caller,
     inv: &Inventory,
@@ -522,23 +533,32 @@ fn gate(
     files: &[PathBuf],
     skill_md: &str,
 ) -> Result<Vet> {
-    let read = |rel: &PathBuf| -> Result<Option<(String, String)>> {
+    let mut sent = Vec::new();
+    let mut total = 0;
+    for rel in files {
         let path = src.join(rel);
-        if path.is_dir() {
-            return Ok(None);
+        let fail = |e: std::io::Error| format!("{}: {e}", path.display());
+        let meta = fs::metadata(&path).map_err(fail)?;
+        if meta.is_dir() {
+            continue;
         }
-        let text = if rel == Path::new("SKILL.md") {
+        let skill = rel == Path::new("SKILL.md");
+        let size = if skill { skill_md.len() as u64 } else { meta.len() };
+        let text = if size > VET_FILE_BYTES || total + size > VET_TOTAL_BYTES {
+            format!("(not sent: {size} bytes, over the size cap)")
+        } else if skill {
+            total += size;
             skill_md.to_string()
         } else {
-            let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            total += size;
+            let bytes = fs::read(&path).map_err(fail)?;
             String::from_utf8(bytes).unwrap_or_else(|e| format!("(not text, {} bytes)", e.as_bytes().len()))
         };
-        Ok(Some((rel.to_string_lossy().into_owned(), text)))
-    };
-    let files: Vec<(String, String)> = files.iter().map(read).filter_map(Result::transpose).collect::<Result<_>>()?;
+        sent.push((rel.to_string_lossy().into_owned(), text));
+    }
     let existing: Vec<(String, String)> =
         inv.skills.iter().map(|s| (s.clone(), inv.description(s).unwrap_or_default())).collect();
-    let input = audit::vet_input(name, &files, &existing);
+    let input = audit::vet_input(name, &sent, &existing);
     let names: Vec<&str> = inv.skills.iter().map(String::as_str).collect();
     let vet = audit::vet(c, name, &input, &names)?
         .map_err(|why| format!("add refused: vetting {name} failed: {why}; nothing was installed"))?;
@@ -548,11 +568,6 @@ fn gate(
     }
     if args.yes {
         return Ok(vet);
-    }
-    if !std::io::stdin().is_terminal() {
-        return Err(Error::Usage(
-            "add refused: a vetted install asks y/N; pass --yes when stdin is not a terminal".into(),
-        ));
     }
     let default = vet.verdict.default_yes();
     eprint!("install {name}? {} ", if default { "[Y/n]" } else { "[y/N]" });
