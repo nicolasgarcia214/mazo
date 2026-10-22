@@ -20,15 +20,16 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use super::session::{SESSION, SESSION_PROMPT, SESSION_SCHEMA};
-use super::{Audit, Stage, cents, frame};
+use super::{Stage, cents, frame};
 use crate::Result;
 use crate::config::{Billing, Home, Judge, JudgeAgent};
 use crate::ledger::Agent;
 
 /// How mazo calls one agent as its judge.
 pub trait Backend {
-    /// One judge call with `stage`'s prompt on `input`, capped at `cap`.
-    fn call(&self, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply>;
+    /// One judge call with `stage`'s prompt on `input`, capped at `cap`, its
+    /// scratch under `data` and its environment scrubbed for `billing`.
+    fn call(&self, data: &Path, billing: Billing, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply>;
     /// Under `subscription`, the check a run makes once before its first call,
     /// with `data` for a scratch directory. A failed check is an
     /// [`crate::Error::Usage`] that says what would be billed.
@@ -80,8 +81,8 @@ pub trait Subprocess {
 }
 
 impl<T: Subprocess> Backend for T {
-    fn call(&self, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
-        spawn(self, a, stage, cap, input)
+    fn call(&self, data: &Path, billing: Billing, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+        spawn(self, data, billing, stage, cap, input)
     }
 
     fn login(&self, data: &Path) -> Result<()> {
@@ -240,10 +241,17 @@ fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
 /// after. A capped call of an agent with a [`Subprocess::budget_flag`] gets that
 /// flag, and is counted at its cap when killed past its time, the most it
 /// could have spent.
-fn spawn(backend: &impl Subprocess, a: &Audit, stage: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+fn spawn(
+    backend: &impl Subprocess,
+    data: &Path,
+    billing: Billing,
+    stage: &Stage,
+    cap: Option<u64>,
+    input: &str,
+) -> Result<Reply> {
     let argv = backend.argv(stage);
-    let (unique, dir) = run_dir(a.data)?;
-    let scratch = backend.scratch(a.data)?;
+    let (unique, dir) = run_dir(data)?;
+    let scratch = backend.scratch(data)?;
     let files = std::env::temp_dir().join(format!("mazo-judge-{unique}"));
     let result = files.join("result.json");
     let output = DirBuilder::new().mode(0o700).create(&files).and_then(|()| {
@@ -275,7 +283,7 @@ fn spawn(backend: &impl Subprocess, a: &Audit, stage: &Stage, cap: Option<u64>, 
         if let Some((var, home)) = &scratch {
             cmd.env(var, home);
         }
-        scrub(&mut cmd, a.judge.billing);
+        scrub(&mut cmd, billing);
         wait(cmd.spawn()?, stdin, JUDGE_TIMEOUT)
     });
     let written = fs::read(&result);
@@ -285,7 +293,7 @@ fn spawn(backend: &impl Subprocess, a: &Audit, stage: &Stage, cap: Option<u64>, 
     removed.map_err(|e| format!("{}: {e}", dir.display()))?;
     cleaned.map_err(|e| format!("{}: {e}", files.display()))?;
     if scratch.is_some() {
-        backend.scratch(a.data)?;
+        backend.scratch(data)?;
     }
     let Some(output) = output else {
         let minutes = JUDGE_TIMEOUT.as_secs() / 60;
@@ -355,6 +363,7 @@ fn wait(mut child: Child, stdin: Option<String>, limit: Duration) -> std::io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::Audit;
 
     fn sh(script: &str) -> Child {
         Command::new("sh")
@@ -370,7 +379,7 @@ mod tests {
     struct Canned;
 
     impl Backend for Canned {
-        fn call(&self, _: &Audit, _: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
+        fn call(&self, _: &Path, _: Billing, _: &Stage, cap: Option<u64>, input: &str) -> Result<Reply> {
             Ok(Reply { cost: cap, answer: Ok(Value::from(input)) })
         }
         fn dry_run(&self, _: &Path) -> String {
@@ -393,7 +402,8 @@ mod tests {
             evals: &evals,
             usage: &Value::Null,
         };
-        let reply = a.backend.call(&a, &SESSION, Some(7), "in").unwrap();
+        let c = a.caller();
+        let reply = c.backend.call(c.data, c.judge.billing, &SESSION, Some(7), "in").unwrap();
         assert_eq!((reply.cost, reply.answer.ok()), (Some(7), Some(Value::from("in"))));
         assert!(!data.path().join("audit-runs").exists());
     }

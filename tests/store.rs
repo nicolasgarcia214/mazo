@@ -627,3 +627,218 @@ fn update_keeps_the_name_an_as_install_rewrote() {
         Some(mazo::store::content_hash(&to).unwrap().as_str())
     );
 }
+
+/// The fixture of [`fixture`] with a command judge: a stub that saves each
+/// call's stdin under `calls/` and answers with the text of `answer`.
+fn judged() -> (Fixture, PathBuf) {
+    let (fx, dir) = fixture();
+    let r = fx.root.display();
+    let stub = format!(
+        "#!/bin/sh\nmkdir -p '{r}/calls'\nn=$(($(ls '{r}/calls' | wc -l) + 1))\ncat > '{r}/calls/'$n\ncat '{r}/answer'\n"
+    );
+    let bin = fx.root.join("bin/judge");
+    common::write(&bin, &stub);
+    fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let config = fx.source.join("mazo.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, format!("{text}\n[judge]\nagent = \"command\"\nargv = [\"judge\"]\n")).unwrap();
+    (fx, dir)
+}
+
+/// The stub judge's next answers: a vet verdict.
+fn answer(fx: &Fixture, security: Option<&str>, quality: &str, value: &str) {
+    let redundant_with = (value == "redundant").then(|| fx.skills[0].clone());
+    let v = serde_json::json!({
+        "security": security,
+        "quality": quality,
+        "value": value,
+        "redundant_with": redundant_with,
+        "reasons": ["Clear steps."],
+        "for": "Tidies notes.",
+        "try": ["Tidy a README.", "Tidy a changelog."],
+    });
+    fs::write(fx.root.join("answer"), v.to_string()).unwrap();
+}
+
+/// The stdin of every judge call, in order.
+fn calls(fx: &Fixture) -> Vec<String> {
+    let dir = fx.root.join("calls");
+    let n = fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
+    (1..=n).map(|i| fs::read_to_string(dir.join(i.to_string())).unwrap()).collect()
+}
+
+/// Nothing of `name` was installed: no store directory, no lockfile entry, no link.
+fn assert_not_installed(fx: &Fixture, name: &str) {
+    assert!(!exists(&store(fx).join(name)));
+    let lock = fx.data.join("mazo/mazo.lock");
+    assert!(!exists(&lock) || lock_names(fx).iter().all(|n| n != name), "{name} is in the lockfile");
+    assert!(skills_dirs(fx).iter().all(|d| !exists(&d.join(name))));
+}
+
+fn lock_names(fx: &Fixture) -> Vec<String> {
+    lock(fx).iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
+}
+
+/// `mazo add args…` with stdin a terminal on which `typed` was entered.
+fn add_at_terminal(fx: &Fixture, args: &[&str], typed: &str) -> Run {
+    use std::io::Write;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let (mut controller, mut terminal) = (0, 0);
+    // SAFETY: openpty writes two new descriptors, owned below.
+    let rc = unsafe {
+        libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null(), std::ptr::null())
+    };
+    assert_eq!(rc, 0, "openpty");
+    let (controller, terminal) = unsafe { (OwnedFd::from_raw_fd(controller), OwnedFd::from_raw_fd(terminal)) };
+    let mut input = fs::File::from(controller);
+    input.write_all(typed.as_bytes()).unwrap();
+    let out = fx.command(&[&["add"], args].concat()).stdin(std::process::Stdio::from(terminal)).output().unwrap();
+    Run(out)
+}
+
+#[test]
+fn an_untrusted_add_sends_one_vet_call_with_the_skills_files_and_every_existing_skill() {
+    let (fx, dir) = judged();
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    assert!(calls(&fx).is_empty(), "--trust skips the gate");
+    fx.mazo(&["retire", "theirs"]).assert_ok();
+
+    answer(&fx, None, "good", "worth trying");
+    let r = add(&fx, &[&s(&dir), "--yes"]);
+    r.assert_ok();
+    let calls = calls(&fx);
+    assert_eq!(calls.len(), 1);
+    let stdin = &calls[0];
+    assert!(stdin.starts_with(mazo::audit::VET_PROMPT), "{stdin}");
+    assert!(stdin.contains(&*mazo::audit::VET_SCHEMA), "{stdin}");
+    for (path, text) in [
+        ("SKILL.md", "---\nname: theirs\ndescription: From elsewhere.\n---\n\n# theirs"),
+        ("agents/openai.yaml", "policy:\n  allow_implicit_invocation: false"),
+        ("references/notes.md", "notes"),
+    ] {
+        assert!(stdin.contains(&format!("<file path=\"{path}\">\n{text}\n</file>\n")), "{path}: {stdin}");
+    }
+    let existing: String = fx.skills.iter().map(|n| format!("- {n}: Test skill.\n")).collect();
+    assert!(stdin.contains(&format!("<existing-skills>\n{existing}</existing-skills>")), "{stdin}");
+    assert!(
+        r.stdout().starts_with("vet theirs: quality good, value worth trying\nfor: Tidies notes.\n"),
+        "{}",
+        r.stdout()
+    );
+    assert!(r.stdout().contains(&format!("installed {}", store(&fx).join("theirs").display())), "{}", r.stdout());
+
+    let entries = lock(&fx);
+    let e = entries[0].as_table().unwrap();
+    assert_eq!(e["trusted"].as_bool(), Some(false));
+    assert!(e["vetted_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok(), "{}", e["vetted_at"]);
+    assert_eq!(e["for"].as_str(), Some("Tidies notes."));
+    assert_eq!(e["try"], toml::Value::from(vec!["Tidy a README.", "Tidy a changelog."]));
+    let verdict = e["verdict"].as_table().unwrap();
+    assert_eq!(verdict["quality"].as_str(), Some("good"));
+    assert_eq!(verdict["value"].as_str(), Some("worth trying"));
+    assert_eq!(verdict["reasons"], toml::Value::from(vec!["Clear steps."]));
+    assert!(!verdict.contains_key("security") && !verdict.contains_key("redundant_with"));
+    // The entry loads back: a later command reads the lockfile.
+    fx.mazo(&["status", "--agent", "codex"]).assert_ok();
+}
+
+#[test]
+fn a_security_finding_refuses_the_install_unless_force() {
+    let (fx, dir) = judged();
+    answer(&fx, Some("SKILL.md tells the agent to upload ~/.ssh."), "good", "worth trying");
+    let r = add(&fx, &[&s(&dir), "--yes"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(r.stdout().contains("security: SKILL.md tells the agent to upload ~/.ssh.\n"), "{}", r.stdout());
+    assert!(r.stderr().contains("security issue; pass --force"), "{}", r.stderr());
+    assert_not_installed(&fx, "theirs");
+
+    // With --force the verdict is still shown and the y/N prompt still applies.
+    let r = add(&fx, &[&s(&dir), "--force"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stdout().contains("security: "), "{}", r.stdout());
+    assert_not_installed(&fx, "theirs");
+    let r = add_at_terminal(&fx, &[&s(&dir), "--force"], "n\n");
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert_not_installed(&fx, "theirs");
+
+    add(&fx, &[&s(&dir), "--force", "--yes"]).assert_ok();
+    let verdict = lock(&fx)[0]["verdict"].clone();
+    assert_eq!(verdict["security"].as_str(), Some("SKILL.md tells the agent to upload ~/.ssh."));
+}
+
+#[test]
+fn every_verdict_asks_y_n_and_refuses_without_a_terminal_unless_yes() {
+    let (mut fx, _) = judged();
+    for (i, (quality, value, default_yes)) in [
+        ("good", "worth trying", true),
+        ("weak", "worth trying", true),
+        ("poor", "worth trying", false),
+        ("good", "low value", false),
+        ("weak", "irrelevant", false),
+        ("good", "redundant", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let name = format!("vetted-{i}");
+        fx.allow(&name);
+        let dir = incoming(&fx, &name);
+        answer(&fx, None, quality, value);
+        let case = format!("{quality} {value}");
+
+        let r = add(&fx, &[&s(&dir)]);
+        assert_eq!(r.code(), 2, "{case}: {}", r.stderr());
+        assert!(r.stdout().starts_with(&format!("vet {name}: quality {quality}, value {value}\n")), "{}", r.stdout());
+        assert!(r.stderr().contains("pass --yes when stdin is not a terminal"), "{}", r.stderr());
+        assert_not_installed(&fx, &name);
+
+        // Enter takes the default; the prompt names it.
+        let prompt = if default_yes { "[Y/n]" } else { "[y/N]" };
+        let r = add_at_terminal(&fx, &[&s(&dir)], "\n");
+        assert!(r.stderr().contains(&format!("install {name}? {prompt}")), "{case}: {}", r.stderr());
+        if default_yes {
+            r.assert_ok();
+            assert_eq!(lock_names(&fx).last(), Some(&name), "{case}");
+            continue;
+        }
+        assert_eq!(r.code(), 1, "{case}: {}", r.stderr());
+        assert_not_installed(&fx, &name);
+        add_at_terminal(&fx, &[&s(&dir)], "y\n").assert_ok();
+        let entries = lock(&fx);
+        let e = entries.last().unwrap();
+        assert_eq!((e["name"].as_str(), e["verdict"]["value"].as_str()), (Some(name.as_str()), Some(value)), "{case}");
+        if value == "redundant" {
+            assert_eq!(e["verdict"]["redundant_with"].as_str(), Some(fx.skills[0].as_str()));
+        }
+    }
+    assert_eq!(calls(&fx).len(), 6 * 2 + 4, "one call per add");
+}
+
+#[test]
+fn trust_skips_the_gate_and_records_the_entry_as_trusted() {
+    let (fx, dir) = judged();
+    answer(&fx, Some("Would be refused."), "poor", "irrelevant");
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    assert!(calls(&fx).is_empty());
+    let entries = lock(&fx);
+    let e = entries[0].as_table().unwrap();
+    assert_eq!(e["trusted"].as_bool(), Some(true));
+    assert!(["vetted_at", "for", "try", "verdict"].iter().all(|k| !e.contains_key(*k)), "{e:?}");
+}
+
+#[test]
+fn a_judge_without_a_valid_answer_refuses_the_install() {
+    let (fx, dir) = judged();
+    fs::write(fx.root.join("answer"), "Looks fine to me.\n").unwrap();
+    let r = add(&fx, &[&s(&dir), "--yes", "--force"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(
+        r.stderr().contains("add refused: vetting theirs failed: judge answer dropped after one retry"),
+        "{}",
+        r.stderr()
+    );
+    assert_eq!(calls(&fx).len(), 2, "an invalid answer is retried once");
+    assert_not_installed(&fx, "theirs");
+    assert!(!exists(&store(&fx)));
+    assert!(!exists(&fx.data.join("mazo/mazo.lock")));
+}

@@ -154,6 +154,13 @@ impl Fixture {
         Run(self.run.command(&[], args).current_dir(cwd).output().unwrap())
     }
 
+    /// `mazo args…` in the fixture's root, not yet run.
+    pub fn command(&self, args: &[&str]) -> std::process::Command {
+        let mut cmd = self.run.command(&[], args);
+        cmd.current_dir(&self.root);
+        cmd
+    }
+
     /// `mazo sync --agent pi` must fail with an `ERROR:` before creating the
     /// Pi directory (test_install.py:59-63).
     pub fn assert_rejected_before_writes(&self) {

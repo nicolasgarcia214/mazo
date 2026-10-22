@@ -8,8 +8,8 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::{JUDGE_TIMEOUT, NoAnswer, Reply, STDERR_CHARS, prompted};
-use crate::audit::{Audit, Stage};
-use crate::config::Judge;
+use crate::audit::Stage;
+use crate::config::{Billing, Judge};
 use crate::{Error, Result};
 
 pub struct Http {
@@ -41,7 +41,7 @@ impl Http {
 impl super::Backend for Http {
     /// A connection failure or a non-2xx status stops the run; a reply past
     /// [`JUDGE_TIMEOUT`] or one without a JSON answer is retried.
-    fn call(&self, _a: &Audit, stage: &Stage, _cap: Option<u64>, input: &str) -> Result<Reply> {
+    fn call(&self, _data: &Path, _billing: Billing, stage: &Stage, _cap: Option<u64>, input: &str) -> Result<Reply> {
         let body = json!({"model": self.model, "messages": [{"role": "user", "content": prompted(stage, input)}]});
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(JUDGE_TIMEOUT))

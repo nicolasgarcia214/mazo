@@ -13,6 +13,7 @@ mod judges;
 mod select;
 mod session;
 mod skill;
+mod vet;
 
 use std::collections::HashSet;
 use std::io::IsTerminal;
@@ -35,6 +36,7 @@ pub use skill::{
     Cited, Example, Improvement, Rate, Rates, SKILL_PROMPT, SKILL_SCHEMA, SkillRecord, SkillReport, latest,
 };
 use skill::{session_records, synthesize};
+pub use vet::{Quality, VET_PROMPT, VET_SCHEMA, Vet, VetVerdict, Worth, vet, vet_input};
 
 use crate::Result;
 use crate::config::{Billing, Judge, JudgeAgent};
@@ -44,6 +46,10 @@ use crate::render::{self, Align};
 
 /// One cent in micro-dollars: no call starts with a smaller cap.
 pub const CENT: u64 = 10_000;
+
+/// A run's budget when `--max-budget-usd` is not given, for a judge that
+/// reports its cost: one dollar.
+pub const DEFAULT_BUDGET: u64 = 1_000_000;
 
 /// The fields of an `audits.jsonl` line that later runs read back.
 #[derive(Deserialize)]
@@ -218,11 +224,49 @@ pub struct Audit<'a> {
 }
 
 impl Audit<'_> {
+    /// How this run calls its judge.
+    pub fn caller(&self) -> Caller<'_> {
+        Caller { data: self.data, judge: self.judge, backend: self.backend }
+    }
+
+    fn usd(&self, micros: u64) -> String {
+        self.caller().usd(micros)
+    }
+}
+
+/// What a judge call needs, and all it needs: the data directory its scratch
+/// lives under, the `[judge]` config and the backend. Audit and vet both call
+/// through it.
+#[derive(Clone, Copy)]
+pub struct Caller<'a> {
+    pub data: &'a Path,
+    pub judge: &'a Judge,
+    pub backend: &'a dyn Backend,
+}
+
+impl Caller<'_> {
     /// A dollar figure; under `subscription` it is Claude's client-side
     /// estimate, not a charge, and says so.
     fn usd(&self, micros: u64) -> String {
         let label = if self.judge.billing == Billing::Subscription { " API-equivalent" } else { "" };
         format!("${}{label}", cents(micros))
+    }
+
+    /// Under `subscription`, the judge's login check, made once before a run's
+    /// first call; under `api`, nothing is checked. A failed check is a usage
+    /// error: no judge was started.
+    pub fn login(&self) -> Result<()> {
+        match self.judge.billing {
+            Billing::Subscription => self.backend.login(self.data),
+            Billing::Api => Ok(()),
+        }
+    }
+
+    /// Under `subscription`, names `billing = "api"` after a judge failure.
+    fn hint(&self) {
+        if self.judge.billing == Billing::Subscription {
+            eprintln!("hint: to judge with an API key instead, set billing = \"api\" under [judge]");
+        }
     }
 }
 
@@ -274,7 +318,7 @@ enum Ruling<T> {
 /// `spent`, and starts only on a cap of a cent or more; `progress` names it
 /// while stderr is a terminal.
 fn judge<T>(
-    a: &Audit,
+    c: &Caller,
     stage: &Stage,
     limit: Option<u64>,
     spent: &mut u64,
@@ -290,10 +334,10 @@ fn judge<T>(
             return Ok(Ruling::Unfunded(why));
         }
         if std::io::stderr().is_terminal() {
-            let cap = cap.map(|cap| format!(" (cap {})", a.usd(cap))).unwrap_or_default();
+            let cap = cap.map(|cap| format!(" (cap {})", c.usd(cap))).unwrap_or_default();
             eprintln!("{progress}{cap}");
         }
-        let reply = a.backend.call(a, stage, cap, &retry(input, rejected.as_deref()))?;
+        let reply = c.backend.call(c.data, c.judge.billing, stage, cap, &retry(input, rejected.as_deref()))?;
         *spent += reply.cost.unwrap_or_default();
         cost = reply.cost.map(|r| r + cost.unwrap_or_default());
         match reply.answer.map(&check) {
@@ -334,7 +378,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
     for (i, c) in candidates.iter().enumerate() {
         let (skill, input) = input(a.source, c)?;
         let progress = format!("judging {}/{} {}", i + 1, candidates.len(), c.event.session);
-        match judge(a, &SESSION, pool, &mut run.spent, &input, &progress, |v| validate(v, &c.condensed))? {
+        match judge(&a.caller(), &SESSION, pool, &mut run.spent, &input, &progress, |v| validate(v, &c.condensed))? {
             Ruling::Valid(verdict, cost) => {
                 let record = SessionRecord {
                     v: 1,
@@ -364,7 +408,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
             }
             Ruling::Stopped(why) => {
                 eprintln!("ERROR: {}: {why}", c.event.session);
-                hint(a);
+                a.caller().hint();
                 run.left = &candidates[i..];
                 run.stopped = true;
                 break;
@@ -372,23 +416,6 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
         }
     }
     Ok(run)
-}
-
-/// Under `subscription`, the judge's login check, made once before a run's
-/// first call; under `api`, nothing is checked. A failed check is a usage
-/// error: no judge was started.
-pub fn login(a: &Audit) -> Result<()> {
-    match a.judge.billing {
-        Billing::Subscription => a.backend.login(a.data),
-        Billing::Api => Ok(()),
-    }
-}
-
-/// Under `subscription`, names `billing = "api"` after a judge failure.
-fn hint(a: &Audit) {
-    if a.judge.billing == Billing::Subscription {
-        eprintln!("hint: to judge with an API key instead, set billing = \"api\" under [judge]");
-    }
 }
 
 impl Run<'_> {

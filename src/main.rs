@@ -159,6 +159,12 @@ enum Cmd {
         /// Install without vetting.
         #[arg(long)]
         trust: bool,
+        /// Accept the vetted skill without asking; required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+        /// Install even when the judge reports a security issue.
+        #[arg(long)]
+        force: bool,
     },
     /// Re-clone git-sourced store skills from trusted sources and install what changed.
     Update {
@@ -254,8 +260,10 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         }
         Cmd::Retire { name, force } => cmd_retire(&cfg, &inv, &data, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
-        Cmd::Add { source, name, skill, trust } => {
-            store::add(&cfg, &inv, &data, &source, name.as_deref(), skill.as_deref(), trust)
+        Cmd::Add { source, name, skill, trust, yes, force } => {
+            let args =
+                store::Add { source: &source, rename: name.as_deref(), pick: skill.as_deref(), trust, yes, force };
+            store::add(&cfg, &inv, &data, &args)
         }
         Cmd::Update { names } => store::update(&cfg, &inv, &data, &names),
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
@@ -308,7 +316,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
     // A judge that reports no dollar figure has `--limit` as its only cap.
     let backend = audit::backend(judge, &cfg.homes)?;
     let budget = match (backend.budget_flag(), budget) {
-        (Some(_), budget) => Some(budget.unwrap_or(1_000_000)),
+        (Some(_), budget) => Some(budget.unwrap_or(audit::DEFAULT_BUDGET)),
         (None, Some(_)) => {
             return Err(Error::Usage(format!(
                 "--max-budget-usd needs a judge that reports its cost; the {} judge is capped by --limit",
@@ -339,7 +347,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
         }
         // A failed login check is a usage error: no judge was started.
         if audit::calls(&a, &candidates, args.resynth)? {
-            audit::login(&a)?;
+            a.caller().login()?;
         }
         let run = audit::run(&a, &candidates, args.resynth)?;
         print!("{}", if args.json { run.json(&a) } else { run.text(&a) });
