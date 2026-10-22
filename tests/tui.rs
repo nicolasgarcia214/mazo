@@ -290,7 +290,7 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
     let mut app = app(&input);
     let screen = text(&mut app, 250, 30);
     let header = &screen[1];
-    assert!(header.contains(" sess slash tool typed read ref agents "), "{screen:#?}");
+    assert!(header.contains(" sess slash tool typed read ref agents ctx "), "{screen:#?}");
     let cells: Vec<Vec<String>> = report::usage_table(&input, &UsageArgs::new(Since::Days(30)))
         .rows
         .iter()
@@ -301,8 +301,8 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
     let skill = header.find(" sess ").unwrap() + 1 - 3;
     // The side card takes 100 of the 250 columns.
     let audit = 150 - header.find("audit").unwrap();
-    let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(11).max(5));
-    assert!(skill_spare > 5 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
+    let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(12).max(5));
+    assert!(skill_spare > 0 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
 
     let buf = buffer(&mut app, 250, 30);
     let selected = mazo::theme::selected().bg.unwrap();
@@ -334,12 +334,13 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
     assert_eq!(
         seen,
         [
-            "sess slash tool typed read ref agents last 30d grade audit",
-            "sess slash tool typed read ref agents last grade audit",
-            "sess slash tool read ref agents last grade audit",
-            "sess slash tool read agents last grade audit",
-            "sess slash tool agents last grade audit",
-            "sess via agents last grade audit",
+            "sess slash tool typed read ref agents ctx last 30d grade audit",
+            "sess slash tool typed read ref agents ctx last grade audit",
+            "sess slash tool read ref agents ctx last grade audit",
+            "sess slash tool read agents ctx last grade audit",
+            "sess slash tool agents ctx last grade audit",
+            "sess via agents ctx last grade audit",
+            "sess via ctx last grade audit",
             "sess via last grade audit",
         ]
     );
@@ -353,7 +354,7 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
         .iter()
         .map(|r| {
             let c = report::usage_cells(&input, r, false);
-            let rest = [&c[1], &format!("{}/{}", c[2], c[3]), &c[8], &c[10], &c[11]];
+            let rest = [&c[1], &format!("{}/{}", c[2], c[3]), &c[9], &c[11], &c[12]];
             (c[0].clone(), rest.iter().flat_map(|s| s.split_whitespace()).map(String::from).collect())
         })
         .collect();
@@ -539,6 +540,10 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
 
     let at = |heading: &str| unused.iter().position(|l| l == heading).unwrap_or_else(|| panic!("no {heading}"));
     assert!(at("Columns") < at("Marks and glyphs") && at("Marks and glyphs") < at("FAQ"));
+    let marks = &unused[at("Marks and glyphs")..at("FAQ")];
+    for glyph in ["●  name and description", "◐  name only", "○  explicit invocation only", "×  off"] {
+        assert!(marks.iter().any(|l| l.starts_with(glyph)), "{glyph}: {marks:#?}");
+    }
     let faq = unused[at("FAQ")..].join("\n");
     for answer in [
         "The w window",
@@ -553,6 +558,7 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
         "grade is a static review of the SKILL.md",
         "retro judges one run in context, right after it ran.",
         "audit judges many past runs offline and takes the retros as input",
+        "It stops implicit selection, so Codex never loads the skill on its own, but Codex still lists its name and description",
     ] {
         assert!(faq.contains(answer), "{answer}: {faq}");
     }

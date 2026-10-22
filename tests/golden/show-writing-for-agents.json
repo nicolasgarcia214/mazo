@@ -13,6 +13,10 @@
     }
   ],
   "content_hash": "ec569061a8db94f03793d35c30a438d936dcbe86",
+  "ctx": {
+    "claude": "on",
+    "codex": "on"
+  },
   "description": "Writes agent-facing documents. Prose polish is the unslop skill.",
   "events": [
     {

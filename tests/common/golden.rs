@@ -10,7 +10,8 @@ use super::{NOW, World, ago, event, git, grade, report_repo, report_world, skill
 /// `unslop` given every optional card field: two grades, one recording no
 /// hash and one an old one, then uncommitted changes, two retros, a default
 /// prompt, and a user prompt in the transcript `<skills>/t.jsonl` for a real
-/// example. `writing-for-agents` gets a grade of its current content.
+/// example. `writing-for-agents` gets a grade of its current content. The `claude`
+/// home's settings set `unslop` name-only.
 pub fn fill(src: &Path) {
     let evals = src.join(".evals");
     grade(&evals, "unslop", "2026-02-01", "6", None);
@@ -32,6 +33,7 @@ pub fn fill(src: &Path) {
     let prompt =
         serde_json::json!({"type": "user", "message": {"role": "user", "content": "Tighten the release notes."}});
     write(&src.join("t.jsonl"), &format!("{prompt}\n"));
+    write(&src.join("claude/settings.json"), r#"{"skillOverrides": {"unslop": "name-only"}}"#);
 }
 
 /// Every channel, both agents, a subagent, a probe, another origin, an

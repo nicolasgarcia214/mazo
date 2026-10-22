@@ -11,6 +11,7 @@ pub mod adapters;
 pub mod audit;
 pub mod classify;
 pub mod config;
+pub mod ctx;
 pub mod evals;
 pub mod examples;
 pub mod help;

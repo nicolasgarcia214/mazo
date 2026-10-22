@@ -102,6 +102,10 @@
     }
   ],
   "content_hash": "55bc33ceeaff50b1d7d6c643b5b06f102beac490",
+  "ctx": {
+    "claude": "name-only",
+    "codex": "on"
+  },
   "description": "Removes slop from prose.",
   "events": [
     {

@@ -351,6 +351,7 @@ const NARROWING: &[Narrow] = &[
     Narrow::Drop("read"),
     Narrow::Fold("slash", "tool", "via"),
     Narrow::Drop("agents"),
+    Narrow::Drop("ctx"),
     Narrow::Cut("notes"),
     Narrow::Cut("skill"),
     Narrow::Cut("audit"),

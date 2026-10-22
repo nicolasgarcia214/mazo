@@ -3,7 +3,7 @@
 //! `mazo usage` and `mazo unused`, and the HTML report's legend.
 
 /// What each column of the usage table means, in its order.
-pub const USAGE_COLUMNS: [(&str, &str); 12] = [
+pub const USAGE_COLUMNS: [(&str, &str); 13] = [
     ("skill", "the skill's name; (project) marks a project skill"),
     ("sess", "distinct sessions with a strong load (slash, tool or typed) in the window"),
     ("slash", "loads the user invoked: /name in Claude, $name in Codex, a <skill> block in Pi"),
@@ -12,6 +12,7 @@ pub const USAGE_COLUMNS: [(&str, &str); 12] = [
     ("read", "reads of its SKILL.md, a weak load"),
     ("ref", "reads of another Markdown file in its directory, a weak load"),
     ("agents", "the agents that loaded it: C Claude, X Codex, P Pi"),
+    ("ctx", "what each agent it is linked into keeps of it in context: an agent letter, then its glyph"),
     ("last", "its last strong load: today or Nd ago"),
     ("30d", "its strong loads per day over the last 30 days, · for none"),
     ("grade", "the latest /grade score, then its stale mark"),
@@ -37,8 +38,16 @@ pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
 
 /// The marks and glyphs in the cells, what each means, and how the HTML
 /// report says it when it draws the mark otherwise.
-pub const MARKS: [(&str, &str, Option<&str>); 4] = [
+pub const MARKS: [(&str, &str, Option<&str>); 8] = [
     ("agents", "C Claude, X Codex, P Pi", None),
+    ("●", "name and description in context: Claude on, every Codex skill, Pi by default", None),
+    ("◐", "name only in context: Claude name-only", None),
+    (
+        "○",
+        "explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation",
+        None,
+    ),
+    ("×", "off: Claude off", None),
     ("·", "no events that day", Some("a grey tick for a day with no events")),
     ("stale", "the skill changed since the grade", None),
     ("(project)", "a project skill, counted apart", None),
@@ -83,7 +92,7 @@ pub const FAQ: [(&str, &[&str]); 6] = [
     (
         "Why does Codex's allow_implicit_invocation: false save no context?",
         &[
-            "Codex still lists the skill's name and description in every prompt; the policy only stops Codex loading it on its own.",
+            "It stops implicit selection, so Codex never loads the skill on its own, but Codex still lists its name and description in every prompt: its ctx glyph stays ●.",
         ],
     ),
 ];
