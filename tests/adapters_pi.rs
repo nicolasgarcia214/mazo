@@ -26,7 +26,7 @@ fn home(path: &Path) -> Home {
 fn roots() -> SkillRoots {
     let known = ["blast-radius", "goal-investigate", "goal-smart", "grade", "unslop", "writing-for-agents"];
     SkillRoots {
-        source: SOURCE.into(),
+        source: Some(SOURCE.into()),
         home_skills: vec![PI_SKILLS.into()],
         known: known.iter().map(|s| s.to_string()).collect(),
     }

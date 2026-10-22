@@ -75,7 +75,7 @@ impl World {
     /// `<source>/<name>`, covered from `first` to NOW, under the default policy.
     pub fn new(source: &Path, homes: &[(&str, Agent, &str)]) -> World {
         let cfg = Config {
-            source: source.into(),
+            source: Some(source.into()),
             loose: vec![],
             trusted: vec![],
             homes: homes.iter().map(|&(name, agent, _)| home(name, agent, &source.join(name))).collect(),
@@ -228,7 +228,7 @@ pub fn home(name: &str, agent: Agent, path: &Path) -> Home {
 /// and every home skills dir in `roots`) and parses the chunk with its header.
 pub fn parse_file(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path, cursor: Option<&Cursor>) -> (Parsed, Cursor) {
     let extra: Vec<String> =
-        std::iter::once(&roots.source).chain(&roots.home_skills).map(|p| p.to_string_lossy().into_owned()).collect();
+        roots.source.iter().chain(&roots.home_skills).map(|p| p.to_string_lossy().into_owned()).collect();
     let chunk = tail::read(path, cursor, &Prefilter::new(extra.iter().map(String::as_str))).unwrap();
     let header = tail::first_line(path).unwrap();
     let parsed = adapter.parse(roots, path, header.as_deref(), &chunk);

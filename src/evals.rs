@@ -59,7 +59,7 @@ pub struct Evals {
 
 /// The evaluation artifacts of one skill under the inventory's source.
 pub fn load(inv: &Inventory, skill: &str) -> Evals {
-    let source = &inv.source;
+    let Some(source) = &inv.source else { return Evals { grades: Vec::new(), retros: Vec::new() } };
     let history = inv.history.as_ref();
     let wip = history.is_some_and(|h| h.wip(skill));
     // Outside a git worktree nothing comes after a grade.

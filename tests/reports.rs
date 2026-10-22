@@ -181,7 +181,7 @@ fn a_store_skill_is_new_from_its_install_date() {
     }
     write(&data.path().join("mazo.lock"), &lock);
     let mut w = report_world(repo.path());
-    w.inv = mazo::store::inventory(repo.path(), data.path()).unwrap();
+    w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
     let v: Value = serde_json::from_str(&report::unused(&w.input(&[]), Since::Days(60), true, false)).unwrap();
     let status: BTreeMap<&str, &str> = v["skills"]
         .as_array()

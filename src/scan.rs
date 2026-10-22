@@ -85,9 +85,9 @@ pub fn scan_with<'a>(
     let mut cursors: Cursors = if reparse { Cursors::new() } else { ledger::read_json(&data.join("cursors.json"))? };
     let mut coverage = ledger::load_coverage(data)?;
     let roots = roots(cfg, inv);
-    let source = cfg.source.to_string_lossy().into_owned();
-    let home_skills: Vec<String> = roots.home_skills.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-    let filter = Prefilter::new(std::iter::once(source.as_str()).chain(home_skills.iter().map(String::as_str)));
+    let dirs: Vec<String> =
+        cfg.source.iter().chain(&roots.home_skills).map(|p| p.to_string_lossy().into_owned()).collect();
+    let filter = Prefilter::new(dirs.iter().map(String::as_str));
 
     let mut progress = Progress { tty: std::io::stderr().is_terminal(), start: Instant::now(), shown: false };
     let mut report = ScanReport::default();

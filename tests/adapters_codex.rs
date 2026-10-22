@@ -25,7 +25,7 @@ fn fixtures() -> PathBuf {
 
 fn roots() -> SkillRoots {
     SkillRoots {
-        source: SOURCE.into(),
+        source: Some(SOURCE.into()),
         home_skills: vec![CODEX_SKILLS.into(), "/home/nicolas/.claude/skills".into()],
         known: ["resolve-issue", "triage-finding", "unslop", "writing-for-agents"].map(String::from).into(),
     }
@@ -180,7 +180,7 @@ impl ForkMachine {
             .into();
         let skills: BTreeSet<String> = ["argus".to_string()].into();
         let inv = Inventory {
-            source: source.clone(),
+            source: Some(source.clone()),
             known: skills.clone(),
             skills,
             worktree: None,
@@ -188,7 +188,7 @@ impl ForkMachine {
             ..Default::default()
         };
         let cfg = Config {
-            source,
+            source: Some(source),
             loose: vec![],
             trusted: vec![],
             homes: vec![home(&codex_home)],

@@ -10,8 +10,8 @@ use crate::history::History;
 
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
-    pub source: PathBuf,
-    /// The directories skills are read from: the source, then the store.
+    pub source: Option<PathBuf>,
+    /// The directories skills are read from: the source, if any, then the store.
     pub roots: Vec<PathBuf>,
     /// Non-hidden child directories of a root that contain `SKILL.md`.
     pub skills: BTreeSet<String>,
@@ -29,15 +29,15 @@ pub struct Inventory {
 
 impl Inventory {
     pub fn load(source: &Path) -> Result<Inventory> {
-        Inventory::load_roots(source, &[source])
+        Inventory::load_roots(Some(source), &[source])
     }
 
     /// The inventory over every root; `source` keeps the history and reports.
-    pub fn load_roots(source: &Path, roots: &[&Path]) -> Result<Inventory> {
+    pub fn load_roots(source: Option<&Path>, roots: &[&Path]) -> Result<Inventory> {
         let mut origins: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
         for root in roots {
             // The store does not exist before the first `add`.
-            if *root != source && !root.exists() {
+            if Some(*root) != source && !root.exists() {
                 continue;
             }
             for name in canonical_skills(root)? {
@@ -45,18 +45,27 @@ impl Inventory {
             }
         }
         let skills: BTreeSet<String> = origins.keys().cloned().collect();
-        let worktree = git(source, &["rev-parse", "--show-toplevel"]).map(|s| PathBuf::from(s.trim()));
-        let history = worktree.as_deref().and_then(|w| History::load(source, w));
+        let worktree = source.and_then(|s| git(s, &["rev-parse", "--show-toplevel"])).map(|s| PathBuf::from(s.trim()));
+        let history = source.zip(worktree.as_deref()).and_then(|(s, w)| History::load(s, w));
         let mut known = skills.clone();
         known.extend(history.iter().flat_map(History::skill_names));
         let roots = roots.iter().map(|r| r.to_path_buf()).collect();
         let installed = BTreeMap::new();
-        Ok(Inventory { source: source.to_path_buf(), roots, skills, origins, known, worktree, history, installed })
+        Ok(Inventory {
+            source: source.map(Path::to_path_buf),
+            roots,
+            skills,
+            origins,
+            known,
+            worktree,
+            history,
+            installed,
+        })
     }
 
-    /// The root a skill is read from; the source for a name in no root.
-    pub fn root(&self, name: &str) -> &Path {
-        self.origins.get(name).and_then(|r| r.first()).unwrap_or(&self.source)
+    /// The root a skill is read from; `None` for a name in no root.
+    pub fn root(&self, name: &str) -> Option<&Path> {
+        self.origins.get(name).and_then(|r| r.first()).map(PathBuf::as_path)
     }
 }
 
@@ -90,8 +99,8 @@ pub type Graph = BTreeMap<String, BTreeSet<String>>;
 pub fn fan_in(inv: &Inventory) -> Graph {
     let skills = &inv.skills;
     let mut graph = Graph::new();
-    for a in skills {
-        let text = citing_text(&inv.root(a).join(a));
+    for (a, roots) in &inv.origins {
+        let text = citing_text(&roots[0].join(a));
         let cited = skills.iter().filter(|b| *b != a).filter(|b| {
             text.contains(&format!("the {b} skill"))
                 || text.match_indices(&format!("owned by {b}")).any(|(i, m)| !text[i + m.len()..].starts_with(word))
@@ -108,8 +117,8 @@ pub fn fan_in(inv: &Inventory) -> Graph {
 pub fn mentions(inv: &Inventory, edges: &Graph) -> Graph {
     let skills = &inv.skills;
     let mut graph = Graph::new();
-    for a in skills {
-        let text = citing_text(&inv.root(a).join(a));
+    for (a, roots) in &inv.origins {
+        let text = citing_text(&roots[0].join(a));
         let named = skills
             .iter()
             .filter(|b| *b != a && !edges.get(a).is_some_and(|e| e.contains(*b)))

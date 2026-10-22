@@ -228,7 +228,10 @@ fn a_missing_config_exits_2_naming_the_discovered_path() {
         for cmd in ["status", "sync", "usage", "prune"] {
             let o = f.mazo(&env_refs(&env), &[cmd]);
             assert_eq!(o.status.code(), Some(2), "{cmd} {env:?}");
-            let want = format!("ERROR: no config at {}; run mazo init --source <skills dir>\n", path.display());
+            let want = format!(
+                "ERROR: no config at {}; run mazo init (--source <skills dir> for your own skills)\n",
+                path.display()
+            );
             assert_eq!(stderr(&o), want, "{cmd} {env:?}");
         }
     }

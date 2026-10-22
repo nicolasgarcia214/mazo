@@ -258,7 +258,7 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("SKILL.md"), "x").unwrap();
         }
-        let inv = crate::store::inventory(&source, &data).unwrap();
+        let inv = crate::store::inventory(Some(&source), &data).unwrap();
         let home =
             Home { name: "claude".into(), agent: Agent::Claude, path: tmp.join("home"), links: Default::default() };
         let homes = [home.clone()];

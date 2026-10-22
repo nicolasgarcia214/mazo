@@ -74,7 +74,7 @@ pub struct Raw {
 /// Paths that decide whether a file is a skill file.
 #[derive(Debug, Clone, Default)]
 pub struct SkillRoots {
-    pub source: PathBuf,
+    pub source: Option<PathBuf>,
     pub home_skills: Vec<PathBuf>,
     pub known: BTreeSet<String>,
 }
@@ -102,7 +102,7 @@ impl SkillRoots {
             let skill = abs.parent()?.file_name()?.to_str()?.to_string();
             return Some(SkillFile { skill, channel: Channel::Read, path: abs_str });
         }
-        for root in std::iter::once(&self.source).chain(&self.home_skills) {
+        for root in self.source.iter().chain(&self.home_skills) {
             let Ok(rest) = abs.strip_prefix(root) else { continue };
             let mut parts = rest.components();
             let name = parts.next()?.as_os_str().to_str()?;
@@ -383,7 +383,7 @@ mod tests {
         std::fs::create_dir_all(src.join("grade/references")).unwrap();
         std::fs::write(src.join("grade/SKILL.md"), "x").unwrap();
         std::fs::create_dir_all(src.join(".grades/grade")).unwrap();
-        let roots = SkillRoots { source: src.clone(), home_skills: vec![], known: BTreeSet::new() };
+        let roots = SkillRoots { source: Some(src.clone()), home_skills: vec![], known: BTreeSet::new() };
         let s = src.to_str().unwrap();
         let r = roots.classify("SKILL.md", Some(&format!("{s}/grade"))).unwrap();
         assert_eq!((r.skill.as_str(), r.channel), ("grade", Channel::Read));

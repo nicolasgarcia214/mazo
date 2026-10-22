@@ -28,10 +28,11 @@ pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Resu
         }
     });
     checked.map_err(|e| Error::Usage(format!("new {name}: {e}")))?;
-    if inv.root(name) != cfg.source {
-        return Err(format!("new refused: {} already exists", inv.root(name).join(name).display()).into());
+    let source = cfg.need_source("new")?;
+    if let Some(root) = inv.root(name).filter(|r| *r != source) {
+        return Err(format!("new refused: {} already exists", root.join(name).display()).into());
     }
-    let dir = cfg.source.join(name);
+    let dir = source.join(name);
     match std::fs::create_dir(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(format!("new refused: {} already exists", dir.display()).into());
@@ -241,13 +242,15 @@ const RETIRE_DAYS: u32 = 30;
 /// mv` when tracked) and applies that plan; or, for a store skill, applies
 /// that plan, drops its lockfile entry and deletes `<store>/<name>`. Never commits.
 pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<ExitCode> {
-    if !inv.skills.contains(name) {
+    let Some(root) = inv.root(name) else {
+        // Only a store skill retires without a source.
+        cfg.need_source(&format!("retire {name}"))?;
         return Err(Error::Usage(format!("{name} is not a canonical skill")));
-    }
-    let from = inv.root(name).join(name);
-    let in_source = inv.root(name) == cfg.source;
-    let to = cfg.source.join(".archive").join(name);
-    if in_source && to.symlink_metadata().is_ok() {
+    };
+    let from = root.join(name);
+    // A source skill is archived; a store skill is removed.
+    let to = (cfg.source.as_deref() == Some(root)).then(|| root.join(".archive").join(name));
+    if let Some(to) = to.as_ref().filter(|t| t.symlink_metadata().is_ok()) {
         return Err(format!("retire refused: {} already exists", to.display()).into());
     }
     let data = ledger::data_dir()?;
@@ -268,7 +271,7 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
         }
     }
     // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
-    let _lock = if in_source { None } else { Some(ledger::lock(&data)?) };
+    let _lock = if to.is_some() { None } else { Some(ledger::lock(&data)?) };
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
@@ -282,14 +285,13 @@ pub fn retire(cfg: &Config, inv: &Inventory, name: &str, force: bool) -> Result<
         return Ok(ExitCode::from(1));
     }
 
-    if in_source {
-        let archive = cfg.source.join(".archive");
+    if let Some(to) = &to {
+        let archive = root.join(".archive");
         std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
-        if git(&cfg.source, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
-            git(&cfg.source, &["mv", "--", name, &format!(".archive/{name}")])
-                .ok_or(format!("git mv {name} failed"))?;
+        if git(root, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
+            git(root, &["mv", "--", name, &format!(".archive/{name}")]).ok_or(format!("git mv {name} failed"))?;
         } else {
-            std::fs::rename(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+            std::fs::rename(&from, to).map_err(|e| format!("{}: {e}", from.display()))?;
         }
         println!("archived  {} -> {}", from.display(), to.display());
         for line in links::apply(&plan)? {

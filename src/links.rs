@@ -88,8 +88,8 @@ fn targets(
     let (single, shared): (Vec<_>, Vec<_>) = inv.origins.iter().partition(|(_, roots)| roots.len() == 1);
     let mut common: Vec<(String, PathBuf)> =
         single.iter().map(|(name, roots)| (name.to_string(), roots[0].join(name))).collect();
-    for loose in &cfg.loose {
-        let src = cfg.source.join(loose);
+    // `load` refuses `loose` and `links` without a source.
+    for (loose, src) in cfg.source.iter().flat_map(|s| cfg.loose.iter().map(move |l| (l, s.join(l)))) {
         if src.is_file() {
             common.push((loose.clone(), src));
         }
@@ -106,9 +106,8 @@ fn targets(
             ));
         }
         out.push(Target { home: home.name.clone(), dir: home.skills_dir(), entries: common.clone() });
-        for (key, value) in &home.links {
+        for (key, src) in cfg.source.iter().flat_map(|s| home.links.iter().map(move |(k, v)| (k, s.join(v)))) {
             let path = home.path.join(key);
-            let src = cfg.source.join(value);
             if !present(&src) {
                 conflicts.push((home.name.clone(), format!("ERROR: {} is missing", src.display())));
                 continue;
@@ -305,14 +304,14 @@ mod tests {
         let home =
             Home { name: "claude".into(), agent: Agent::Claude, path: tmp.join("home"), links: Default::default() };
         let cfg = Config {
-            source: source.clone(),
+            source: Some(source.clone()),
             loose: vec![],
             trusted: vec![],
             homes: vec![home],
             policy: Default::default(),
             judge: None,
         };
-        let inv = Inventory::load_roots(&source, &[&source, &store]).unwrap();
+        let inv = Inventory::load_roots(Some(&source), &[&source, &store]).unwrap();
         (cfg, inv)
     }
 
