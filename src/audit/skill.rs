@@ -301,7 +301,7 @@ pub(super) fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
         Ruling::Dropped(why) | Ruling::Unfunded(Some(why)) => Synthesis::Dropped(why),
         Ruling::Unfunded(None) => Synthesis::Skipped,
         Ruling::Stopped(why) => {
-            eprintln!("ERROR: skill report: {why}");
+            a.caller().note(&format!("ERROR: skill report: {why}"));
             a.caller().hint();
             Synthesis::Stopped(why)
         }

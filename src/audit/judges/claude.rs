@@ -13,7 +13,7 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 
 use super::{NoAnswer, Reply, Subprocess, run_dir, scrub, stop, wait};
-use crate::audit::{Stage, parse_usd};
+use crate::audit::{CANCELLED, Stage, parse_usd};
 use crate::config::Billing;
 use crate::{Error, Result};
 
@@ -65,9 +65,9 @@ impl Subprocess for Claude {
 
     /// `claude auth status`, in the environment and the kind of fresh empty
     /// directory the calls get, must report a claude.ai or OAuth-token login.
-    fn login(&self, data: &Path) -> Result<()> {
+    fn login(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<()> {
         let (_, dir) = run_dir(data)?;
-        let checked = claude_login(OsStr::new("claude"), &dir, AUTH_TIMEOUT);
+        let checked = claude_login(OsStr::new("claude"), &dir, AUTH_TIMEOUT, cancel);
         fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         checked.map_err(Error::Usage)
     }
@@ -105,14 +105,23 @@ impl Subprocess for Claude {
 }
 
 /// `program auth status` run in `dir` without the billed variables, killed
-/// after `limit`: Ok for a claude.ai or OAuth-token login.
-fn claude_login(program: &OsStr, dir: &Path, limit: Duration) -> std::result::Result<(), String> {
+/// after `limit` or once `cancel` turns true: Ok for a claude.ai or
+/// OAuth-token login.
+fn claude_login(
+    program: &OsStr,
+    dir: &Path,
+    limit: Duration,
+    cancel: &dyn Fn() -> bool,
+) -> std::result::Result<(), String> {
     let mut cmd = Command::new(program);
     cmd.args(["auth", "status"]).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     scrub(&mut cmd, Billing::Subscription);
     let failed = |e: std::io::Error| format!("claude auth status: {e}");
     let check = "check it with claude auth status, or set billing = \"api\" under [judge]";
-    let Some(out) = wait(cmd.spawn().map_err(failed)?, None, limit).map_err(failed)? else {
+    let Some(out) = wait(cmd.spawn().map_err(failed)?, None, limit, cancel).map_err(failed)? else {
+        if cancel() {
+            return Err(CANCELLED.into());
+        }
         let secs = limit.as_secs();
         return Err(format!("claude auth status gave no answer within {secs} seconds; {check}"));
     };
@@ -132,13 +141,17 @@ mod tests {
 
     use super::*;
 
-    /// `claude_login` on a stub whose `auth status` runs `script`.
+    /// `claude_login` on a stub whose `auth status` runs `script`, never cancelled.
     fn login_with(script: &str, limit: Duration) -> std::result::Result<(), String> {
+        cancelled_login(script, limit, &|| false)
+    }
+
+    fn cancelled_login(script: &str, limit: Duration, cancel: &dyn Fn() -> bool) -> std::result::Result<(), String> {
         let dir = tempfile::tempdir().unwrap();
         let stub = dir.path().join("claude");
         fs::write(&stub, format!("#!/bin/sh\n{script}")).unwrap();
         Command::new("chmod").arg("+x").arg(&stub).status().unwrap();
-        claude_login(stub.as_os_str(), dir.path(), limit)
+        claude_login(stub.as_os_str(), dir.path(), limit, cancel)
     }
 
     #[test]
@@ -154,5 +167,17 @@ mod tests {
             assert!(err.starts_with("could not read the Claude judge's login from claude auth status ("), "{err}");
             assert!(err.ends_with("check it with claude auth status, or set billing = \"api\" under [judge]"), "{err}");
         }
+    }
+
+    #[test]
+    fn a_cancelled_login_check_kills_its_check_at_once() {
+        let pid = tempfile::NamedTempFile::new().unwrap();
+        let started = Instant::now();
+        let script = format!("echo $$ > {}\nexec sleep 600\n", pid.path().display());
+        let pid = pid.path().to_path_buf();
+        let written = move || fs::read_to_string(&pid).is_ok_and(|p| !p.is_empty());
+        let err = cancelled_login(&script, AUTH_TIMEOUT, &written).unwrap_err();
+        assert_eq!(err, CANCELLED);
+        assert!(started.elapsed() < Duration::from_secs(5), "the check waited out its stub");
     }
 }

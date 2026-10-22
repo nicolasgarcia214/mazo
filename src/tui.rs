@@ -1,10 +1,15 @@
 //! The TUI of bare `mazo`: the usage table, the unused list and one skill's
 //! card, rendered from the typed report model over a finished scan. Its
-//! actions, `retire` and `sync`, each ask y/N first and run the CLI command's
-//! own code path; the data is re-read after each.
+//! actions, `retire`, `sync` and `audit`, each ask y/N first and run the CLI
+//! command's own code path; the data is re-read after each. An audit runs on
+//! a background thread, one at a time, and reports in the job pane.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use clap::ValueEnum;
 use ratatui::Frame;
@@ -27,8 +32,15 @@ use crate::store;
 /// The windows `w` cycles through.
 const WINDOWS: [Since; 3] = [Since::Days(30), Since::Days(60), Since::All];
 
+/// The most lines the job pane shows: its last ones.
+const PANE_LINES: usize = 6;
+
+/// How long quitting waits for a cancelled job: longer than a judge has to
+/// exit on SIGTERM before it is killed.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+
 /// The keys, as the footer lists them.
-const KEYS: [&str; 12] = [
+const KEYS: [&str; 13] = [
     "↑↓←→/hjkl move",
     "Enter card",
     "Esc back",
@@ -40,6 +52,7 @@ const KEYS: [&str; 12] = [
     "A authoring",
     "r retire",
     "s sync",
+    "x audit",
     "q quit",
 ];
 
@@ -62,7 +75,9 @@ pub enum Screen {
     Card,
 }
 
-/// What an [`Input`] borrows, owned, so an action can re-read it.
+/// What an [`Input`] borrows, owned, so an action can re-read it and a job
+/// can take a copy.
+#[derive(Clone)]
 struct Data {
     cfg: Config,
     inv: Inventory,
@@ -100,18 +115,39 @@ impl Data {
     }
 }
 
-/// What `y` runs in a dialog.
+/// A change `y` applies at once, through its CLI command's code path.
 enum Act {
     Retire(String),
     /// The plan the dialog shows, applied as shown.
     Sync(Plan),
 }
 
-/// Lines over the screen that take the next key: `y` runs `act`, any other
+/// What `y` does in a dialog.
+enum Ask {
+    Act(Act),
+    /// Starts the job.
+    Audit(String),
+    /// Stops the running job and quits.
+    Quit,
+}
+
+/// A background audit and what its pane shows.
+struct Job {
+    skill: String,
+    /// What the run reported, then what `mazo audit` prints.
+    lines: Vec<String>,
+    rx: mpsc::Receiver<String>,
+    cancel: Arc<AtomicBool>,
+    /// The thread until it ends; it returns whether the run succeeded.
+    thread: Option<JoinHandle<bool>>,
+    ok: bool,
+}
+
+/// Lines over the screen that take the next key: `y` does `ask`, any other
 /// key closes it.
 struct Dialog {
     lines: Vec<String>,
-    act: Option<Act>,
+    ask: Option<Ask>,
 }
 
 /// The TUI's state over one report input.
@@ -139,6 +175,8 @@ pub struct App {
     card: Option<(String, Vec<String>)>,
     scroll: usize,
     dialog: Option<Dialog>,
+    /// The running job, or the last one until `Esc` closes its pane.
+    job: Option<Job>,
     /// Whether an action ran since the last draw: it may have written under the screen.
     clear: bool,
 }
@@ -264,12 +302,22 @@ impl App {
             card: None,
             scroll: 0,
             dialog: None,
+            job: None,
             clear: false,
         }
     }
 
     pub fn screen(&self) -> Screen {
         self.screen
+    }
+
+    /// Whether a job is running.
+    pub fn busy(&self) -> bool {
+        self.running().is_some()
+    }
+
+    fn running(&self) -> Option<&Job> {
+        self.job.as_ref().filter(|j| j.thread.is_some())
     }
 
     /// What the usage view and its cards count over `since`.
@@ -318,15 +366,24 @@ impl App {
             return true;
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return false;
+            return self.quit();
         }
         if let Some(dialog) = self.dialog.take() {
-            if let Some(act) = dialog.act
+            if let Some(ask) = dialog.ask
                 && key.code == KeyCode::Char('y')
                 && key.modifiers.is_empty()
             {
-                let lines = self.act(act);
-                self.dialog = Some(Dialog { lines, act: None });
+                match ask {
+                    Ask::Act(act) => {
+                        let lines = self.act(act);
+                        self.dialog = Some(Dialog { lines, ask: None });
+                    }
+                    Ask::Audit(skill) => self.start(skill),
+                    Ask::Quit => {
+                        self.stop();
+                        return false;
+                    }
+                }
             }
             return true;
         }
@@ -343,7 +400,7 @@ impl App {
         }
         let list = self.screen != Screen::Card;
         match key.code {
-            KeyCode::Char('q') => return false,
+            KeyCode::Char('q') => return self.quit(),
             KeyCode::Up | KeyCode::Char('k') => self.shift(-1),
             KeyCode::Down | KeyCode::Char('j') => self.shift(1),
             KeyCode::Left | KeyCode::Char('h') => self.shift(-(self.page as isize)),
@@ -356,6 +413,7 @@ impl App {
                 }
             }
             KeyCode::Esc if !list => self.screen = self.back,
+            KeyCode::Esc if !self.busy() => self.job = None,
             KeyCode::Tab if list => {
                 self.screen = if self.screen == Screen::Usage { Screen::Unused } else { Screen::Usage };
                 self.selected = 0;
@@ -385,11 +443,7 @@ impl App {
                 self.refresh();
             }
             KeyCode::Char('r') => {
-                let skill = match &self.card {
-                    Some((skill, _)) if !list => Some(skill.clone()),
-                    _ => self.listed().get(self.selected).map(|s| s.to_string()),
-                };
-                if let Some(skill) = skill {
+                if let Some(skill) = self.chosen() {
                     let what = match self.data.cfg.source.as_deref() {
                         Some(source) if self.data.inv.root(&skill) == Some(source) => {
                             format!("move it to {}", source.join(".archive").join(&skill).display())
@@ -397,22 +451,122 @@ impl App {
                         _ => "remove it from the store".into(),
                     };
                     let lines = vec![format!("retire {skill}: {what} and prune its links?")];
-                    self.dialog = Some(Dialog { lines, act: Some(Act::Retire(skill)) });
+                    self.dialog = Some(Dialog { lines, ask: Some(Ask::Act(Act::Retire(skill))) });
                 }
             }
             KeyCode::Char('s') => {
                 let homes: Vec<&Home> = self.data.cfg.homes.iter().collect();
                 self.dialog = Some(match links::checked(&self.data.cfg, &self.data.inv, &homes) {
-                    Err(errors) => Dialog { lines: [vec!["sync refused:".into()], errors].concat(), act: None },
+                    Err(errors) => Dialog { lines: [vec!["sync refused:".into()], errors].concat(), ask: None },
                     Ok(plan) if plan.actions.is_empty() => {
-                        Dialog { lines: vec!["in sync: nothing to apply".into()], act: None }
+                        Dialog { lines: vec!["in sync: nothing to apply".into()], ask: None }
                     }
-                    Ok(plan) => Dialog { lines: links::planned(&plan), act: Some(Act::Sync(plan)) },
+                    Ok(plan) => Dialog { lines: links::planned(&plan), ask: Some(Ask::Act(Act::Sync(plan))) },
                 });
+            }
+            KeyCode::Char('x') => {
+                if let Some(skill) = self.chosen() {
+                    self.dialog = Some(self.audit(skill));
+                }
             }
             _ => {}
         }
         true
+    }
+
+    /// The card's skill, or the selected one.
+    fn chosen(&self) -> Option<String> {
+        match &self.card {
+            Some((skill, _)) if self.screen == Screen::Card => Some(skill.clone()),
+            _ => self.listed().get(self.selected).map(|s| s.to_string()),
+        }
+    }
+
+    /// False, quitting, unless a job is running: then it asks first.
+    fn quit(&mut self) -> bool {
+        let Some(job) = self.running() else { return false };
+        let lines = vec![format!("the audit of {} is running; stop its judge and quit?", job.skill)];
+        self.dialog = Some(Dialog { lines, ask: Some(Ask::Quit) });
+        true
+    }
+
+    /// The dialog that asks to audit `skill` under the cap `mazo audit` would
+    /// use, or shows why it would refuse.
+    fn audit(&self, skill: String) -> Dialog {
+        if let Some(job) = self.running() {
+            let lines = vec![format!("the audit of {} is running; one job at a time", job.skill)];
+            return Dialog { lines, ask: None };
+        }
+        let d = &self.data;
+        match audit::plan(&d.cfg, &d.inv, &skill, None) {
+            Err(e) => Dialog { lines: vec![format!("ERROR: {e}")], ask: None },
+            Ok(p) => {
+                let judge = name(p.judge.agent);
+                let cap = match p.budget {
+                    Some(b) => format!("at most {} sessions and {}", audit::LIMIT, audit::usd(p.judge, b)),
+                    None => format!("at most {} sessions; the {judge} judge reports no cost", audit::LIMIT),
+                };
+                let lines =
+                    vec![format!("audit {skill} with the {judge} judge in the background?"), format!("cap: {cap}")];
+                Dialog { lines, ask: Some(Ask::Audit(skill)) }
+            }
+        }
+    }
+
+    /// Starts auditing `skill` on a thread as `mazo audit <skill>` does, over
+    /// a copy of the data, its lines going to the job pane.
+    fn start(&mut self, skill: String) {
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let pane = audit::Pane { lines: tx, cancel: cancel.clone() };
+        let (data, name) = (self.data.clone(), skill.clone());
+        let thread = std::thread::spawn(move || {
+            let (out, ok) = caught(|| {
+                let args = audit::Args { limit: Some(audit::LIMIT), resynth: false, dry_run: false, json: false };
+                let ran = audit::plan(&data.cfg, &data.inv, &name, None)
+                    .and_then(|p| audit::command(&p, &args, &data.input(), &data.dir, false, Some(&pane)));
+                ran.unwrap_or_else(|e| (format!("ERROR: {e}"), false))
+            });
+            for line in out.lines() {
+                _ = pane.lines.send(line.into());
+            }
+            ok
+        });
+        self.job = Some(Job { skill, lines: Vec::new(), rx, cancel, thread: Some(thread), ok: false });
+    }
+
+    /// Takes the lines the job reported; once its thread ended, re-reads the
+    /// data. Called before each draw.
+    pub fn tick(&mut self) {
+        let Some(job) = &mut self.job else { return };
+        loop {
+            match job.rx.try_recv() {
+                Ok(line) => job.lines.push(line),
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        let Some(thread) = job.thread.take() else { return };
+        job.ok = thread.join().unwrap_or(false);
+        self.clear = true;
+        if let Err(e) = self.reload() {
+            self.job.as_mut().expect("the job just ended").lines.push(format!("ERROR: {e}"));
+        }
+    }
+
+    /// Cancels a running job, which kills its judge call in flight, and waits
+    /// up to [`STOP_WAIT`] for its thread.
+    fn stop(&mut self) {
+        let Some(job) = &mut self.job else { return };
+        let Some(thread) = job.thread.take() else { return };
+        job.cancel.store(true, Ordering::Relaxed);
+        let deadline = Instant::now() + STOP_WAIT;
+        while !thread.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if thread.is_finished() {
+            _ = thread.join();
+        }
     }
 
     /// Runs `act` through the CLI command's code path, never forced, then
@@ -475,7 +629,7 @@ impl App {
     /// The footer's first line: the view, its window and the active filters.
     fn status(&self) -> String {
         match &self.dialog {
-            Some(Dialog { act: Some(_), .. }) => return "y apply · any other key cancels".into(),
+            Some(Dialog { ask: Some(_), .. }) => return "y apply · any other key cancels".into(),
             Some(_) => return "any key closes".into(),
             None => {}
         }
@@ -503,9 +657,26 @@ impl App {
         let mut footer_lines = vec![Line::raw(self.status())];
         footer_lines.extend(keys(frame.area().width.into()));
         let height = Constraint::Length(footer_lines.len() as u16);
-        let [body, info, footer] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1), height]).areas(frame.area());
+        let pane_height = self.job.as_ref().map_or(0, |j| j.lines.len().clamp(1, PANE_LINES) as u16 + 2);
+        let [body, pane, info, footer] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(pane_height), Constraint::Length(1), height])
+                .areas(frame.area());
         frame.render_widget(Paragraph::new(footer_lines), footer);
+        if let Some(job) = &self.job {
+            let state = match (&job.thread, job.ok) {
+                (Some(_), _) => "running",
+                (None, true) => "done · Esc closes",
+                (None, false) => "failed · Esc closes",
+            };
+            let lines: Vec<Line> = job
+                .lines
+                .iter()
+                .skip(job.lines.len().saturating_sub(PANE_LINES))
+                .map(|l| Line::raw(l.as_str()))
+                .collect();
+            let block = Block::bordered().title(format!(" audit {} · {state} ", job.skill));
+            frame.render_widget(Paragraph::new(lines).block(block), pane);
+        }
         if let Some(dialog) = &self.dialog {
             let area = body.union(info);
             let room = usize::from(area.height.saturating_sub(2)).max(1);
@@ -571,20 +742,42 @@ impl App {
     }
 }
 
+/// What `job` returns, or a failure naming its panic: the pane shows it and
+/// the screen stays up.
+fn caught(job: impl FnOnce() -> (String, bool)) -> (String, bool) {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|panic| {
+        let why = panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str));
+        (format!("ERROR: the audit panicked: {}", why.unwrap_or("no message")), false)
+    })
+}
+
 /// Opens the TUI on `input` and the data directory `data` and runs it until
-/// `q` or Ctrl-C. `ratatui::init` installs a panic hook that restores the
-/// terminal; the terminal shows the cursor again when it drops, after the
-/// restore leaves the alternate screen.
+/// `q` or Ctrl-C, asking first while a job runs. `ratatui::init` installs a
+/// panic hook that restores the terminal, run here only on this thread: a
+/// job's panic is [`caught`] and shown in its pane while the screen stays up.
+/// The terminal shows the cursor again when it drops, after the restore
+/// leaves the alternate screen.
 pub fn run(input: &Input, data: &Path) -> std::io::Result<()> {
     let mut app = App::new(input, data);
     let mut terminal = ratatui::init();
+    let (restore, ui) = (std::panic::take_hook(), std::thread::current().id());
+    std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().id() == ui {
+            restore(info);
+        }
+    }));
     let result = (|| {
         loop {
+            app.tick();
             // A scan's progress line may have been written under the screen.
             if std::mem::take(&mut app.clear) {
                 terminal.clear()?;
             }
             terminal.draw(|frame| app.draw(frame))?;
+            // While a job runs, its lines are drawn as they come.
+            if app.busy() && !event::poll(Duration::from_millis(100))? {
+                continue;
+            }
             if let Event::Key(key) = event::read()?
                 && !app.key(key)
             {
@@ -594,4 +787,17 @@ pub fn run(input: &Input, data: &Path) -> std::io::Result<()> {
     })();
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::caught;
+
+    #[test]
+    fn a_job_that_panics_fails_with_its_message() {
+        assert_eq!(caught(|| ("done".into(), true)), ("done".into(), true));
+        assert_eq!(caught(|| panic!("boom")), ("ERROR: the audit panicked: boom".into(), false));
+        let n = 2;
+        assert_eq!(caught(|| panic!("boom {n}")), ("ERROR: the audit panicked: boom 2".into(), false));
+    }
 }

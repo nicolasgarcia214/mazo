@@ -1,11 +1,13 @@
 //! The TUI of bare `mazo`: its views rendered into ratatui's `TestBackend`
-//! from the golden fixture, its retire and sync actions driven by key events
-//! against a temp config, and the binary opening and quitting it on a
-//! pseudo-terminal.
+//! from the golden fixture, its retire, sync and audit actions driven by key
+//! events against a temp config and a stub judge, and the binary opening and
+//! quitting it on a pseudo-terminal.
 
 mod common;
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -232,7 +234,7 @@ fn a_narrow_terminal_drops_columns_from_the_right_and_keeps_skill_and_sess() {
     let mut app = app(&input);
     let screen = text(&mut app, 60, 30);
     let keys = screen.iter().rev().take_while(|l| !l.starts_with("usage · ")).flat_map(|l| l.split(" · ")).count();
-    assert_eq!(keys, 12, "every key shows: {screen:#?}");
+    assert_eq!(keys, 13, "every key shows: {screen:#?}");
     let header: Vec<&str> = screen[0].split_whitespace().collect();
     assert_eq!(header[..2], ["skill", "sess"]);
     assert!(!header.contains(&"grade"), "{screen:#?}");
@@ -319,6 +321,73 @@ impl Actions {
 
     fn linked(&self, name: &str) -> bool {
         self.skills.join(name).symlink_metadata().is_ok()
+    }
+
+    /// Adds a `[judge]` of `agent`, for `command` the [`stub`] judge, and a
+    /// strong load of `busy` in a real transcript for it to judge.
+    fn judge(&mut self, agent: &str) {
+        let root = self.data.parent().unwrap().to_path_buf();
+        let argv = match agent {
+            "command" => format!("argv = [\"{}\"]\n", stub(&root).display()),
+            _ => String::new(),
+        };
+        let toml = std::fs::read_to_string(root.join("mazo.toml")).unwrap();
+        common::write(&root.join("mazo.toml"), &format!("{toml}\n[judge]\nagent = \"{agent}\"\n{argv}"));
+        self.cfg = config::load(&root.join("mazo.toml")).unwrap().unwrap();
+        let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(48)).unwrap().to_string();
+        let src = format!("{}:5", common::fixture("claude/condense.jsonl").display());
+        let e = Event { src, ..common::event("e2", "busy", Channel::Tool, "s2", &ts) };
+        let events = std::fs::read_to_string(self.data.join("events.jsonl")).unwrap();
+        common::write(&self.data.join("events.jsonl"), &(events + &serde_json::to_string(&e).unwrap() + "\n"));
+    }
+
+    /// The pids the stub judge wrote, one per call.
+    fn pids(&self) -> Vec<String> {
+        let pids = std::fs::read_to_string(self.data.parent().unwrap().join("pids")).unwrap_or_default();
+        pids.lines().map(String::from).collect()
+    }
+}
+
+/// A `#!/bin/sh` command judge under `root` that appends its pid to
+/// `<root>/pids`, then answers either stage, or, while `<root>/hang` exists,
+/// becomes a `sleep` that outlasts any test and ignores the hangup of a
+/// closing terminal, so only mazo's kill ends it.
+fn stub(root: &Path) -> PathBuf {
+    let r = root.display();
+    let script = format!(
+        r#"#!/bin/sh
+echo $$ >> {r}/pids
+in=$(cat)
+[ -f {r}/hang ] && trap '' HUP && exec sleep 600
+if printf '%s\n' "$in" | grep -q '^<session-records>$'; then
+  sid=$(printf '%s\n' "$in" | grep -o '"session":"[^"]*"' | head -n 1 | cut -d '"' -f 4)
+  sed "s/SESSION/$sid/g" {r}/skill.json
+else
+  line=$(printf '%s\n' "$in" | grep -o '^L[0-9]*:' | head -n 1 | tr -d 'L:')
+  sed "s/\"LINE\"/$line/g" {r}/session.json
+fi
+"#
+    );
+    let path = root.join("bin/judge");
+    common::write(&path, &script);
+    Command::new("chmod").arg("+x").arg(&path).status().unwrap();
+    common::write(&root.join("session.json"), &common::judge::answer("LINE").to_string());
+    common::write(&root.join("skill.json"), &common::judge::skill_answer("SESSION").to_string());
+    path
+}
+
+/// Whether process `pid` exists.
+fn alive(pid: &str) -> bool {
+    Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().unwrap().success()
+}
+
+/// Ticks `app` until `done` holds, for at most 20 seconds.
+fn until(app: &mut App, done: impl Fn(&App) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !done(app) {
+        assert!(Instant::now() < deadline, "timed out");
+        app.tick();
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -468,43 +537,172 @@ fn s_shows_the_dry_run_plan_and_y_applies_it() {
     assert!(screen.iter().any(|l| l == "any key closes"), "{screen:#?}");
 }
 
-/// A source with one skill and one Claude home never scanned.
-fn binary() -> (tempfile::TempDir, common::Mazo) {
+#[test]
+fn x_shows_the_audit_cap_and_any_key_but_y_starts_nothing() {
+    let mut fx = Actions::new(true);
+    fx.judge("command");
+    let before = fx.disk();
+    let mut app = fx.app();
+    select(&mut app, "busy");
+    press(&mut app, KeyCode::Char('x'));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("audit busy with the command judge in the background?")), "{screen:#?}");
+    assert!(
+        screen.iter().any(|l| l.contains("cap: at most 20 sessions; the command judge reports no cost")),
+        "{screen:#?}"
+    );
+    assert!(screen.iter().any(|l| l == "y apply · any other key cancels"), "{screen:#?}");
+    press(&mut app, KeyCode::Char('n'));
+    let screen = text(&mut app, 200, 20);
+    assert!(!app.busy());
+    assert!(!screen.iter().any(|l| l.contains("audit busy")), "{screen:#?}");
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(fx.pids().is_empty());
+    assert!(!fx.data.join("audits.jsonl").exists());
+    assert_eq!(fx.disk(), before);
+
+    // A judge that reports its cost shows `mazo audit`'s default budget too.
+    let mut fx = Actions::new(true);
+    fx.judge("claude");
+    let mut app = fx.app();
+    select(&mut app, "busy");
+    press(&mut app, KeyCode::Char('x'));
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("cap: at most 20 sessions and $1.00 API-equivalent")), "{screen:#?}");
+}
+
+#[test]
+fn x_without_a_judge_shows_the_refusal_mazo_audit_gives() {
+    let fx = Actions::new(true);
+    let mut app = fx.app();
+    select(&mut app, "busy");
+    press(&mut app, KeyCode::Char('x'));
+    let screen = text(&mut app, 200, 20);
+    let refusal = ["ERROR: no judge configured; add one to the config, for example:", "[judge]", "agent = \"claude\""];
+    for line in refusal {
+        assert!(screen.iter().any(|l| l.contains(line)), "{line:?} not in {screen:#?}");
+    }
+    assert!(screen.iter().any(|l| l == "any key closes"), "{screen:#?}");
+    press(&mut app, KeyCode::Char('y'));
+    assert!(!app.busy());
+}
+
+#[test]
+fn y_audits_in_the_background_and_the_pane_shows_the_result() {
+    let mut fx = Actions::new(true);
+    fx.judge("command");
+    let mut app = fx.app();
+    select(&mut app, "busy");
+    press(&mut app, KeyCode::Char('x'));
+    press(&mut app, KeyCode::Char('y'));
+    assert!(app.busy());
+    until(&mut app, |app| !app.busy());
+    assert_eq!(fx.pids().len(), 2, "one session call, then the skill report");
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(" audit busy · done · Esc closes ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("busy: 1 judged, 0 dropped")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("busy: skill report over 1 sessions: ")), "{screen:#?}");
+
+    // The data was re-read: the card shows the new audit.
+    press(&mut app, KeyCode::Enter);
+    let screen = text(&mut app, 200, 60);
+    assert!(screen.iter().any(|l| l.starts_with("audit: ") && l.contains(", 1 sessions, ")), "{screen:#?}");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    assert!(!text(&mut app, 200, 30).iter().any(|l| l.contains(" audit busy ")));
+}
+
+#[test]
+fn quitting_with_a_job_running_asks_and_kills_its_judge() {
+    let mut fx = Actions::new(true);
+    fx.judge("command");
+    common::write(&fx.data.parent().unwrap().join("hang"), "");
+    let mut app = fx.app();
+    select(&mut app, "busy");
+    press(&mut app, KeyCode::Char('x'));
+    press(&mut app, KeyCode::Char('y'));
+    until(&mut app, |_| !fx.pids().is_empty());
+    let pid = fx.pids()[0].clone();
+    assert!(alive(&pid));
+
+    // Navigation keeps working, the pane shows the progress, and a second job is refused.
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.screen(), Screen::Unused);
+    app.tick();
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(" audit busy · running ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("judging 1/1 s2")), "{screen:#?}");
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Char('x'));
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains("the audit of busy is running; one job at a time")), "{screen:#?}");
+    press(&mut app, KeyCode::Esc);
+
+    for quit in [
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    ] {
+        assert!(app.key(quit));
+        let screen = text(&mut app, 200, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("the audit of busy is running; stop its judge and quit?")),
+            "{screen:#?}"
+        );
+        assert!(press(&mut app, KeyCode::Char('n')));
+        assert!(app.busy() && alive(&pid));
+    }
+    let started = Instant::now();
+    assert!(press(&mut app, KeyCode::Char('q')));
+    assert!(!press(&mut app, KeyCode::Char('y')));
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert!(!alive(&pid), "the judge outlived the TUI");
+    assert_eq!(fx.pids().len(), 1, "no call started after the cancel");
+}
+
+/// A source with one skill and one Claude home never scanned; with `judge`,
+/// also `unslop`, one Claude transcript that loads it, and the [`stub`] judge,
+/// hanging. The temp directory, its canonical path, and the binary.
+fn binary(judge: bool) -> (tempfile::TempDir, PathBuf, common::Mazo) {
     let temp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(temp.path()).unwrap();
     let (home, source) = (root.join("home"), root.join("skills"));
     common::write(&source.join("idle/SKILL.md"), "---\nname: idle\ndescription: Idle.\n---\n");
-    common::write(
-        &source.join("mazo.toml"),
-        "source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\n",
-    );
+    let mut toml =
+        "source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\n".to_string();
+    if judge {
+        common::write(&source.join("unslop/SKILL.md"), "---\nname: unslop\ndescription: X.\n---\n");
+        std::fs::create_dir_all(home.join(".claude/projects/p")).unwrap();
+        std::fs::copy(common::fixture("claude/condense.jsonl"), home.join(".claude/projects/p/s.jsonl")).unwrap();
+        common::write(&root.join("hang"), "");
+        toml += &format!("\n[judge]\nagent = \"command\"\nargv = [\"{}\"]\n", stub(&root).display());
+    }
+    common::write(&source.join("mazo.toml"), &toml);
     common::write(&home.join(".claude/settings.json"), "{}\n");
     let mazo = common::Mazo::new(&home, &home, &source.join("mazo.toml"), &home.join("data"));
-    (temp, mazo)
+    (temp, root, mazo)
 }
 
 #[test]
 fn bare_mazo_off_a_terminal_prints_help_and_exits_2() {
-    let (_temp, mazo) = binary();
+    let (_temp, _, mazo) = binary(false);
     let out = mazo.output(&[]);
     assert_eq!(out.status.code(), Some(2));
     assert!(common::stderr(&out).contains("Usage: mazo <COMMAND>"), "{}", common::stderr(&out));
 }
 
 /// Bare `mazo` under `script` on an 80×24 pseudo-terminal: once the screen
-/// opens, `byte` is written to it. The exit code and everything it printed.
+/// opens, each step's keys are written to it as soon as its condition holds.
+/// The exit code and everything it printed.
 #[cfg(target_os = "linux")]
-fn on_a_pty(byte: u8) -> Option<(Option<i32>, Vec<u8>)> {
+fn on_a_pty(mut mazo: common::Mazo, steps: &[(&[u8], &dyn Fn() -> bool)]) -> Option<(Option<i32>, Vec<u8>)> {
     use std::io::{Read, Write};
     use std::process::Stdio;
     use std::sync::mpsc;
-    use std::time::{Duration, Instant};
 
     if std::process::Command::new("script").arg("--version").output().is_err() {
         eprintln!("skipped: no `script`");
         return None;
     }
-    let (_temp, mut mazo) = binary();
     mazo.set("SHELL", Some("/bin/sh".as_ref()));
     let command = format!("stty rows 24 cols 80 && exec '{}'", env!("CARGO_BIN_EXE_mazo"));
     let mut child = mazo
@@ -525,23 +723,27 @@ fn on_a_pty(byte: u8) -> Option<(Option<i32>, Vec<u8>)> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut out = Vec::new();
     let mut stdin = child.stdin.take().unwrap();
-    let mut sent = false;
+    let mut sent = 0;
     loop {
-        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(chunk) => out.extend(chunk),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
                 child.kill().unwrap();
                 panic!("timed out: {}", String::from_utf8_lossy(&out));
             }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        // The alternate screen is entered after raw mode, so the byte is a key.
-        if !sent && out.windows(8).any(|w| w == b"\x1b[?1049h") {
-            stdin.write_all(&[byte]).unwrap();
-            sent = true;
+        // The alternate screen is entered after raw mode, so the bytes are keys.
+        if let Some((keys, ready)) = steps.get(sent)
+            && ready()
+            && out.windows(8).any(|w| w == b"\x1b[?1049h")
+        {
+            stdin.write_all(keys).unwrap();
+            sent += 1;
         }
     }
-    assert!(sent, "the screen never opened: {}", String::from_utf8_lossy(&out));
+    assert_eq!(sent, steps.len(), "the screen never opened: {}", String::from_utf8_lossy(&out));
     Some((child.wait().unwrap().code(), out))
 }
 
@@ -549,8 +751,22 @@ fn on_a_pty(byte: u8) -> Option<(Option<i32>, Vec<u8>)> {
 #[test]
 fn bare_mazo_on_a_terminal_quits_on_q_and_ctrl_c_and_restores_the_terminal() {
     for byte in [b'q', 0x03] {
-        let Some((code, out)) = on_a_pty(byte) else { return };
+        let (_temp, _, mazo) = binary(false);
+        let Some((code, out)) = on_a_pty(mazo, &[(&[byte], &|| true)]) else { return };
         assert_eq!(code, Some(0), "{byte:#x}: {}", String::from_utf8_lossy(&out));
         assert!(out.ends_with(b"\x1b[?1049l\x1b[?25h"), "{byte:#x}: {:?}", String::from_utf8_lossy(&out));
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn quitting_bare_mazo_mid_audit_kills_the_judge_and_restores_the_terminal() {
+    let (_temp, root, mazo) = binary(true);
+    let pids = || std::fs::read_to_string(root.join("pids")).unwrap_or_default();
+    let steps: [(&[u8], &dyn Fn() -> bool); 2] = [(b"/unslop\rxy", &|| true), (b"qy", &|| !pids().is_empty())];
+    let Some((code, out)) = on_a_pty(mazo, &steps) else { return };
+    assert_eq!(code, Some(0), "{}", String::from_utf8_lossy(&out));
+    assert!(out.ends_with(b"\x1b[?1049l\x1b[?25h"), "{:?}", String::from_utf8_lossy(&out));
+    let pid = pids();
+    assert!(!alive(pid.trim()), "the judge outlived mazo");
 }

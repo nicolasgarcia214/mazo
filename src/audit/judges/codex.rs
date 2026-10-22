@@ -47,7 +47,7 @@ impl Subprocess for Codex {
     }
 
     /// The user's `auth.json` must hold a ChatGPT login.
-    fn login(&self, _data: &Path) -> Result<()> {
+    fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
         let path = self.auth.display();
         let unread = |why: String| {
             Error::Usage(format!(

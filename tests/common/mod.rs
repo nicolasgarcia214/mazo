@@ -1,11 +1,12 @@
 //! Helpers shared by every integration test binary: fixture paths, the real
 //! skills directory, `Home` builders, the fixed clock, events and the report
-//! `World`, parsing a transcript the way a scan does, running the binary, and
-//! small filesystem and git utilities.
+//! `World`, parsing a transcript the way a scan does, running the binary, a
+//! stub judge's answers, and small filesystem and git utilities.
 
 #![allow(dead_code)]
 
 pub mod golden;
+pub mod judge;
 pub mod probe;
 pub mod sync;
 

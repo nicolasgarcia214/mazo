@@ -40,8 +40,17 @@ impl Http {
 
 impl super::Backend for Http {
     /// A connection failure or a non-2xx status stops the run; a reply past
-    /// [`JUDGE_TIMEOUT`] or one without a JSON answer is retried.
-    fn call(&self, _data: &Path, _billing: Billing, stage: &Stage, _cap: Option<u64>, input: &str) -> Result<Reply> {
+    /// [`JUDGE_TIMEOUT`] or one without a JSON answer is retried. A request
+    /// in flight is not cancelled: it holds no process to orphan.
+    fn call(
+        &self,
+        _data: &Path,
+        _billing: Billing,
+        stage: &Stage,
+        _cap: Option<u64>,
+        input: &str,
+        _cancel: &dyn Fn() -> bool,
+    ) -> Result<Reply> {
         let body = json!({"model": self.model, "messages": [{"role": "user", "content": prompted(stage, input)}]});
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(JUDGE_TIMEOUT))
