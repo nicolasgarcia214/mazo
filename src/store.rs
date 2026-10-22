@@ -267,13 +267,17 @@ impl Source {
     /// A path that exists or starts with `.`, `/` or `~` is local. Otherwise
     /// `scheme://…` and `[user@]host:path` are git URLs, and `owner/repo[/sub]`
     /// is a GitHub repository. In a URL the subpath follows the first
-    /// segment ending in `.git`.
+    /// segment ending in `.git`. A git source holding `?`, `#` or `\` is
+    /// refused: git could fetch from another host than the one trust checks.
     fn parse(arg: &str) -> std::result::Result<Source, String> {
         if arg.starts_with('-') {
             return Err("a source must not start with -".into());
         }
         if arg.starts_with(['.', '/', '~']) || Path::new(arg).exists() {
             return Ok(Source::Local(arg.into()));
+        }
+        if arg.contains(['?', '#', '\\']) {
+            return Err(format!("a git source must not contain ?, # or \\: {arg:?}"));
         }
         let bad = || format!("not a local path, a git URL or owner/repo[/path]: {arg:?}");
         let (base, segments): (String, Vec<&str>) = if let Some((scheme, rest)) = arg.split_once("://") {
@@ -1465,6 +1469,11 @@ mod tests {
             "o/r/../x",
             "https://host",
             "git@host:r.git",
+            // Each would show github.com as its host while git fetches from evil.example.
+            "https://evil.example#@github.com/anthropics/x",
+            "https://evil.example?@github.com/anthropics/x",
+            "https://evil.example\\@github.com/anthropics/x",
+            "git@evil.example#@github.com:anthropics/x.git",
         ] {
             assert!(Source::parse(arg).is_err(), "{arg}");
         }

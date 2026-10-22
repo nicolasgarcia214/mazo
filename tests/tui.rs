@@ -789,12 +789,14 @@ impl Actions {
         let tmp = REWRITE.get_or_init(|| {
             let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
             let key = format!("url.file://{}/.insteadOf", tmp.display());
-            // SAFETY: std guards its own environment reads with a lock, and
-            // nothing in this test binary reads the environment through libc.
+            // SAFETY: all environment access in this binary goes through std,
+            // which serializes it under its lock (a spawn's PATH lookup too),
+            // and no test here does network or DNS lookups. The count goes
+            // last, so a git spawned meanwhile sees the whole rewrite or none.
             unsafe {
-                std::env::set_var("GIT_CONFIG_COUNT", "1");
                 std::env::set_var("GIT_CONFIG_KEY_0", key);
                 std::env::set_var("GIT_CONFIG_VALUE_0", "https://git.example.org/acme/");
+                std::env::set_var("GIT_CONFIG_COUNT", "1");
             }
             tmp
         });
