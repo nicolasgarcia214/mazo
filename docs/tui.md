@@ -14,7 +14,7 @@ but what an action writes, and it re-reads the data after each action.
 |---|---|
 | arrows, `hjkl` | Move. |
 | `Enter` | Open a card. On the unused list, a store skill whose status is `unused` (its `new` window since install has ended) asks to retire it instead. |
-| `Esc` | Go back. On a list, close the audit pane once the audit ends. |
+| `Esc` | Go back. On a list, close the job pane once the job ends. |
 | `Tab` | Switch between usage and unused. |
 | `/` | Filter by name. |
 | `w` | Cycle the window: 30 days, 60 days, all. |

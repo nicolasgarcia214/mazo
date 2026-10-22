@@ -16,13 +16,14 @@ release-notes    3     3    0     0    0   0 C      1d ago ··········�
 triage           1     1    0     0    0   0 C      4d ago ·························█····     - not judged
 tidy-imports     0     0    0     0    0   0        -      ······························     - not judged
 coverage: claude since 2026-10-14
+legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade
 ```
 
 ## What it does
 
 - Counts every skill load per session, channel and agent, with a 30-day
   sparkline and the last use.
-- Lists skills with no strong load in a window, and retires them.
+- Lists skills with no strong load in a window, so you can retire them.
 - Links your skills directory and the skills you install into each configured
   agent home, such as `~/.claude`, `~/.codex` and `~/.pi/agent`, and reports
   drift.

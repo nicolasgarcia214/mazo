@@ -53,16 +53,18 @@ pub trait Adapter {
   the card) and `condense` (the judge's view of a session) walk the transcript
   with `records` at display or audit time and return `None` once it is gone.
 
-A judge backend holds what differs between agents when mazo calls one:
+A judge that is a process implements `Subprocess`, which gives it `Backend`;
+a judge with no process, like `http`, implements `Backend` directly. A
+`Subprocess` holds what differs between agents when mazo calls one:
 
 ```rust
-pub trait Backend {
+pub trait Subprocess {
     /// The argv of a call, with stand-ins for the files the call writes.
     fn argv(&self, stage: &Stage) -> Vec<String>;
     /// What the call reads on stdin; none closes it.
     fn stdin(&self, stage: &Stage, input: &str) -> Option<String>;
     /// Under `subscription`, the login check made once before the first call.
-    fn login(&self, data: &Path) -> Result<()>;
+    fn login(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<()>;
     /// A variable naming a scratch home, made afresh before and after each call.
     fn scratch(&self, data: &Path) -> Result<Option<(&'static str, PathBuf)>>;
     /// What a finished call returned: its cost and its answer, or why there is none.

@@ -121,7 +121,7 @@ them. `authoring_skills` is empty by default.
 | `no_disable_model_invocation` | When on, a `SKILL.md` must omit `disable-model-invocation`. |
 | `codex_manifest` | When on, each skill needs `agents/openai.yaml` with `policy.allow_implicit_invocation: false`, and `mazo new` writes one. |
 | `claude_name_only` | When on, each Claude home's `settings.json` must set every skill to `name-only` in `skillOverrides`, and `mazo new` prints the line to add. |
-| `authoring_skills` | A list of skills. A read in a session that loaded one is tagged authoring (see [how accurate the counts are](usage-tracking.md#how-accurate-the-counts-are)). |
+| `authoring_skills` | A list of skills. mazo tags a read in a session that loaded one as authoring (see [how accurate the counts are](usage-tracking.md#how-accurate-the-counts-are)). |
 
 ## `[judge]`
 
@@ -229,7 +229,7 @@ reasons = ["Clear steps."]
 |---|---|
 | 0 | Success. |
 | 1 | The command failed or found a problem: a `status` error, a refused `sync`, `add`, `retire` or `prune`, a failed `update` of any skill, a failed audit run. |
-| 2 | A usage error: a bad argument, a config that does not parse or names a missing source, an invalid Pi agent directory, an `add` of a taken name or an untrusted source, an `add`, `update` or `retire --project` outside a git repository, an `update` of a name that is not a store skill, an `audit` with no `[judge]`, or a failed judge login check. |
+| 2 | A usage error: a bad argument, a config that does not parse or names a missing source, an invalid Pi agent directory, an `add` of a taken name or of an untrusted source with no `[judge]`, an `add`, `update` or `retire --project` outside a git repository, an `update` of a name that is not a store skill, an `audit` with no `[judge]`, or a failed judge login check. |
 
 A usage error writes nothing, except that `audit` checks the login after its
 scan. The [add](installing-skills.md#picking-skills) and

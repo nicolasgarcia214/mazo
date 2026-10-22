@@ -96,8 +96,8 @@ same subpath.
   is not on the `trusted` list either, mazo re-vets it before replacing it (see
   [re-vetting an update](#re-vetting-an-update)). mazo does not vet a trusted
   one. With no `[judge]`, mazo refuses the untrusted skill. It prints one line
-  per such skill, then once the judge tables and issue link of
-  [the add refusal](#no-judge), and exits 2.
+  per such skill, then the judge tables and issue link of
+  [the add refusal](#no-judge) once, and exits 2.
 - **Not updatable.** A local-path skill. A name that is not a store skill is a
   usage error.
 
