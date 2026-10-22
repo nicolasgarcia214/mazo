@@ -267,13 +267,17 @@ impl Source {
     /// A path that exists or starts with `.`, `/` or `~` is local. Otherwise
     /// `scheme://…` and `[user@]host:path` are git URLs, and `owner/repo[/sub]`
     /// is a GitHub repository. In a URL the subpath follows the first
-    /// segment ending in `.git`.
+    /// segment ending in `.git`. A git source holding `?`, `#` or `\` is
+    /// refused: git could fetch from another host than the one trust checks.
     fn parse(arg: &str) -> std::result::Result<Source, String> {
         if arg.starts_with('-') {
             return Err("a source must not start with -".into());
         }
         if arg.starts_with(['.', '/', '~']) || Path::new(arg).exists() {
             return Ok(Source::Local(arg.into()));
+        }
+        if arg.contains(['?', '#', '\\']) {
+            return Err(format!("a git source must not contain ?, # or \\: {arg:?}"));
         }
         let bad = || format!("not a local path, a git URL or owner/repo[/path]: {arg:?}");
         let (base, segments): (String, Vec<&str>) = if let Some((scheme, rest)) = arg.split_once("://") {
@@ -310,12 +314,29 @@ impl Remote {
         valid.then(|| Remote { url, path, subpath: subpath.iter().collect() })
     }
 
-    /// An entry equal to the owner (the first segment) or to owner/repo (the
-    /// first two), ignoring ASCII case as GitHub does, trusts the repository,
-    /// on any host.
+    /// The URL's host, without user or port; none for a `file://` URL.
+    fn host(&self) -> Option<&str> {
+        let authority = match self.url.split_once("://") {
+            Some((scheme, _)) if scheme.eq_ignore_ascii_case("file") => return None,
+            Some((_, rest)) => rest.split('/').next()?,
+            None => self.url.split(':').next()?,
+        };
+        let host = authority.rsplit('@').next()?;
+        host.split(':').next()
+    }
+
+    /// An entry trusts the repository when it names the repository's host and
+    /// then its owner (the first segment) or owner/repo (the first two),
+    /// ignoring ASCII case. An entry whose first segment has no `.` names a
+    /// GitHub owner or repository; otherwise that segment is the host.
     fn trusted_by(&self, trusted: &[String]) -> bool {
+        let Some(host) = self.host() else { return false };
         let repo = format!("{}/{}", self.path[0], self.path[1]);
-        trusted.iter().any(|t| t.eq_ignore_ascii_case(&self.path[0]) || t.eq_ignore_ascii_case(&repo))
+        trusted.iter().any(|t| {
+            let (on, name) = t.split_once('/').filter(|(h, _)| h.contains('.')).unwrap_or(("github.com", t));
+            on.eq_ignore_ascii_case(host)
+                && (name.eq_ignore_ascii_case(&self.path[0]) || name.eq_ignore_ascii_case(&repo))
+        })
     }
 
     /// The name of the skill at the subpath: its last segment, else the repository's.
@@ -1448,27 +1469,47 @@ mod tests {
             "o/r/../x",
             "https://host",
             "git@host:r.git",
+            // Each would show github.com as its host while git fetches from evil.example.
+            "https://evil.example#@github.com/anthropics/x",
+            "https://evil.example?@github.com/anthropics/x",
+            "https://evil.example\\@github.com/anthropics/x",
+            "git@evil.example#@github.com:anthropics/x.git",
         ] {
             assert!(Source::parse(arg).is_err(), "{arg}");
         }
     }
 
     #[test]
-    fn trust_matches_the_owner_or_owner_and_repo_on_any_host() {
+    fn trust_matches_the_owner_or_owner_and_repo_on_its_host() {
         let list = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         for arg in [
             "owner/repo/a",
             "https://github.com/owner/repo.git",
-            "git@codeberg.org:owner/repo.git",
-            "ssh://h/owner/repo",
+            "git@github.com:owner/repo.git",
+            "ssh://git@GitHub.com:22/owner/repo",
         ] {
             let r = remote(arg);
             assert!(r.trusted_by(&list(&["owner"])), "{arg}");
             assert!(r.trusted_by(&list(&["x", "owner/repo"])), "{arg}");
-            assert!(!r.trusted_by(&list(&["repo", "owner/other", "other/repo", "github.com"])), "{arg}");
+            assert!(
+                r.trusted_by(&list(&["github.com/owner"])) && r.trusted_by(&list(&["GitHub.com/owner/repo"])),
+                "{arg}"
+            );
+            let others = ["repo", "owner/other", "other/repo", "github.com", "gitlab.com/owner"];
+            assert!(!r.trusted_by(&list(&others)), "{arg}");
             assert!(!r.trusted_by(&[]), "{arg}");
             assert!(r.trusted_by(&list(&["OWNER"])) && r.trusted_by(&list(&["Owner/Repo"])), "{arg}");
         }
+        for arg in ["https://evil.example/owner/repo", "git@codeberg.org:owner/repo.git", "file:///x/owner/repo"] {
+            assert!(!remote(arg).trusted_by(&list(&["owner", "owner/repo"])), "{arg}");
+        }
+        let gitlab = remote("https://gitlab.com/acme/x.git");
+        assert!(gitlab.trusted_by(&list(&["gitlab.com/acme"])) && gitlab.trusted_by(&list(&["GitLab.com/ACME/X"])));
+        assert!(!remote("acme/x").trusted_by(&list(&["gitlab.com/acme"])));
+        let own = list(&["git.example.org/acme/skills"]);
+        assert!(remote("ssh://git@git.example.org/acme/skills.git").trusted_by(&own));
+        assert!(!remote("ssh://git@git.example.org/acme/other.git").trusted_by(&own));
+        assert!(!remote("acme/skills").trusted_by(&own));
     }
 
     #[test]

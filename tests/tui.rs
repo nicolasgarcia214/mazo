@@ -781,6 +781,30 @@ impl Actions {
         format!("file://{}", bare.display())
     }
 
+    /// [`Actions::repo`] served as `https://git.example.org/acme/<temp path>`,
+    /// a source with a host to trust: an `insteadOf` rewrite in this process's
+    /// environment, set once, sends git from that prefix to the temp directory.
+    fn hosted_repo(&self, name: &str) -> String {
+        static REWRITE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        let tmp = REWRITE.get_or_init(|| {
+            let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+            let key = format!("url.file://{}/.insteadOf", tmp.display());
+            // SAFETY: all environment access in this binary goes through std,
+            // which serializes it under its lock (a spawn's PATH lookup too),
+            // and no test here does network or DNS lookups. The count goes
+            // last, so a git spawned meanwhile sees the whole rewrite or none.
+            unsafe {
+                std::env::set_var("GIT_CONFIG_KEY_0", key);
+                std::env::set_var("GIT_CONFIG_VALUE_0", "https://git.example.org/acme/");
+                std::env::set_var("GIT_CONFIG_COUNT", "1");
+            }
+            tmp
+        });
+        let url = self.repo(name);
+        let rel = Path::new(url.strip_prefix("file://").unwrap()).strip_prefix(tmp).unwrap().to_owned();
+        format!("https://git.example.org/acme/{}", rel.display())
+    }
+
     /// Installs the skill at `url` into the store, recorded as `trusted` or not.
     fn install(&self, url: &str, trusted: bool) {
         let args = store::Add {
@@ -1301,9 +1325,8 @@ fn declining_the_call_count_makes_no_judge_call_and_installs_nothing() {
 fn a_trusted_source_installs_without_a_confirmation_or_a_judge_call() {
     let mut fx = Actions::new(true);
     fx.vetter(None);
-    let url = fx.repo("ours");
-    // A `file://` URL's owner is the first segment of its path.
-    fx.cfg.trusted = vec![url.trim_start_matches("file:///").split('/').next().unwrap().to_string()];
+    let url = fx.hosted_repo("ours");
+    fx.cfg.trusted = vec!["git.example.org/acme".into()];
     let mut app = fx.app();
     add(&mut app, &url);
     until(&mut app, |app| !app.busy());

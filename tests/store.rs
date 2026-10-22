@@ -320,6 +320,18 @@ fn bare_repo(fx: &Fixture, repo: &str, skills: &[(&str, &str)]) -> String {
     format!("file://{}", bare.display())
 }
 
+/// [`bare_repo`] served as `https://git.example.org/acme/<repo>.git`: an
+/// `insteadOf` rewrite, set for every later run, sends git to its `file://`
+/// URL, so the source has a host to trust.
+fn hosted_repo(fx: &mut Fixture, repo: &str, skills: &[(&str, &str)]) -> String {
+    let file = bare_repo(fx, repo, skills);
+    let base = file.strip_suffix(&format!("{repo}.git")).unwrap();
+    fx.set_env("GIT_CONFIG_COUNT", Some(Path::new("1")));
+    fx.set_env("GIT_CONFIG_KEY_0", Some(Path::new(&format!("url.{base}.insteadOf"))));
+    fx.set_env("GIT_CONFIG_VALUE_0", Some(Path::new("https://git.example.org/acme/")));
+    format!("https://git.example.org/acme/{repo}.git")
+}
+
 fn head(url: &str) -> String {
     let dir = url.strip_prefix("file://").unwrap();
     let out = std::process::Command::new("git").args(["-C", dir, "rev-parse", "HEAD"]).output().unwrap();
@@ -529,19 +541,23 @@ fn cancelling_or_selecting_nothing_in_the_picker_installs_nothing() {
 
 #[test]
 fn a_repo_on_the_trust_list_installs_without_trust() {
-    let fx = git_fixture();
-    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
-    let before = fx.snapshot();
-    let r = add(&fx, &[&url]);
-    assert_eq!(r.code(), 2, "{}", r.stderr());
-    assert!(r.stderr().contains("is not on the trust list"), "{}", r.stderr());
-    assert_eq!(fx.snapshot(), before);
-
-    // The owner and repository of a file URL are its first two path segments.
-    let segments: Vec<&str> = url.strip_prefix("file:///").unwrap().split('/').take(2).collect();
+    let mut fx = git_fixture();
+    let url = hosted_repo(&mut fx, "theirs", &[(".", "theirs")]);
     let config = fx.source.join("mazo.toml");
     let text = fs::read_to_string(&config).unwrap();
-    fs::write(&config, format!("trusted = [{:?}]\n{text}", segments.join("/"))).unwrap();
+    // The same owner on GitHub, and its file URL, are not this source.
+    let file = format!("file://{}", fx.root.join("origin/theirs.git").display());
+    let first = file.strip_prefix("file:///").unwrap().split('/').next().unwrap();
+    fs::write(&config, format!("trusted = [\"acme\", \"acme/theirs\", {first:?}]\n{text}")).unwrap();
+    let before = fx.snapshot();
+    for source in [&url, &file] {
+        let r = add(&fx, &[source]);
+        assert_eq!(r.code(), 2, "{}", r.stderr());
+        assert!(r.stderr().contains("is not on the trust list"), "{}", r.stderr());
+        assert_eq!(fx.snapshot(), before);
+    }
+
+    fs::write(&config, format!("trusted = [\"Git.Example.org/acme/theirs\"]\n{text}")).unwrap();
     add(&fx, &[&url]).assert_ok();
     assert_eq!(lock(&fx)[0]["trusted"].as_bool(), Some(true));
 }
@@ -676,12 +692,16 @@ fn an_unchanged_skill_is_up_to_date_and_its_entry_untouched() {
 
 #[test]
 fn with_no_judge_an_untrusted_skill_is_refused_until_its_source_is_trusted() {
-    let fx = git_fixture();
-    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    let mut fx = git_fixture();
+    let url = hosted_repo(&mut fx, "theirs", &[(".", "theirs")]);
     add(&fx, &[&url, "--trust"]).assert_ok();
     let path = fx.data.join("mazo/mazo.lock");
     fs::write(&path, lock_text(&fx).replace("trusted = true", "trusted = false")).unwrap();
     push_change(&fx, "theirs", "references/new.md", "new\n");
+    let config = fx.source.join("mazo.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    // The same owner on GitHub is not this source.
+    fs::write(&config, format!("trusted = [\"acme\"]\n{text}")).unwrap();
     let before = fx.snapshot();
     let r = fx.mazo(&["update"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
@@ -694,10 +714,7 @@ fn with_no_judge_an_untrusted_skill_is_refused_until_its_source_is_trusted() {
     assert_eq!(r.stdout(), "");
     assert_eq!(fx.snapshot(), before);
 
-    let segments: Vec<&str> = url.strip_prefix("file:///").unwrap().split('/').take(2).collect();
-    let config = fx.source.join("mazo.toml");
-    let text = fs::read_to_string(&config).unwrap();
-    fs::write(&config, format!("trusted = [{:?}]\n{text}", segments.join("/"))).unwrap();
+    fs::write(&config, format!("trusted = [\"git.example.org/acme\"]\n{text}")).unwrap();
     let r = fx.mazo(&["update"]);
     r.assert_ok();
     assert!(r.stdout().contains("updated"), "{}", r.stdout());
