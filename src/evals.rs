@@ -1,11 +1,12 @@
-//! `.grades/` and `.retros/` frontmatter and grade staleness.
-//! Read at report time; never copied or written.
+//! Grade and retro frontmatter under `evals_dir`, and grade staleness by
+//! content hash. Read at report time; never copied or written.
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::inventory::Inventory;
+use crate::store::content_hash;
 use crate::yaml;
 
 /// One loaded grade or retro file.
@@ -25,55 +26,53 @@ pub struct Eval {
 pub struct Grade {
     #[serde(flatten)]
     pub eval: Eval,
-    /// `+N`: commits that changed the skill after this grade was committed.
-    pub since: usize,
-    /// `+wip`: the skill has uncommitted changes.
-    pub wip: bool,
+    /// The frontmatter `content_hash`: the skill's [`content_hash`] when it was graded.
+    pub content_hash: Option<String>,
+    /// `content_hash` is missing or is not the skill's current one.
+    pub stale: bool,
 }
 
 impl Grade {
-    /// The skill changed after the grade, committed or not. An
-    /// uncommitted grade has no `G`, so only `wip` can make it stale.
-    pub fn stale(&self) -> bool {
-        self.since > 0 || self.wip
-    }
-
-    /// `+N` when commits changed the skill after the grade, else `+wip` when
-    /// only uncommitted changes did, else empty.
-    pub fn mark(&self) -> String {
-        match (self.since, self.wip) {
-            (0, false) => String::new(),
-            (0, true) => "+wip".into(),
-            (n, _) => format!("+{n}"),
-        }
+    /// `stale` for a stale grade, else empty.
+    pub fn mark(&self) -> &'static str {
+        if self.stale { "stale" } else { "" }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evals {
+    /// The skill's current [`content_hash`]; None for a name in no root.
+    pub content_hash: Option<String>,
     /// Every grade, oldest first; the last one is the latest.
     pub grades: Vec<Grade>,
     /// Every retro, oldest first; the last one is the latest.
     pub retros: Vec<Eval>,
 }
 
-/// The evaluation artifacts of one skill under the inventory's source.
-pub fn load(inv: &Inventory, skill: &str) -> Evals {
-    let Some(source) = &inv.source else { return Evals { grades: Vec::new(), retros: Vec::new() } };
-    let history = inv.history.as_ref();
-    let wip = history.is_some_and(|h| h.wip(skill));
-    // Outside a git worktree nothing comes after a grade.
-    let since = |file: &Path| history.map_or(0, |h| file.strip_prefix(source).map_or(0, |g| h.since(skill, g)));
-    let grades = read_dir(&source.join(".grades").join(skill))
-        .into_iter()
-        .map(|eval| Grade { since: since(&eval.file), wip, eval })
-        .collect();
-    Evals { grades, retros: read_dir(&source.join(".retros").join(skill)) }
+/// `skill`'s grade and retro directories under `evals_dir`.
+pub fn dirs(evals_dir: &Path, skill: &str) -> [PathBuf; 2] {
+    ["grades", "retros"].map(|kind| evals_dir.join(kind).join(skill))
 }
 
-/// Every `*.md` in `dir` with loadable frontmatter and a `date`, sorted by
-/// (date, filename). Other files are skipped, a rejected one with a warning.
-fn read_dir(dir: &Path) -> Vec<Eval> {
+/// The evaluation artifacts under `evals_dir` of `skill`, a source or store
+/// skill of `inv`; none for a name in no root.
+pub fn load(evals_dir: &Path, inv: &Inventory, skill: &str) -> Evals {
+    let Some(root) = inv.root(skill) else {
+        return Evals { content_hash: None, grades: Vec::new(), retros: Vec::new() };
+    };
+    let current = content_hash(&root.join(skill)).ok();
+    let [grades, retros] = dirs(evals_dir, skill);
+    let grades = read_dir(&grades)
+        .into_iter()
+        .map(|(eval, hash)| Grade { stale: hash.is_none() || hash != current, content_hash: hash, eval })
+        .collect();
+    Evals { grades, retros: read_dir(&retros).into_iter().map(|(eval, _)| eval).collect(), content_hash: current }
+}
+
+/// Every `*.md` in `dir` with loadable frontmatter and a `date`, with its
+/// frontmatter `content_hash`, sorted by (date, filename). Other files are
+/// skipped, a rejected one with a warning.
+fn read_dir(dir: &Path) -> Vec<(Eval, Option<String>)> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let file = entry.path();
@@ -98,9 +97,9 @@ fn read_dir(dir: &Path) -> Vec<Eval> {
             continue;
         };
         let field = |key| yaml::get(&fm, key).and_then(yaml::text).map(str::to_string);
-        out.push(Eval { file, date, score: field("score"), verdict: field("verdict") });
+        out.push((Eval { file, date, score: field("score"), verdict: field("verdict") }, field("content_hash")));
     }
-    out.sort_by(|a, b| (&a.date, &a.file).cmp(&(&b.date, &b.file)));
+    out.sort_by(|(a, _), (b, _)| (&a.date, &a.file).cmp(&(&b.date, &b.file)));
     out
 }
 

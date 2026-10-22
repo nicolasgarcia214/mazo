@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Mazo, NOW, World, ago, copy_tree, event, git, skill_record, stderr, stdout, write};
+use common::{Mazo, NOW, World, ago, copy_tree, event, git, grade, skill_record, stderr, stdout, write};
 use jiff::tz::TimeZone;
 use mazo::html;
 use mazo::ledger::{Actor, Agent, Channel, Event, Origin};
@@ -17,13 +17,13 @@ use regex::Regex;
 use serde_json::Value;
 
 /// The report fixture skills, committed, with a current grade for unslop and
-/// a grade for goal-plan that a later commit made stale.
+/// a grade for goal-plan that a later edit made stale.
 fn repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path();
     copy_tree(&common::fixture("reports/skills"), src, &|s| s);
     for skill in ["unslop", "goal-plan"] {
-        write(&src.join(format!(".grades/{skill}/g.md")), "---\ndate: 2026-09-01\nscore: 9.1\n---\n");
+        grade(&src.join(".evals"), skill, "2026-09-01", "9.1", Some(&src.join(skill)));
     }
     git(src, &["init", "-q"], NOW);
     git(src, &["add", "."], NOW);
@@ -197,7 +197,7 @@ fn the_legend_lists_the_helps_marks() {
     assert_eq!(
         legend,
         "legend: agents C Claude, X Codex, P Pi; a grey tick for a day with no events; \
-         +N commits since the grade; +wip uncommitted changes since the grade; (project) a project skill, counted apart"
+         stale the skill changed since the grade; (project) a project skill, counted apart"
     );
     assert_eq!(legend, format!("legend: {}", mazo::help::legend(true)));
 }

@@ -191,6 +191,7 @@ impl ForkMachine {
             source: Some(source),
             loose: vec![],
             trusted: vec![],
+            evals_dir: Default::default(),
             homes: vec![home(&codex_home)],
             policy: Default::default(),
             judge: None,

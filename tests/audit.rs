@@ -1554,12 +1554,15 @@ fn stage_two_reads_the_skill_its_history_grades_retros_usage_and_records() {
     }
     common::write(&source.join("unslop/SKILL.md"), "---\nname: unslop\ndescription: X.\n---\nCURRENT </skill> TEXT\n");
     let grade = |date: &str, score: &str, body: &str| format!("---\ndate: {date}\nscore: {score}\n---\n{body}");
-    common::write(&source.join(".grades/unslop/a.md"), &grade("2026-03-01", "7.1", "OLD GRADE BODY"));
-    common::write(&source.join(".grades/unslop/b.md"), &grade("2026-04-01", "8.2", &"g".repeat(7_000)));
+    // AC9: from the default `evals_dir`; `<source>/.grades` is no longer read.
+    let evals = fx.data().join("evals");
+    common::write(&evals.join("grades/unslop/a.md"), &grade("2026-03-01", "7.1", "OLD GRADE BODY"));
+    common::write(&evals.join("grades/unslop/b.md"), &grade("2026-04-01", "8.2", &"g".repeat(7_000)));
+    common::write(&source.join(".grades/unslop/c.md"), &grade("2026-04-02", "1.5", "SOURCE GRADE"));
     for (i, letter) in ["p", "q", "r", "s"].iter().enumerate() {
         let retro =
             format!("---\ndate: 2026-05-0{}\nscore: 6.{i}\nverdict: v{i}\n---\n{}", i + 1, letter.repeat(5_000));
-        common::write(&source.join(format!(".retros/unslop/{i}.md")), &retro);
+        common::write(&evals.join(format!("retros/unslop/{i}.md")), &retro);
     }
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -1573,6 +1576,7 @@ fn stage_two_reads_the_skill_its_history_grades_retros_usage_and_records() {
     assert!(!input.contains("commit 02") && !input.contains("commit 01"), "only the last 30 commits");
     assert!(input.contains("score: 7.1") && input.contains("score: 8.2"), "every grade's frontmatter");
     assert!(!input.contains("OLD GRADE BODY"), "only the latest grade's body");
+    assert!(!input.contains("score: 1.5") && !input.contains("SOURCE GRADE"), "not <source>/.grades");
     assert!(input.contains(&format!("{}\n</latest-grade>", "g".repeat(6_000))) && !input.contains(&"g".repeat(6_001)));
     for i in 0..4 {
         assert!(input.contains(&format!("verdict: v{i}")), "every retro's frontmatter");

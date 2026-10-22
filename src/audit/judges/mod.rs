@@ -425,7 +425,7 @@ mod tests {
     fn a_backend_that_owns_its_call_is_called_without_a_subprocess() {
         let data = tempfile::tempdir().unwrap();
         let judge = Judge { agent: JudgeAgent::Claude, ..Judge::default() };
-        let evals = crate::evals::Evals { grades: vec![], retros: vec![] };
+        let evals = crate::evals::Evals { content_hash: None, grades: vec![], retros: vec![] };
         let a = Audit {
             skill: "s",
             source: data.path(),

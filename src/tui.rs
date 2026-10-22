@@ -295,10 +295,11 @@ fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
             .map(|c| if c == '·' { muted("·") } else { Span::raw(c.to_string()).fg(theme::ACCENT) })
             .collect(),
         ("grade", _) => {
-            let (score, mark) = cell.split_at(cell.find('+').unwrap_or(cell.len()));
+            let (score, mark) = cell.split_once(' ').unwrap_or((cell, ""));
             let high = score.parse::<f64>().is_ok_and(|s| s >= 9.0);
             let score = if high { Span::raw(score.to_string()).fg(theme::GOOD) } else { Span::raw(score.to_string()) };
-            [score].into_iter().chain((!mark.is_empty()).then(|| token(mark))).collect()
+            let mark = (!mark.is_empty()).then(|| [Span::raw(" "), token(mark)]);
+            [score].into_iter().chain(mark.into_iter().flatten()).collect()
         }
         ("audit", _) => match cell.split_once(": ") {
             Some((judge, verdict)) => vec![muted(&format!("{judge}: ")), Span::raw(verdict.to_string())],
@@ -352,6 +353,7 @@ const NARROWING: &[Narrow] = &[
     Narrow::Drop("agents"),
     Narrow::Cut("notes"),
     Narrow::Cut("skill"),
+    Narrow::Cut("audit"),
 ];
 
 /// `cols` narrowed by [`NARROWING`] until they fit in `room` columns, one

@@ -20,6 +20,8 @@ pub struct Config {
     /// Owners (`owner`) and repositories (`owner/repo`) whose skills install
     /// without vetting.
     pub trusted: Vec<String>,
+    /// Where grades and retros live, `<data dir>/evals` by default.
+    pub evals_dir: PathBuf,
     pub homes: Vec<Home>,
     pub policy: Policy,
     /// `None` without a `[judge]` table: no agent is assumed.
@@ -153,6 +155,8 @@ struct RawConfig {
     /// without vetting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     trusted: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evals_dir: Option<String>,
     #[serde(default)]
     policy: Policy,
     judge: Option<Judge>,
@@ -240,7 +244,20 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
         };
         homes.push(Home { name: h.name, agent: h.agent, path, links: h.links });
     }
-    Ok(Some(Config { source, loose: raw.loose, trusted: raw.trusted, homes, policy: raw.policy, judge: raw.judge }))
+    // Relative to this file, like a home `path`.
+    let evals_dir = match &raw.evals_dir {
+        Some(dir) => resolve(base, &expand_tilde(dir, &home)),
+        None => crate::ledger::data_dir()?.join("evals"),
+    };
+    Ok(Some(Config {
+        source,
+        loose: raw.loose,
+        trusted: raw.trusted,
+        evals_dir,
+        homes,
+        policy: raw.policy,
+        judge: raw.judge,
+    }))
 }
 
 /// `mazo init`: a config at `path` naming `source`, if given, absolutely, a
@@ -383,8 +400,15 @@ fn config_text(source: Option<String>, homes: Vec<RawHome>, judge: Option<JudgeA
     let table = judge
         .filter(|a| !matches!(a, JudgeAgent::Command | JudgeAgent::Http))
         .map(|agent| Judge { agent, ..Judge::default() });
-    let raw =
-        RawConfig { source, loose: Vec::new(), trusted: Vec::new(), policy: Policy::default(), judge: table, homes };
+    let raw = RawConfig {
+        source,
+        loose: Vec::new(),
+        trusted: Vec::new(),
+        evals_dir: None,
+        policy: Policy::default(),
+        judge: table,
+        homes,
+    };
     let mut text = toml::to_string(&raw).map_err(|e| e.to_string())?;
     match judge {
         Some(JudgeAgent::Command) => text.push_str(COMMAND_PLACEHOLDER),

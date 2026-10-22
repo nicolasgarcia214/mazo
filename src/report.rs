@@ -259,19 +259,18 @@ pub fn coverage_note<'s>(label: &str, homes: impl IntoIterator<Item = (&'s Strin
     format!("{label}: {}", parts.join(" · "))
 }
 
-/// A grade as reports emit it, with its staleness.
+/// A grade as reports emit it, with its mark.
 #[derive(Serialize)]
 pub struct GradeOut {
     #[serde(flatten)]
     pub grade: Grade,
-    pub stale: bool,
-    /// `+N`, `+wip` or empty.
-    pub mark: String,
+    /// `stale` or empty.
+    pub mark: &'static str,
 }
 
 impl From<Grade> for GradeOut {
     fn from(grade: Grade) -> GradeOut {
-        GradeOut { stale: grade.stale(), mark: grade.mark(), grade }
+        GradeOut { mark: grade.mark(), grade }
     }
 }
 
@@ -279,10 +278,11 @@ fn grade_out(evals: &Evals) -> Option<GradeOut> {
     evals.grades.last().cloned().map(GradeOut::from)
 }
 
-/// The score as written, then `+N` or `+wip`, painted when `colour`.
+/// The score as written, then ` stale` for a stale grade, painted when `colour`.
 fn grade_cell(g: &Option<GradeOut>, colour: bool) -> String {
     g.as_ref().map_or("-".into(), |g| {
-        format!("{}{}", g.grade.eval.score.as_deref().unwrap_or("?"), render::paint(&g.mark, colour))
+        let score = g.grade.eval.score.as_deref().unwrap_or("?");
+        if g.mark.is_empty() { score.into() } else { format!("{score} {}", render::paint(g.mark, colour)) }
     })
 }
 
@@ -396,9 +396,9 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
             let last = window.iter().filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
             let spark_from = input.now.checked_sub(SignedDuration::from_hours(24 * (SPARK_DAYS + 1))).ok();
             let last_30d = view.daily_strong(select(spark_from), SPARK_DAYS);
-            // Grades are the source's.
+            // Only a source or store skill has grades.
             let global = scope == Scope::Global && input.inv.skills.contains(skill);
-            let grade = global.then(|| grade_out(&evals::load(input.inv, skill))).flatten();
+            let grade = global.then(|| grade_out(&evals::load(&input.cfg.evals_dir, input.inv, skill))).flatten();
             let (verdict_source, verdict) = verdict_of(input, skill, scope).unzip();
             UsageRow {
                 skill: skill.to_string(),
@@ -793,6 +793,8 @@ pub struct Card<'a> {
     pub path: Option<PathBuf>,
     /// The GitHub repository and commit the skill came from (D24).
     pub origin: Option<SkillOrigin>,
+    /// The [`crate::store::content_hash`] of the skill's directory; None for a name in no root.
+    pub content_hash: Option<String>,
     /// None outside a git worktree.
     pub history: Option<CardHistory<'a>>,
     /// Newest first.
@@ -946,7 +948,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         uncommitted: h.wip(skill),
     });
 
-    let Evals { grades, mut retros } = evals::load(inv, skill);
+    let Evals { content_hash, grades, mut retros } = evals::load(&view.input.cfg.evals_dir, inv, skill);
     let grades: Vec<GradeOut> = grades.into_iter().rev().map(GradeOut::from).collect();
     retros.reverse();
     let strong_since_retro = retros.first().and_then(|r| r.date.parse::<Date>().ok()).map(|d| {
@@ -989,6 +991,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         description,
         origin: origin_of(view, skill),
         path,
+        content_hash,
         history,
         grades,
         retros,
@@ -1105,8 +1108,8 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
     } else {
         out.push_str("grades:\n");
         let rows: Vec<Vec<String>> =
-            card.grades.iter().map(|g| vec![g.grade.eval.date.clone(), score(&g.grade.eval), g.grade.mark()]).collect();
-        let header = [("date", Align::Left), ("score", Align::Right), ("since", Align::Left)];
+            card.grades.iter().map(|g| vec![g.grade.eval.date.clone(), score(&g.grade.eval), g.mark.into()]).collect();
+        let header = [("date", Align::Left), ("score", Align::Right), ("mark", Align::Left)];
         out.push_str(&render::table(&header, &rows, tty));
     }
     out.push_str(&format!("retros: {}\n", card.retro_note()));
@@ -1212,7 +1215,7 @@ pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
         .filter_map(|r| {
             let state = match &r.grade {
                 None => "missing",
-                Some(g) if g.stale => "stale",
+                Some(g) if g.grade.stale => "stale",
                 Some(_) => return None,
             };
             Some(GradeDue { skill: r.skill.clone(), state, command: format!("/grade {}", r.skill) })
