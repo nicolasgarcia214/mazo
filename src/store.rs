@@ -203,6 +203,8 @@ pub struct Add<'a> {
     pub rename: Option<&'a str>,
     /// `--skill`.
     pub pick: Option<&'a str>,
+    /// `--all`.
+    pub all: bool,
     /// Install without vetting.
     pub trust: bool,
     /// Accept a vetted skill without asking.
@@ -211,17 +213,38 @@ pub struct Add<'a> {
     pub force: bool,
 }
 
-/// `mazo add <source> [--skill <name>] [--as <name>] [--trust] [--yes]
-/// [--force]`: copies the skill at `source` (a local path, or a repository
-/// shallow-cloned into `<data dir>/.clone-<pid>`) into the store, records it
-/// in the lockfile and links it into every home. A source that is not
-/// trusted is first vetted by the judge ([`gate`]). A bad skill, a name taken
-/// in any root, several skills and no `--skill`, or an untrusted source with
-/// no judge is a usage error, and a refused vet or a sync that would fail
-/// with the skill installed is a refusal; either way the store and the
-/// lockfile are left as they were.
+impl Add<'_> {
+    /// What the vet gate may assume for this add.
+    fn consent(&self) -> Consent {
+        Consent { update: false, yes: self.yes, force: self.force }
+    }
+}
+
+/// What `add` reads skills from: the source resolved, and cloned when it is a repository.
+struct Fetched<'a> {
+    /// The source at its subpath.
+    root: PathBuf,
+    origin: String,
+    subpath: PathBuf,
+    commit: Option<String>,
+    /// The name of a skill at `root` itself.
+    own: String,
+    /// The clone a skill must stay inside.
+    clone: Option<&'a Path>,
+    trusted: bool,
+}
+
+/// `mazo add <source> [--skill <name> | --all] [--as <name>] [--trust]
+/// [--yes] [--force]`: copies the skills chosen at `source` (a local path, or
+/// a repository shallow-cloned into `<data dir>/.clone-<pid>`) into the store,
+/// each recorded in the lockfile and linked into every home ([`install`]). A
+/// source that is not trusted is first vetted by the judge ([`gate`]). A
+/// source of several skills installs the one `--skill` names, every one with
+/// `--all`, else the ones picked at a terminal ([`skills_in`]); none picked
+/// installs nothing. A refused skill leaves the rest to install; the exit
+/// code is the highest of the refusals', 0 when there were none.
 pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<ExitCode> {
-    let (arg, rename) = (args.source, args.rename);
+    let arg = args.source;
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let source = Source::parse(arg).map_err(usage)?;
     let trusted = args.trust || matches!(&source, Source::Git(r) if r.trusted_by(&cfg.trusted));
@@ -237,9 +260,8 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         Some(judge) => Some((judge, audit::backend(judge, &cfg.homes)?)),
     };
     let caller = backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: None });
-    let consent = Consent { update: false, yes: args.yes, force: args.force };
     if let Some(c) = &caller {
-        consent.answerable().map_err(Error::Usage)?;
+        args.consent().answerable().map_err(Error::Usage)?;
         c.login()?;
     }
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
@@ -259,13 +281,46 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
             (clone.join(&remote.subpath), remote.url.clone(), remote.subpath.clone(), Some(commit), remote.name())
         }
     };
-    let (src, child) = skill_in(&root, &own, args.pick).map_err(usage)?;
-    let src = resolved(&src, scratch.as_ref().map(|s| s.0.as_path())).map_err(usage)?;
-    let subpath = match &child {
-        Some(c) => subpath.join(c),
-        None => subpath,
+    let clone = scratch.as_ref().map(|s| s.0.as_path());
+    let from = Fetched { root, origin, subpath, commit, own, clone, trusted };
+    let children = skills_in(&from.root, &from.own, args)?;
+    if children.is_empty() {
+        println!("nothing selected; nothing was installed");
+    }
+    let mut inv = inv.clone();
+    let mut code = 0;
+    for child in children {
+        if let Err(e) = install(cfg, &mut inv, data, args, caller.as_ref(), &from, child) {
+            eprintln!("ERROR: {e}");
+            code = code.max(e.exit_code());
+        }
+    }
+    Ok(ExitCode::from(code))
+}
+
+/// Installs the skill of `from` in `child` (`None` for `from.root` itself)
+/// and adds it to `inv`. A bad skill or a name taken in any root is a usage
+/// error, and a refused vet or a sync that would fail with the skill
+/// installed is a refusal; either way the store and the lockfile are left as
+/// they were.
+fn install(
+    cfg: &Config,
+    inv: &mut Inventory,
+    data: &Path,
+    args: &Add,
+    caller: Option<&Caller>,
+    from: &Fetched,
+    child: Option<String>,
+) -> Result<()> {
+    let (arg, rename) = (args.source, args.rename);
+    let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
+    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+    let (src, subpath) = match &child {
+        Some(c) => (from.root.join(c), from.subpath.join(c)),
+        None => (from.root.clone(), from.subpath.clone()),
     };
-    let name = rename.map(str::to_string).or(child).unwrap_or(own);
+    let src = resolved(&src, from.clone).map_err(usage)?;
+    let name = rename.map(str::to_string).or(child).unwrap_or_else(|| from.own.clone());
     let (skill_md, files) = checked(&src, &name, rename.is_some()).map_err(usage)?;
 
     let store = dir(data);
@@ -277,8 +332,8 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         )));
     }
 
-    let vetted = match &caller {
-        Some(c) => Some((gate(c, inv, consent, &name, contents(&src, &files, &skill_md)?, None)?, now()?)),
+    let vetted = match caller {
+        Some(c) => Some((gate(c, inv, args.consent(), &name, contents(&src, &files, &skill_md)?, None)?, now()?)),
         None => None,
     };
 
@@ -308,11 +363,11 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         };
         let locked = Locked {
             name,
-            origin,
+            origin: from.origin.clone(),
             subpath,
-            commit,
+            commit: from.commit.clone(),
             content_hash,
-            trusted,
+            trusted: from.trusted,
             installed_at,
             vetted_at,
             r#for,
@@ -333,11 +388,13 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         }
         return Err(e);
     }
+    // Recorded: the next skill of this add plans its links with this one.
+    *inv = with;
     println!("installed {}", to.display());
     for line in links::apply(&plan)? {
         println!("{line}");
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 /// `mazo update`'s arguments.
@@ -755,26 +812,39 @@ fn gate(
     Ok(vet)
 }
 
-/// The skill under `root` and the child it is in: `root` itself, named
-/// `own`, when it holds a `SKILL.md`; else its one child skill, or the one
-/// `pick` names.
-fn skill_in(root: &Path, own: &str, pick: Option<&str>) -> std::result::Result<(PathBuf, Option<String>), String> {
+/// The skills under `root` to install, each by the child it is in: `root`
+/// itself (`None`), named `own`, when it holds a `SKILL.md`; else its one
+/// child skill, the one `--skill` names, every one with `--all`, or those
+/// picked when stdin and stdout are a terminal. Off a terminal, several
+/// skills and neither flag is a usage error listing them.
+fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option<String>>> {
+    let usage = |e: String| Error::Usage(format!("add {}: {e}", args.source));
     if root.join("SKILL.md").is_file() {
-        return match pick {
-            Some(p) if p != own => Err(format!("no skill named {p}; the only skill here is {own}")),
-            _ => Ok((root.to_path_buf(), None)),
+        return match args.pick {
+            Some(p) if p != own => Err(usage(format!("no skill named {p}; the only skill here is {own}"))),
+            _ => Ok(vec![None]),
         };
     }
-    let names = crate::inventory::canonical_skills(root).map_err(|e| e.to_string())?;
-    let list = names.iter().map(String::as_str).collect::<Vec<_>>().join(", ");
-    let name = match pick {
-        Some(p) if names.contains(p) => p.to_string(),
-        Some(p) => return Err(format!("no skill named {p}; the skills here are: {list}")),
-        None if names.len() == 1 => list,
-        None if names.is_empty() => return Err("no SKILL.md here or in any child directory".into()),
-        None => return Err(format!("several skills here; pass --skill with one of: {list}")),
+    let found = Inventory::load_roots(None, &[root]).map_err(|e| usage(e.to_string()))?;
+    let list = found.skills.iter().map(String::as_str).collect::<Vec<_>>().join(", ");
+    let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let names: Vec<String> = match args.pick {
+        Some(p) if found.skills.contains(p) => vec![p.to_string()],
+        Some(p) => return Err(usage(format!("no skill named {p}; the skills here are: {list}"))),
+        None if found.skills.is_empty() => return Err(usage("no SKILL.md here or in any child directory".into())),
+        None if args.all || found.skills.len() == 1 => found.skills.iter().cloned().collect(),
+        None if tty => {
+            // One line each: a folded description keeps its words, not its breaks.
+            let line = |d: String| d.split_whitespace().collect::<Vec<_>>().join(" ");
+            let items = found.skills.iter().map(|s| (s.clone(), found.description(s).map(line).unwrap_or_default()));
+            crate::pick::pick(items.collect()).map_err(|e| format!("skill picker: {e}"))?
+        }
+        None => return Err(usage(format!("several skills here; pass --skill with one of: {list}, or --all"))),
     };
-    Ok((root.join(&name), Some(name)))
+    if args.rename.is_some() && names.len() > 1 {
+        return Err(usage("--as names one skill; pick one with --skill".into()));
+    }
+    Ok(names.into_iter().map(Some).collect())
 }
 
 /// `text` with the frontmatter's top-level `name:` line set to `name`.

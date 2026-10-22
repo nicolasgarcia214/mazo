@@ -352,7 +352,7 @@ fn a_repo_with_several_skills_needs_skill_or_a_subpath() {
     let before = fx.snapshot();
     let r = add(&fx, &[&format!("{url}/skills"), "--trust"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
-    assert!(r.stderr().contains("pass --skill with one of: one, two"), "{}", r.stderr());
+    assert!(r.stderr().contains("pass --skill with one of: one, two, or --all"), "{}", r.stderr());
     assert_eq!(fx.snapshot(), before);
 
     let r = add(&fx, &[&format!("{url}/skills"), "--skill", "nope", "--trust"]);
@@ -370,6 +370,137 @@ fn a_repo_with_several_skills_needs_skill_or_a_subpath() {
     assert_eq!(got, [("two", url.as_str(), "skills/two"), ("one", url.as_str(), "skills/one")]);
     assert!(exists(&store(&fx).join("one/SKILL.md")) && exists(&store(&fx).join("two/SKILL.md")));
     assert_no_clone(&fx);
+}
+
+/// The fixture of [`git_fixture`] with a repository holding `names` under
+/// `skills/`, each allowed, and its URL at that subpath.
+fn pack(names: &[&str]) -> (Fixture, String) {
+    let mut fx = git_fixture();
+    for n in names {
+        fx.allow(n);
+    }
+    let skills: Vec<(String, &str)> = names.iter().map(|n| (format!("skills/{n}"), *n)).collect();
+    let skills: Vec<(&str, &str)> = skills.iter().map(|(sub, n)| (sub.as_str(), *n)).collect();
+    let url = bare_repo(&fx, "pack", &skills);
+    (fx, format!("{url}/skills"))
+}
+
+#[test]
+fn all_installs_every_skill_and_conflicts_with_skill_and_as() {
+    let (fx, url) = pack(&["one", "two", "three"]);
+    let before = fx.snapshot();
+    for flag in ["--skill", "--as"] {
+        let r = add(&fx, &[&url, "--all", flag, "one", "--trust"]);
+        assert_eq!(r.code(), 2, "{}", r.stderr());
+        assert_eq!(fx.snapshot(), before, "{flag}");
+    }
+    let r = add(&fx, &[&url, "--all", "--trust"]);
+    r.assert_ok();
+    for n in ["one", "three", "two"] {
+        assert!(r.stdout().contains(&format!("installed {}", store(&fx).join(n).display())), "{}", r.stdout());
+        assert!(exists(&fx.home.join(".codex/skills").join(n)), "{n}");
+    }
+    let subpaths: Vec<String> = lock(&fx).iter().map(|e| e["subpath"].as_str().unwrap().to_string()).collect();
+    assert_eq!(lock_names(&fx), ["one", "three", "two"]);
+    assert_eq!(subpaths, ["skills/one", "skills/three", "skills/two"]);
+    assert_no_clone(&fx);
+}
+
+#[test]
+fn a_refused_skill_of_several_leaves_the_rest_to_install_and_sets_the_exit_code() {
+    let (fx, url) = pack(&["one", "theirs", "two"]);
+    add(&fx, &[&s(&incoming(&fx, "theirs")), "--trust"]).assert_ok();
+    let r = add(&fx, &[&url, "--all", "--trust"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    let taken = store(&fx).join("theirs");
+    assert!(r.stderr().contains(&format!("ERROR: add refused: {} already exists", taken.display())), "{}", r.stderr());
+    assert_eq!(lock_names(&fx), ["theirs", "one", "two"]);
+    assert_eq!(entry(&lock(&fx), "theirs")["subpath"].as_str(), Some("."), "the first install is intact");
+}
+
+#[test]
+fn several_skills_off_a_terminal_list_their_names_and_install_nothing() {
+    let (fx, url) = pack(&["one", "two"]);
+    let before = fx.snapshot();
+    // stdin a terminal, stdout piped: no picker.
+    let r = add_at_terminal(&fx, &[&url, "--trust"], "");
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains("several skills here; pass --skill with one of: one, two, or --all"), "{}", r.stderr());
+    assert_eq!(fx.snapshot(), before);
+}
+
+/// `mazo add args…` with stdin, stdout and stderr a terminal: each step's
+/// keys are typed once the terminal has shown its text, the first being the
+/// picker's status line. The exit code and everything the terminal showed.
+fn add_in_picker(fx: &Fixture, args: &[&str], steps: &[(&str, &str)]) -> (i32, String) {
+    use std::io::{Read, Write};
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::sync::{Arc, Mutex};
+    let (mut controller, mut terminal) = (0, 0);
+    let size = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+    // SAFETY: openpty writes two new descriptors, owned below.
+    let rc =
+        unsafe { libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null_mut(), &size) };
+    assert_eq!(rc, 0, "openpty");
+    let (controller, terminal) = unsafe { (OwnedFd::from_raw_fd(controller), OwnedFd::from_raw_fd(terminal)) };
+    let mut child = fx
+        .command(&[&["add"], args].concat())
+        .stdin(std::process::Stdio::from(terminal.try_clone().unwrap()))
+        .stdout(std::process::Stdio::from(terminal.try_clone().unwrap()))
+        .stderr(std::process::Stdio::from(terminal))
+        .spawn()
+        .unwrap();
+    let mut output = fs::File::from(controller);
+    let mut input = output.try_clone().unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    // Reads until the child closes the terminal.
+    let reader = std::thread::spawn({
+        let seen = Arc::clone(&seen);
+        move || {
+            let mut buf = [0; 4096];
+            while let Ok(n @ 1..) = output.read(&mut buf) {
+                seen.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        }
+    });
+    let shown = || String::from_utf8_lossy(&seen.lock().unwrap()).into_owned();
+    for (text, keys) in steps {
+        let start = std::time::Instant::now();
+        while !shown().contains(text) {
+            assert!(start.elapsed().as_secs() < 30, "never showed {text:?}: {}", shown());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        input.write_all(keys.as_bytes()).unwrap();
+    }
+    let code = child.wait().unwrap().code().expect("exited");
+    drop(input);
+    reader.join().unwrap();
+    (code, shown())
+}
+
+#[test]
+fn at_a_terminal_the_picker_lists_each_skill_with_its_description_and_installs_the_selected() {
+    let (fx, url) = pack(&["one", "two", "three"]);
+    // The list is sorted: one, three, two. Select three and two.
+    let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], &[("selected", "j j \r")]);
+    assert_eq!(code, 0, "{screen}");
+    assert!(screen.contains("From a repo."), "{screen}");
+    assert!(screen.contains("\x1b[?1049l"), "the picker left the alternate screen: {screen}");
+    assert_eq!(lock_names(&fx), ["three", "two"]);
+    assert_not_installed(&fx, "one");
+    assert_no_clone(&fx);
+}
+
+#[test]
+fn cancelling_or_selecting_nothing_in_the_picker_installs_nothing() {
+    let (fx, url) = pack(&["one", "two"]);
+    let before = fx.snapshot();
+    for keys in ["\r", "a q", "a \x1b"] {
+        let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], &[("selected", keys)]);
+        assert_eq!(code, 0, "{keys:?}: {screen}");
+        assert!(screen.contains("nothing selected; nothing was installed"), "{keys:?}: {screen}");
+        assert_eq!(fx.snapshot(), before, "{keys:?}");
+    }
 }
 
 #[test]
@@ -742,6 +873,38 @@ fn an_untrusted_add_sends_one_vet_call_with_the_skills_files_and_every_existing_
     assert!(!verdict.contains_key("security") && !verdict.contains_key("redundant_with"));
     // The entry loads back: a later command reads the lockfile.
     fx.mazo(&["status", "--agent", "codex"]).assert_ok();
+}
+
+#[test]
+fn every_skill_of_several_goes_through_the_vet_gate() {
+    let (mut fx, _) = judged();
+    fs::create_dir_all(fx.data.join("mazo")).unwrap();
+    fx.allow("one");
+    fx.allow("two");
+    let url = bare_repo(&fx, "pack", &[("skills/one", "one"), ("skills/two", "two")]);
+    answer(&fx, None, "good", "worth trying");
+    add(&fx, &[&format!("{url}/skills"), "--all", "--yes"]).assert_ok();
+    let calls = calls(&fx);
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].contains("# one") && calls[1].contains("# two"), "{calls:?}");
+    assert_eq!(lock_names(&fx), ["one", "two"]);
+    assert!(lock(&fx).iter().all(|e| e.get("verdict").is_some()), "{:?}", lock(&fx));
+}
+
+#[test]
+fn the_vet_prompt_after_the_picker_reads_the_answer_typed_to_it() {
+    let (mut fx, _) = judged();
+    fs::create_dir_all(fx.data.join("mazo")).unwrap();
+    fx.allow("one");
+    fx.allow("two");
+    let url = bare_repo(&fx, "pack", &[("skills/one", "one"), ("skills/two", "two")]);
+    answer(&fx, None, "good", "worth trying");
+    let steps = [("selected", "j \r"), ("install two? [Y/n]", "y\r")];
+    let (code, screen) = add_in_picker(&fx, &[&format!("{url}/skills")], &steps);
+    assert_eq!(code, 0, "{screen}");
+    assert_eq!(calls(&fx).len(), 1);
+    assert_eq!(lock_names(&fx), ["two"]);
+    assert_not_installed(&fx, "one");
 }
 
 #[test]

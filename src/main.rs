@@ -153,9 +153,12 @@ enum Cmd {
         /// Install under this name; rewrites the SKILL.md `name:` field.
         #[arg(long = "as", value_name = "NAME")]
         name: Option<String>,
-        /// The skill to install from a source holding several.
+        /// The skill to install from a source holding several; at a terminal, without it or --all, a picker asks.
         #[arg(long, value_name = "NAME")]
         skill: Option<String>,
+        /// Install every skill of a source holding several.
+        #[arg(long, conflicts_with_all = ["skill", "name"])]
+        all: bool,
         /// Install without vetting.
         #[arg(long)]
         trust: bool,
@@ -266,9 +269,9 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         }
         Cmd::Retire { name, force } => cmd_retire(&cfg, &inv, &data, &name, force),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
-        Cmd::Add { source, name, skill, trust, yes, force } => {
-            let args =
-                store::Add { source: &source, rename: name.as_deref(), pick: skill.as_deref(), trust, yes, force };
+        Cmd::Add { source, name, skill, all, trust, yes, force } => {
+            let (rename, pick) = (name.as_deref(), skill.as_deref());
+            let args = store::Add { source: &source, rename, pick, all, trust, yes, force };
             store::add(&cfg, &inv, &data, &args)
         }
         Cmd::Update { names, yes, force } => {
