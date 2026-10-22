@@ -24,7 +24,7 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Clear, HighlightSpacing, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+    Block, BorderType, Borders, Clear, HighlightSpacing, Padding, Paragraph, Row, Scrollbar, ScrollbarOrientation,
     ScrollbarState, Table, TableState, Tabs,
 };
 
@@ -46,6 +46,10 @@ const WINDOWS: [Since; 3] = [Since::Days(30), Since::Days(60), Since::All];
 
 /// The most lines the job pane shows: its last ones.
 const PANE_LINES: usize = 6;
+
+/// The terminal width from which the usage table shows the selected
+/// skill's card beside it.
+const WIDE: u16 = 140;
 
 /// How long quitting waits for a cancelled job: longer than a judge has to
 /// exit on SIGTERM before it is killed.
@@ -226,6 +230,8 @@ pub struct App {
     unused: Unused,
     /// The open card's skill and its `show` lines.
     card: Option<(String, Vec<String>)>,
+    /// The card beside a wide usage table, as last drawn: its skill and lines.
+    side: Option<(String, Vec<String>)>,
     scroll: usize,
     dialog: Option<Dialog>,
     /// The running job, or the last one until `Esc` closes its pane.
@@ -448,6 +454,7 @@ impl App {
             usage: report::usage_table(input, &UsageArgs::new(usage_since)),
             unused: report::unused_list(input, unused_since),
             card: None,
+            side: None,
             scroll: 0,
             dialog: None,
             job: None,
@@ -491,11 +498,15 @@ impl App {
         skills.into_iter().filter(|s| self.matches(s)).collect()
     }
 
-    fn open(&mut self, skill: &str) {
+    /// `skill`'s card over `since`, as `show` prints it at a terminal.
+    fn card_lines(&self, skill: &str, since: Since) -> Vec<String> {
         let input = self.data.input();
-        let card = report::skill_card(&input, skill, &self.args(self.card_since), SHOW_LIMIT);
-        let lines = report::card_text(&input, &card, true).lines().map(String::from).collect();
-        self.card = Some((skill.to_string(), lines));
+        let card = report::skill_card(&input, skill, &self.args(since), SHOW_LIMIT);
+        report::card_text(&input, &card, true).lines().map(String::from).collect()
+    }
+
+    fn open(&mut self, skill: &str) {
+        self.card = Some((skill.to_string(), self.card_lines(skill, self.card_since)));
     }
 
     /// Moves the selection, or scrolls the card, by `by` rows.
@@ -968,6 +979,7 @@ impl App {
 
     /// Recounts the usage view and the open card under the current filter.
     fn refresh(&mut self) {
+        self.side = None;
         self.usage = report::usage_table(&self.data.input(), &self.args(self.usage_since));
         if self.list() == Screen::Usage {
             self.clamp();
@@ -1080,11 +1092,13 @@ impl App {
         }
         match (self.screen, &self.card) {
             (Screen::Card, Some((skill, lines))) => {
-                let area = body.union(info);
-                let text: Vec<Line> = lines.iter().skip(self.scroll).map(|l| card_line(l, skill)).collect();
-                frame.render_widget(Paragraph::new(text), area.inner(Margin::new(2, 0)));
-                scrollbar(frame, area, lines.len(), self.scroll, area.height.into());
-                self.page = usize::from(area.height).max(1);
+                self.page = draw_card(frame, skill, lines, self.scroll, body.union(info));
+            }
+            (Screen::Usage, _) if body.width >= WIDE => {
+                let side = Constraint::Length((body.width * 2 / 5).max(50));
+                let [table, side] = Layout::horizontal([Constraint::Fill(1), side]).areas(body);
+                self.draw_list(frame, table, info);
+                self.draw_side(frame, side);
             }
             _ => self.draw_list(frame, body, info),
         }
@@ -1097,6 +1111,18 @@ impl App {
                 _ => draw_dialog(frame, dialog, area),
             }
         }
+    }
+
+    /// The selected skill's card in `area`, behind a rule, from its top.
+    fn draw_side(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(skill) = self.listed().get(self.selected).map(|s| s.to_string()) else { return };
+        if self.side.as_ref().is_none_or(|(s, _)| *s != skill) {
+            self.side = Some((skill.clone(), self.card_lines(&skill, self.usage_since)));
+        }
+        let rule = Block::new().borders(Borders::LEFT).border_style(theme::MUTED);
+        frame.render_widget(&rule, area);
+        let (skill, lines) = self.side.as_ref().unwrap();
+        draw_card(frame, skill, lines, 0, rule.inner(area));
     }
 
     /// The current list as a table in `body` from the row that keeps the
@@ -1331,6 +1357,15 @@ fn scrollbar(frame: &mut Frame, area: Rect, total: usize, first: usize, page: us
         .thumb_style(Style::new().fg(theme::ACCENT));
     let mut state = ScrollbarState::new(total - page + 1).position(first).viewport_content_length(page);
     frame.render_stateful_widget(bar, area, &mut state);
+}
+
+/// `skill`'s card `lines` in `area` from line `first`, inset, with a
+/// scrollbar when they overflow it; the lines a page shows.
+fn draw_card(frame: &mut Frame, skill: &str, lines: &[String], first: usize, area: Rect) -> usize {
+    let text: Vec<Line> = lines.iter().skip(first).map(|l| card_line(l, skill)).collect();
+    frame.render_widget(Paragraph::new(text), area.inner(Margin::new(2, 0)));
+    scrollbar(frame, area, lines.len(), first, area.height.into());
+    usize::from(area.height).max(1)
 }
 
 /// A line of `skill`'s card as `show` prints it at a terminal: its `ESC [ n

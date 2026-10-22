@@ -68,9 +68,10 @@ fn rows(screen: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// `line` of the body without the two-column gutter or inset and the scrollbar.
+/// `line` of the body without the two-column gutter or inset, cut at the
+/// scrollbar or the rule before the side card.
 fn body(line: &str) -> String {
-    line.chars().skip(2).collect::<String>().trim_end_matches(['│', '┃']).trim_end().to_string()
+    line.chars().skip(2).take_while(|c| !matches!(c, '│' | '┃')).collect::<String>().trim_end().to_string()
 }
 
 /// The words of `skill`'s row on `screen`.
@@ -248,9 +249,9 @@ fn w_a_c_and_capital_a_change_the_footer_and_counts_as_the_usage_flags_do() {
         let words = |screen: &[String]| {
             rows(screen).iter().map(|r| r.split_whitespace().map(String::from).collect()).collect::<Vec<Vec<String>>>()
         };
-        assert_eq!(words(&text(&mut app, 200, 40)), expected(&input, &default));
+        assert_eq!(words(&text(&mut app, 250, 40)), expected(&input, &default));
         press(&mut app, KeyCode::Char(key));
-        let screen = text(&mut app, 200, 40);
+        let screen = text(&mut app, 250, 40);
         assert!(screen[0].contains(footer), "{key}: {screen:#?}");
         assert_ne!(expected(&input, &args), expected(&input, &default), "{key} changes nothing in the fixture");
         assert_eq!(words(&screen), expected(&input, &args), "{key}");
@@ -264,9 +265,9 @@ fn buffer(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
     terminal.backend().buffer().clone()
 }
 
-/// On a wide terminal the table spans the body: the skill and audit
-/// columns split the spare width, the counts keep theirs, and the selected
-/// row's highlight runs from edge to edge.
+/// On a wide terminal the table spans the body left of the side card: the
+/// skill and audit columns split the spare width, the counts keep theirs,
+/// and the selected row's highlight runs from edge to edge of the table.
 #[test]
 fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whole_row() {
     let golden = Golden::new();
@@ -283,19 +284,22 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
     let widest = |col: usize| cells.iter().map(|c| c[col].chars().count()).max().unwrap();
     // The gutter, the skill column and a space come before `sess`, right-aligned in its four columns.
     let skill = header.find(" sess ").unwrap() + 1 - 3;
-    let audit = 250 - header.find("audit").unwrap();
+    // The side card takes 100 of the 250 columns.
+    let audit = 150 - header.find("audit").unwrap();
     let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(11).max(5));
-    assert!(skill_spare > 50 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
+    assert!(skill_spare > 5 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
 
     let buf = buffer(&mut app, 250, 30);
     let selected = mazo::theme::selected().bg.unwrap();
-    assert!((0..250).all(|x| buf[(x, 2)].bg == selected), "the first row is selected and highlighted edge to edge");
+    assert!((0..150).all(|x| buf[(x, 2)].bg == selected), "the first row is selected and highlighted edge to edge");
+    assert!((150..250).all(|x| buf[(x, 2)].bg != selected));
     assert!((0..250).all(|x| buf[(x, 3)].bg != selected));
 }
 
-/// As the terminal narrows, the usage columns give way one at a time in
-/// their priority order, slash and tool folding into `via`, while skill,
-/// sess, last, grade and audit stay down to 60 columns.
+/// As the terminal narrows from the widest with no side card, the usage
+/// columns give way one at a time in their priority order, slash and tool
+/// folding into `via`, while skill, sess, last, grade and audit stay down to
+/// 60 columns.
 #[test]
 fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_grade_and_audit() {
     let golden = Golden::new();
@@ -303,7 +307,7 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_g
     let mut app = app(&input);
     let all = report::usage_table(&input, &UsageArgs::new(Since::Days(30))).rows.len();
     let mut seen: Vec<String> = Vec::new();
-    for width in (60..=250).rev() {
+    for width in (60..140).rev() {
         let screen = text(&mut app, width, 30);
         // The skill header may be cut with the names, so it is left out.
         let header = screen[1].split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
@@ -363,6 +367,65 @@ fn a_narrow_unused_list_cuts_the_notes_and_keeps_the_skill_names() {
     assert_eq!(first, skills, "{screen:#?}");
     let line = shown.iter().find(|l| l.starts_with("goal-plan ")).unwrap();
     assert!(line.contains(" held by") && line.ends_with('…'), "{screen:#?}");
+}
+
+/// The selected skill's card as `show` prints it over the usage window.
+fn card_of(input: &Input, skill: &str) -> Vec<String> {
+    let card = report::skill_card(input, skill, &UsageArgs::new(Since::Days(30)), report::SHOW_LIMIT);
+    report::card_text(input, &card, false).lines().map(String::from).collect()
+}
+
+/// From 140 columns the usage table leaves 40% of the width, at least 50
+/// columns, to the selected skill's card behind a rule; the card follows the
+/// selection, and Enter opens the same card full screen. Narrower, there is
+/// no side card and Enter still opens it.
+#[test]
+fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let skills: Vec<String> =
+        report::usage_table(&input, &UsageArgs::new(Since::Days(30))).rows.into_iter().map(|r| r.skill).collect();
+    let mut app = app(&input);
+    for (width, side) in [(140, 56), (200, 80)] {
+        let screen = text(&mut app, width, 40);
+        let table = usize::from(width - side);
+        // The side card's lines: right of the rule and the inset, down the body.
+        let side: Vec<String> = screen[1..]
+            .iter()
+            .take_while(|l| l.chars().nth(table) == Some('│'))
+            .map(|l| l.chars().skip(table + 3).collect::<String>().trim_end_matches(['│', '┃']).trim_end().to_string())
+            .collect();
+        assert!(side.len() > 30, "{width}: {screen:#?}");
+        let card = card_of(&input, &skills[0]);
+        // The rule and an inset either side.
+        let room = usize::from(width) - table - 5;
+        for (shown, line) in side.iter().zip(&card) {
+            assert_eq!(*shown, line.chars().take(room).collect::<String>().trim_end(), "{width}: {screen:#?}");
+        }
+        assert!(rows(&screen).iter().all(|r| !r.contains("for:")), "{screen:#?}");
+    }
+
+    press(&mut app, KeyCode::Char('j'));
+    let screen = text(&mut app, 140, 40);
+    let heading = format!("{}: since", skills[1]);
+    assert!(screen.iter().any(|l| l.contains(&heading)), "the card follows the selection: {screen:#?}");
+
+    // Enter opens the same card full screen, and Esc goes back.
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen(), Screen::Card);
+    let screen = text(&mut app, 140, 40);
+    let card = card_of(&input, &skills[1]);
+    assert_eq!(screen[1..].iter().map(|l| body(l)).take(5).collect::<Vec<_>>(), card[..5], "{screen:#?}");
+    assert!(screen.iter().all(|l| !l.contains(" skills · ")), "{screen:#?}");
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen(), Screen::Usage);
+
+    let screen = text(&mut app, 139, 40);
+    assert!(screen.iter().all(|l| !l.contains(&heading) && !l.contains("for:")), "no side card: {screen:#?}");
+    assert_eq!(rows(&screen).len(), skills.len(), "{screen:#?}");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen(), Screen::Card);
+    assert!(text(&mut app, 139, 40).iter().any(|l| body(l).starts_with(&heading)));
 }
 
 /// The footer lists only the keys that work on the screen, and a list with
@@ -671,6 +734,8 @@ fn r_retires_a_source_skill_from_usage_after_y_and_the_list_drops_it() {
     assert!(fx.linked("idle"));
     let mut app = fx.app();
     select(&mut app, "idle");
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("│  idle: since ")), "the side card is idle's: {screen:#?}");
     press(&mut app, KeyCode::Char('r'));
     let screen = text(&mut app, 200, 20);
     assert!(screen.iter().any(|l| l.contains("retire idle: move it to ")), "{screen:#?}");
