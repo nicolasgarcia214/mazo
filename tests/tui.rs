@@ -190,6 +190,9 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert_eq!(colour_of(&screen, "goal-plan", "named by"), ratatui_colour("named by unslop"));
     assert_eq!(colour_of(&screen, "goal-plan", "held by"), Color::Reset);
     assert!(lines[0].contains(" unused ") && lines[0].contains("window 60d"), "{lines:#?}");
+    // The tabs in the top bar show the active one in the accent.
+    assert_eq!(colour_of(&screen, "♠ mazo", "unused"), mazo::theme::ACCENT);
+    assert_eq!(colour_of(&screen, "♠ mazo", "usage"), mazo::theme::MUTED);
 
     // From the last row of 30d, the shorter 60d list keeps a row selected.
     press(&mut app, KeyCode::Char('w'));
@@ -253,19 +256,94 @@ fn w_a_c_and_capital_a_change_the_footer_and_counts_as_the_usage_flags_do() {
     }
 }
 
+/// The cells of `app`'s screen at `width`×`height`, with their styles.
+fn buffer(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// On a wide terminal the table spans the body: the skill and audit
+/// columns split the spare width, the counts keep theirs, and the selected
+/// row's highlight runs from edge to edge.
 #[test]
-fn a_narrow_terminal_drops_columns_from_the_right_and_keeps_skill_and_sess() {
+fn a_wide_terminal_stretches_the_skill_and_quality_columns_and_highlights_the_whole_row() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
     let mut app = app(&input);
+    let screen = text(&mut app, 250, 30);
+    let header = &screen[1];
+    assert!(header.contains(" sess slash tool typed read ref agents "), "{screen:#?}");
+    let cells: Vec<Vec<String>> = report::usage_table(&input, &UsageArgs::new(Since::Days(30)))
+        .rows
+        .iter()
+        .map(|r| report::usage_cells(&input, r, false))
+        .collect();
+    let widest = |col: usize| cells.iter().map(|c| c[col].chars().count()).max().unwrap();
+    // The gutter, the skill column and a space come before `sess`, right-aligned in its four columns.
+    let skill = header.find(" sess ").unwrap() + 1 - 3;
+    let audit = 250 - header.find("audit").unwrap();
+    let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(11).max(5));
+    assert!(skill_spare > 50 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
+
+    let buf = buffer(&mut app, 250, 30);
+    let selected = mazo::theme::selected().bg.unwrap();
+    assert!((0..250).all(|x| buf[(x, 2)].bg == selected), "the first row is selected and highlighted edge to edge");
+    assert!((0..250).all(|x| buf[(x, 3)].bg != selected));
+}
+
+/// As the terminal narrows, the usage columns give way one at a time in
+/// their priority order, slash and tool folding into `via`, while skill,
+/// sess, last, grade and audit stay down to 60 columns.
+#[test]
+fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_last_grade_and_audit() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let mut app = app(&input);
+    let all = report::usage_table(&input, &UsageArgs::new(Since::Days(30))).rows.len();
+    let mut seen: Vec<String> = Vec::new();
+    for width in (60..=250).rev() {
+        let screen = text(&mut app, width, 30);
+        // The skill header may be cut with the names, so it is left out.
+        let header = screen[1].split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+        assert_eq!(rows(&screen).len(), all, "{width}: {screen:#?}");
+        if seen.last() != Some(&header) {
+            seen.push(header);
+        }
+    }
+    assert_eq!(
+        seen,
+        [
+            "sess slash tool typed read ref agents last 30d grade audit",
+            "sess slash tool typed read ref agents last grade audit",
+            "sess slash tool read ref agents last grade audit",
+            "sess slash tool read agents last grade audit",
+            "sess slash tool agents last grade audit",
+            "sess via agents last grade audit",
+            "sess via last grade audit",
+        ]
+    );
+
     let screen = text(&mut app, 60, 30);
     let keys = screen.iter().rev().take_while(|l| !body(l).starts_with("coverage:")).flat_map(|l| l.split(" · "));
     assert_eq!(keys.count(), 16, "every key shows: {screen:#?}");
-    let header: Vec<&str> = screen[1].split_whitespace().collect();
-    assert_eq!(header[..2], ["skill", "sess"]);
-    assert!(!header.contains(&"grade"), "{screen:#?}");
-    let sess = report::usage_table(&input, &UsageArgs::new(Since::Days(30))).rows[0].sess;
-    assert_eq!(row(&screen, "unslop")[1], sess.to_string());
+    // Only the skill names are cut, with `…`; via shows slash/tool.
+    let expected: Vec<(String, Vec<String>)> = report::usage_table(&input, &UsageArgs::new(Since::Days(30)))
+        .rows
+        .iter()
+        .map(|r| {
+            let c = report::usage_cells(&input, r, false);
+            let rest = [&c[1], &format!("{}/{}", c[2], c[3]), &c[8], &c[10], &c[11]];
+            (c[0].clone(), rest.iter().flat_map(|s| s.split_whitespace()).map(String::from).collect())
+        })
+        .collect();
+    let shown: Vec<Vec<String>> =
+        rows(&screen).iter().map(|r| r.split_whitespace().map(String::from).collect()).collect();
+    assert!(shown.iter().any(|w| w[0].ends_with('…')), "{screen:#?}");
+    for ((skill, rest), words) in expected.iter().zip(&shown) {
+        assert!(words[0] == *skill || skill.starts_with(words[0].trim_end_matches('…')), "{screen:#?}");
+        assert_eq!(words[1..], rest[..], "{screen:#?}");
+    }
 }
 
 /// The footer lists only the keys that work on the screen, and a list with

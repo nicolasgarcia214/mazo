@@ -697,7 +697,7 @@ const FOR_LINES: usize = 3;
 const ITEM_LINES: usize = 2;
 
 /// `text` cut to `max` characters, the last a `…` when cut.
-fn cut(text: &str, max: usize) -> String {
+pub(crate) fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max { text.into() } else { text.chars().take(max - 1).chain(['…']).collect() }
 }
 
