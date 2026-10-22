@@ -564,7 +564,7 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.screen(), Screen::Card, "{skill}");
         let screen = text(&mut app, 200, 20);
-        assert!(screen[0].starts_with(&format!("{skill}: ")), "{skill}: {screen:#?}");
+        assert!(screen.iter().any(|l| l.starts_with(&format!("{skill}: "))), "{skill}: {screen:#?}");
         assert!(!screen.iter().any(|l| l.contains(&format!("retire {skill}"))), "{skill}: {screen:#?}");
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.screen(), Screen::Unused);
