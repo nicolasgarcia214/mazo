@@ -186,6 +186,18 @@ fn the_page_is_self_contained() {
     assert!(unslop.contains("<svg") && unslop.contains("strong 1 weak 0"), "the card histogram: {unslop}");
 }
 
+/// The legend is the help's marks and glyphs, the source the TUI's help
+/// and `mazo usage` share.
+#[test]
+fn the_legend_lists_the_helps_marks() {
+    let repo = repo();
+    let page = page(&world(repo.path()), &events());
+    let legend = &page[page.find("legend: ").unwrap()..];
+    let legend = &legend[..legend.find("</p>").unwrap()];
+    let marks: Vec<String> = mazo::help::MARKS.iter().map(|(mark, meaning)| format!("{mark} {meaning}")).collect();
+    assert_eq!(legend, format!("legend: {}", marks.join(" · ")));
+}
+
 /// AC4: each missing or stale grade names `/grade <skill>`; a current grade
 /// and a skill outside the inventory do not appear.
 #[test]
@@ -318,7 +330,7 @@ fn times_are_local_under_a_fixed_zone() {
     assert!(generated.is_match(&page), "generated to the minute");
 }
 
-/// The usage table's quality column carries each skill's latest audit
+/// The usage table's audit column carries each skill's latest audit
 /// verdict, else its vet verdict, else `not judged`, and the card shows its date, session count, rates, top three improvements
 /// and curated examples, escaped; an older record is not shown.
 #[test]
@@ -338,7 +350,7 @@ fn the_latest_audit_is_in_the_usage_table_and_the_card() {
 
     let verdict = "Good on &lt;short&gt; texts &amp; &quot;notes&quot;";
     let usage = &page[page.find("<h2>Usage</h2>").unwrap()..page.find("coverage:").unwrap()];
-    assert!(usage.contains("<th>quality</th>"), "{usage}");
+    assert!(usage.contains("<th>audit</th>"), "{usage}");
     assert!(usage.contains(&format!("<td>audit: {verdict}</td></tr>")), "{usage}");
     assert!(usage.contains("<td>vet: quality weak, value low value</td></tr>"), "{usage}");
     assert_eq!(usage.matches("<td>not judged</td></tr>").count(), 8, "{usage}");

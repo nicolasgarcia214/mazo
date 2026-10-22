@@ -13,6 +13,7 @@ use crate::audit::SkillRecord;
 use crate::config::Config;
 use crate::evals::{self, Eval, Evals, Grade};
 use crate::examples::{self, Examples};
+use crate::help;
 use crate::history::Commit;
 use crate::inventory::{self, Inventory, Scope};
 use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin, name};
@@ -77,8 +78,10 @@ pub const SHOW_SINCE: Since = Since::Days(30);
 /// `show`'s default `--limit`, which the report's and the TUI's cards list too.
 pub const SHOW_LIMIT: usize = 20;
 
-/// The last line of `usage` and `unused`.
-const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; · no events that day; +N commits since the grade; +wip uncommitted changes since the grade\n";
+/// The last line of `usage` and `unused`: the help's marks.
+fn legend() -> String {
+    format!("legend: {}\n", help::legend("; "))
+}
 
 /// Days in the `30d` sparkline.
 const SPARK_DAYS: i64 = 30;
@@ -442,10 +445,10 @@ pub const USAGE_HEADER: [(&str, Align); 12] = [
     ("last", Align::Left),
     ("30d", Align::Left),
     ("grade", Align::Right),
-    ("quality", Align::Left),
+    ("audit", Align::Left),
 ];
 
-/// The usage table's quality cell is cut to this many characters with `…`:
+/// The usage table's audit cell is cut to this many characters with `…`:
 /// a vet cell always fits, a long audit verdict is cut.
 const VERDICT_CHARS: usize = 40;
 
@@ -475,7 +478,7 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
         return json_line(&usage);
     }
     let cells: Vec<Vec<String>> = usage.rows.iter().map(|r| usage_cells(input, r, tty)).collect();
-    render::table(&USAGE_HEADER, &cells, tty) + &view.coverage_line("coverage", None) + LEGEND
+    render::table(&USAGE_HEADER, &cells, tty) + &view.coverage_line("coverage", None) + &legend()
 }
 
 /// Skills that cite `skill`.
@@ -612,7 +615,7 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
         return json_line(&unused);
     }
     let cells: Vec<Vec<String>> = unused.skills.iter().map(|r| unused_cells(r, tty)).collect();
-    render::table(&UNUSED_HEADER, &cells, tty) + &view.coverage_line("window", view.start(since)) + LEGEND
+    render::table(&UNUSED_HEADER, &cells, tty) + &view.coverage_line("window", view.start(since)) + &legend()
 }
 
 #[derive(Serialize)]

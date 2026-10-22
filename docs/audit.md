@@ -3,6 +3,17 @@
 This guide covers `mazo audit`: how it judges a skill's real sessions, what it
 costs, who pays, and what it prints. Back to the [README](../README.md).
 
+## Grade, retro and audit
+
+Three reviews judge a skill, each at a different time:
+
+- **grade** is a static review of the SKILL.md: is it well written.
+- **retro** judges one run in context, right after it ran.
+- **audit** judges many past runs offline and takes the retros as input.
+
+A retro feeds the audit rather than replacing it. The TUI's help (`H`) states
+the same roles.
+
 ## How an audit runs
 
 `mazo audit <skill>` sends each session not yet audited to one call of the

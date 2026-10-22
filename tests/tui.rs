@@ -260,7 +260,7 @@ fn a_narrow_terminal_drops_columns_from_the_right_and_keeps_skill_and_sess() {
     let mut app = app(&input);
     let screen = text(&mut app, 60, 30);
     let keys = screen.iter().rev().take_while(|l| !body(l).starts_with("coverage:")).flat_map(|l| l.split(" · "));
-    assert_eq!(keys.count(), 15, "every key shows: {screen:#?}");
+    assert_eq!(keys.count(), 16, "every key shows: {screen:#?}");
     let header: Vec<&str> = screen[1].split_whitespace().collect();
     assert_eq!(header[..2], ["skill", "sess"]);
     assert!(!header.contains(&"grade"), "{screen:#?}");
@@ -287,6 +287,114 @@ fn the_footer_lists_the_screens_keys_and_an_empty_list_says_why() {
     let screen = text(&mut app, 200, 40);
     assert!(screen.iter().any(|l| l.trim() == "no skill matches /zzz"), "{screen:#?}");
     assert_eq!(screen.last().unwrap(), "Enter keep · Esc clear");
+}
+
+/// The help overlay's text lines on `app` at `width`×`height`, without its
+/// border, padding or scrollbar; `None` when it is not open.
+fn help(app: &mut App, width: u16, height: u16) -> Option<Vec<String>> {
+    let screen = text(app, width, height);
+    let top = screen.iter().position(|l| l.contains("╭ help "))?;
+    let lines: Vec<String> = screen[top + 1..]
+        .iter()
+        .take_while(|l| !l.contains('╰'))
+        .map(|l| l.trim().trim_matches(['│', '┃']).trim().to_string())
+        .collect();
+    // Less the padding rows.
+    Some(lines[1..lines.len() - 1].to_vec())
+}
+
+/// AC1, AC8: `H` opens the help on any screen; `j`/`k` and `PgUp`/`PgDn`
+/// scroll it, and `Esc` or `H` closes it.
+#[test]
+fn capital_h_opens_the_help_scrolls_it_and_esc_or_h_closes_it() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let mut app = app(&input);
+    assert!(text(&mut app, 200, 40).last().unwrap().contains("H help"));
+    assert_eq!(help(&mut app, 100, 20), None);
+
+    press(&mut app, KeyCode::Char('H'));
+    let all = help(&mut app, 100, 200).unwrap();
+    let first = help(&mut app, 100, 20).unwrap();
+    let page = first.len();
+    assert_eq!(first, all[..page]);
+    assert_eq!(first[0], "Columns");
+    assert_eq!(text(&mut app, 100, 20).last().unwrap(), "j/k scroll · PgUp/PgDn page · Esc/H closes");
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(help(&mut app, 100, 20).unwrap()[0], first[1]);
+    press(&mut app, KeyCode::Char('k'));
+    assert_eq!(help(&mut app, 100, 20).unwrap(), first);
+    press(&mut app, KeyCode::PageDown);
+    assert_eq!(help(&mut app, 100, 20).unwrap(), all[page..2 * page]);
+    press(&mut app, KeyCode::PageUp);
+    assert_eq!(help(&mut app, 100, 20).unwrap(), first);
+    press(&mut app, KeyCode::Char('q'));
+    assert!(help(&mut app, 100, 20).is_some(), "only Esc or H closes it");
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(help(&mut app, 100, 20), None);
+    assert_eq!(app.screen(), Screen::Usage, "Esc closed the help only");
+
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('H'));
+    assert!(help(&mut app, 100, 20).is_some(), "the card has the help too");
+    press(&mut app, KeyCode::Char('H'));
+    assert_eq!(help(&mut app, 100, 20), None);
+    assert_eq!(app.screen(), Screen::Card);
+}
+
+/// AC2-AC5: the help's sections, the current screen's columns first, and
+/// the FAQ's answers.
+#[test]
+fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let mut app = app(&input);
+    press(&mut app, KeyCode::Char('H'));
+    let usage = help(&mut app, 200, 80).unwrap();
+    let usage: Vec<String> = usage.into_iter().filter(|l| !l.is_empty()).collect();
+    assert_eq!(usage[..3], ["Columns", "usage", "skill  the skill's name; (project) marks a project skill"]);
+    assert!(usage.iter().any(|l| l.starts_with("audit  the latest audit's verdict")), "{usage:#?}");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Char('H'));
+    let unused = help(&mut app, 200, 80).unwrap();
+    assert_eq!(unused[..2], ["Columns", "unused"]);
+
+    let at = |heading: &str| unused.iter().position(|l| l == heading).unwrap_or_else(|| panic!("no {heading}"));
+    assert!(at("Columns") < at("Marks and glyphs") && at("Marks and glyphs") < at("FAQ"));
+    let faq = unused[at("FAQ")..].join("\n");
+    for answer in [
+        "The w window",
+        "Log coverage",
+        "sess counts distinct sessions, not loads",
+        "Reads and refs are weak loads, excluded from sess",
+        "hidden until A",
+        "Probe sessions",
+        "Project rows",
+        "Why does a skill say not judged?",
+        "C is Claude, X is Codex and P is Pi.",
+        "grade is a static review of the SKILL.md",
+        "retro judges one run in context, right after it ran.",
+        "audit judges many past runs offline and takes the retros as input",
+    ] {
+        assert!(faq.contains(answer), "{answer}: {faq}");
+    }
+}
+
+/// AC1: `H` is a literal `H` while the filter or the add source is typed.
+#[test]
+fn capital_h_types_into_the_filter_and_the_add_source() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let mut app = app(&input);
+    typed(&mut app, "/H");
+    assert!(text(&mut app, 200, 40)[0].contains("filter /H_"));
+    assert_eq!(help(&mut app, 200, 40), None);
+    press(&mut app, KeyCode::Esc);
+    typed(&mut app, "iH");
+    let screen = text(&mut app, 200, 40);
+    assert!(screen.iter().any(|l| l.contains("> H_")), "{screen:#?}");
+    assert_eq!(help(&mut app, 200, 40), None);
 }
 
 #[test]
