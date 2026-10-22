@@ -177,7 +177,9 @@ filters by name, `w` cycles the window (30 days, 60 days, all), `a` and `c`
 cycle the agent and channel filters and `A` toggles authoring reads (not on the
 unused list), and `q` quits. `r` retires the selected skill, or the card's, as
 `mazo retire` does; a skill `retire` refuses shows its blockers, and there is
-no `--force`. `s` shows the actions `mazo sync --dry-run` would print, or says
+no `--force`. On the unused list, `Enter` on a store skill whose status is
+`unused` (its `new` window since install has ended) asks to retire it instead
+of opening its card. `s` shows the actions `mazo sync --dry-run` would print, or says
 the homes are in sync. `x` audits the selected skill, or the card's, as
 `mazo audit <skill>` does with its default caps: the dialog shows the cap (20
 sessions, and $1 for a judge that reports its cost) or the refusal `mazo audit`
