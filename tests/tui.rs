@@ -124,7 +124,9 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen(), Screen::Card);
     let screen = text(&mut app, 200, 100);
-    assert_eq!(screen[0], format!("unslop: since {}", common::ago(30).get(..10).unwrap()));
+    // The card opens with the manual, as `show` prints it.
+    assert_eq!(screen[..3], ["for:      Removes slop from prose.", "your use: - Tighten the release notes.", ""]);
+    assert_eq!(screen[3], format!("unslop: since {}", common::ago(30).get(..10).unwrap()));
 
     let json = report::show(&input, "unslop", report::SHOW_SINCE, report::SHOW_LIMIT, true, false).unwrap();
     let audit = &serde_json::from_str::<serde_json::Value>(&json).unwrap()["audit"];
@@ -184,7 +186,7 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert_eq!(app.screen(), Screen::Unused);
     press(&mut app, KeyCode::Enter);
     let skill = after.last().unwrap().split_whitespace().next().unwrap();
-    assert!(text(&mut app, 200, 40)[0].starts_with(&format!("{skill}: ")));
+    assert!(text(&mut app, 200, 40).iter().any(|l| l.starts_with(&format!("{skill}: "))));
 }
 
 #[test]

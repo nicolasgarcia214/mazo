@@ -84,6 +84,11 @@
     },
     "uncommitted": false
   },
+  "manual": {
+    "for": "Writes agent-facing documents. Prose polish is the unslop skill.",
+    "try": [],
+    "your_use": []
+  },
   "path": "<skills>/writing-for-agents",
   "retros": [],
   "since": "2026-09-13",

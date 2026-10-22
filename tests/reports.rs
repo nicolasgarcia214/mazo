@@ -550,6 +550,7 @@ fn show_prints_the_card() {
     let keys: BTreeSet<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
     let all = [
         "skill",
+        "manual",
         "since",
         "histogram",
         "events",
@@ -719,6 +720,100 @@ fn show_without_events_has_no_real_examples() {
         serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
     assert_eq!(v["examples"]["default_prompt"], Value::Null);
     assert_eq!(v["examples"]["real"], serde_json::json!([]));
+}
+
+// ---------------------------------------------------------------- manual
+
+/// A store skill the judge vetted: For and Try from its lockfile entry, not
+/// its description, and Your use from transcripts, each prompt's first line
+/// cut to 100 characters. The manual opens the card.
+#[test]
+fn show_opens_a_vetted_store_skill_with_its_manual() {
+    let repo = report_repo();
+    let data = tempfile::tempdir().unwrap();
+    write(&data.path().join("store/vetted/SKILL.md"), "---\nname: vetted\ndescription: Not the For.\n---\n");
+    write(
+        &data.path().join("mazo.lock"),
+        "[[skill]]\nname = \"vetted\"\norigin = \"/x\"\nsubpath = \".\"\ncontent_hash = \"h\"\n\
+         trusted = false\ninstalled_at = \"2026-01-01T00:00:00Z\"\nvetted_at = \"2026-01-01T00:00:00Z\"\n\
+         for = \"Tidies prose.\"\ntry = [\"Tidy a README.\", \"Tidy a commit body.\", \"Tidy a PR.\"]\n",
+    );
+    let long = "Tidy this paragraph. ".repeat(10);
+    let msgs = ["Tidy the release notes for the launch.\nThen the changelog.", long.as_str()];
+    let transcript = repo.path().join("t.jsonl");
+    let lines: String = msgs
+        .iter()
+        .map(|m| format!("{}\n", serde_json::json!({"type": "user", "message": {"role": "user", "content": m}})))
+        .collect();
+    write(&transcript, &lines);
+    let events: Vec<Event> = [("/a", 1), ("/b", 2)]
+        .iter()
+        .map(|&(cwd, line)| Event {
+            cwd: Some(cwd.into()),
+            src: format!("{}:{line}", transcript.display()),
+            ..event(cwd, "vetted", Channel::Tool, cwd, &ago(line as i64))
+        })
+        .collect();
+    let mut w = report_world(repo.path());
+    w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
+    let input = w.input(&events);
+
+    let v: Value =
+        serde_json::from_str(&report::show(&input, "vetted", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    let cut = format!("{}…", &long[..99]);
+    assert_eq!(
+        v["manual"],
+        serde_json::json!({
+            "for": "Tidies prose.",
+            "your_use": ["Tidy the release notes for the launch.", cut],
+            "try": ["Tidy a README.", "Tidy a commit body.", "Tidy a PR."],
+        })
+    );
+    assert_eq!(v["description"], "Not the For.");
+
+    let text = report::show(&input, "vetted", Since::Days(30), 20, false, false).unwrap();
+    let manual = [
+        "for:      Tidies prose.\n".to_string(),
+        "your use: - Tidy the release notes for the launch.\n".into(),
+        "          - Tidy this paragraph. Tidy this paragraph. Tidy this paragraph. Tidy\n".into(),
+        "            this paragraph. Tidy this parag…\n".into(),
+        "try:      - Tidy a README.\n".into(),
+        "          - Tidy a commit body.\n".into(),
+        "          - Tidy a PR.\n".into(),
+        "\nvetted: since ".into(),
+    ];
+    assert!(text.starts_with(&manual.concat()), "{text}");
+}
+
+/// A source skill with no vet record and no events: For is its description,
+/// and the empty Your use and Try are left out.
+#[test]
+fn show_gives_an_unvetted_source_skill_its_description_alone() {
+    let repo = report_repo();
+    let w = report_world(repo.path());
+    let input = w.input(&[]);
+    let v: Value =
+        serde_json::from_str(&report::show(&input, "unslop", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    assert_eq!(v["manual"], serde_json::json!({"for": "Removes slop from prose.", "your_use": [], "try": []}));
+    let text = report::show(&input, "unslop", Since::Days(30), 20, false, false).unwrap();
+    assert!(text.starts_with("for:      Removes slop from prose.\n\nunslop: since "), "{text}");
+}
+
+/// Every part at its longest, words and one unbroken run: the manual stays
+/// within 15 lines of 80 columns, cutting with `…`.
+#[test]
+fn a_full_manual_fits_fifteen_lines_at_eighty_columns() {
+    let manual = report::Manual {
+        r#for: Some("Explains what this skill is for at length. ".repeat(7)[..300].into()),
+        your_use: vec!["x".repeat(100), "Use it on this draft, please. ".repeat(4)[..100].into(), "x".repeat(100)],
+        r#try: vec!["Try it on a long design document. ".repeat(6)[..200].into(), "y".repeat(200), "y".repeat(200)],
+    };
+    let text = manual.text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 15, "{text}");
+    assert!(lines.iter().all(|l| l.chars().count() <= 80), "{text}");
+    assert_eq!(lines.iter().filter(|l| l.ends_with('…')).count(), 4, "For and every Try item are cut: {text}");
+    assert!(lines[3].starts_with("your use: - xxx") && lines[9].starts_with("try:      - Try"), "{text}");
 }
 
 // ---------------------------------------------------------------- evals

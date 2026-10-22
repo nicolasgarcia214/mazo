@@ -457,7 +457,7 @@ fn unused_of(view: &View, since: Since) -> Unused {
             let first = if input.inv.root(skill) == input.inv.source.as_deref() {
                 input.inv.history.as_ref().map(|h| h.first(skill).map(|c| c.date.as_str()))
             } else {
-                Some(input.inv.installed.get(skill).map(String::as_str))
+                Some(input.inv.installed.get(skill).map(|l| l.installed_at.as_str()))
             };
             let is_new = first.is_some_and(|d| {
                 d.and_then(|d| d.parse::<Timestamp>().ok()).is_none_or(|t| start.is_some_and(|s| t > s))
@@ -582,10 +582,95 @@ pub struct CardUsage {
     pub projects: Vec<Project>,
 }
 
+/// What a skill is for and how to use it, atop the card.
+#[derive(Serialize)]
+pub struct Manual {
+    /// The vet's `for` from the lockfile, else the frontmatter description.
+    pub r#for: Option<String>,
+    /// The first line of each real example, cut to [`USE_CHARS`].
+    pub your_use: Vec<String>,
+    /// The vet's uses to try, from the lockfile.
+    pub r#try: Vec<String>,
+}
+
+/// The manual's Your use and Try each list this many.
+const MANUAL_ITEMS: usize = 3;
+/// A Your use line is cut to this many characters.
+const USE_CHARS: usize = 100;
+/// The manual's text is this wide, its label column included; For takes at
+/// most `FOR_LINES` and each item `ITEM_LINES`, so it fits 15 lines.
+const MANUAL_WIDTH: usize = 80;
+const LABEL_WIDTH: usize = 10;
+const FOR_LINES: usize = 3;
+const ITEM_LINES: usize = 2;
+
+/// The first line of `text`, cut to [`USE_CHARS`] with `…`.
+fn first_line(text: &str) -> String {
+    let line = text.trim().lines().next().unwrap_or_default().trim();
+    if line.chars().count() <= USE_CHARS {
+        line.into()
+    } else {
+        line.chars().take(USE_CHARS - 1).chain(['…']).collect()
+    }
+}
+
+/// `text` word-wrapped to `width` characters in at most `max` lines; a cut
+/// ends in `…`. A word longer than `width` is split.
+fn wrap(text: &str, width: usize, max: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let (mut line, mut len) = (String::new(), 0);
+    for word in text.split_whitespace() {
+        for piece in word.chars().collect::<Vec<_>>().chunks(width) {
+            if len > 0 && len + 1 + piece.len() > width {
+                lines.push(std::mem::take(&mut line));
+                len = 0;
+            }
+            if len > 0 {
+                line.push(' ');
+                len += 1;
+            }
+            line.extend(piece);
+            len += piece.len();
+        }
+    }
+    if len > 0 {
+        lines.push(line);
+    }
+    if lines.len() > max {
+        lines.truncate(max);
+        let last: String = lines[max - 1].chars().take(width - 1).chain(['…']).collect();
+        lines[max - 1] = last;
+    }
+    lines
+}
+
+impl Manual {
+    /// For, Your use and Try under a label column, each omitted when empty;
+    /// empty when all three are.
+    pub fn text(&self) -> String {
+        let mut out = String::new();
+        let mut part = |label: &str, rows: Vec<String>| {
+            for (i, row) in rows.iter().enumerate() {
+                out.push_str(&format!("{:<LABEL_WIDTH$}{row}\n", if i == 0 { label } else { "" }));
+            }
+        };
+        part("for:", self.r#for.as_deref().map_or(Vec::new(), |f| wrap(f, MANUAL_WIDTH - LABEL_WIDTH, FOR_LINES)));
+        for (label, items) in [("your use:", &self.your_use), ("try:", &self.r#try)] {
+            let rows = items.iter().flat_map(|item| {
+                let lines = wrap(item, MANUAL_WIDTH - LABEL_WIDTH - 2, ITEM_LINES);
+                lines.into_iter().enumerate().map(|(n, l)| format!("{}{l}", if n == 0 { "- " } else { "  " }))
+            });
+            part(label, rows.collect());
+        }
+        out
+    }
+}
+
 /// The skill card: what `show` prints and `show --json` emits.
 #[derive(Serialize)]
 pub struct Card<'a> {
     pub skill: &'a str,
+    pub manual: Manual,
     pub since: Option<String>,
     pub histogram: Vec<Day>,
     /// The newest `limit` events in the window.
@@ -727,8 +812,18 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
     let audit = view.input.audits.get(skill);
     examples.curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
 
+    // The lockfile's vet record is the store copy's; a source skill of the
+    // same name shadows it.
+    let vet = inv.installed.get(skill).filter(|_| inv.root(skill) != inv.source.as_deref());
+    let manual = Manual {
+        r#for: vet.and_then(|l| l.r#for.clone()).or_else(|| description.clone()),
+        your_use: examples.real.iter().take(MANUAL_ITEMS).map(|r| first_line(&r.text)).collect(),
+        r#try: vet.map_or(Vec::new(), |l| l.r#try.iter().take(MANUAL_ITEMS).cloned().collect()),
+    };
+
     Card {
         skill,
+        manual,
         since: start.map(|s| view.date(s).to_string()),
         histogram,
         events,
@@ -808,7 +903,10 @@ pub fn skill_card<'a>(input: &'a Input<'a>, skill: &'a str, args: &UsageArgs, li
 
 /// `show`'s text for `card`.
 pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
-    let mut out = String::new();
+    let mut out = card.manual.text();
+    if !out.is_empty() {
+        out.push('\n');
+    }
     let from = card.since.as_ref().map_or("all time".to_string(), |d| format!("since {d}"));
     out.push_str(&format!("{}: {from}\n\n", card.skill));
     let max = card.histogram.iter().map(|h| h.strong).max().unwrap_or(0).max(1);

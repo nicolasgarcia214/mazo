@@ -28,7 +28,7 @@ pub fn inventory(source: Option<&Path>, data: &Path) -> Result<Inventory> {
     let store = fs::canonicalize(&store).unwrap_or(store);
     let roots: Vec<&Path> = source.into_iter().chain([store.as_path()]).collect();
     let mut inv = Inventory::load_roots(source, &roots)?;
-    inv.installed = Lock::load(data)?.skills.into_iter().map(|l| (l.name, l.installed_at)).collect();
+    inv.installed = Lock::load(data)?.skills.into_iter().map(|l| (l.name.clone(), l)).collect();
     Ok(inv)
 }
 

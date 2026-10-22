@@ -7,6 +7,7 @@ use std::process::Command;
 
 use crate::Result;
 use crate::history::History;
+use crate::store::Locked;
 
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
@@ -23,8 +24,8 @@ pub struct Inventory {
     pub worktree: Option<PathBuf>,
     /// The source's git history; None outside a git worktree.
     pub history: Option<History>,
-    /// Each store skill's lockfile `installed_at` (RFC 3339).
-    pub installed: BTreeMap<String, String>,
+    /// Each store skill's lockfile entry.
+    pub installed: BTreeMap<String, Locked>,
 }
 
 impl Inventory {

@@ -68,6 +68,11 @@
     },
     "uncommitted": false
   },
+  "manual": {
+    "for": "Shared goal contract. Not for prose review (that is the unslop skill).",
+    "try": [],
+    "your_use": []
+  },
   "path": "<skills>/goal-smart",
   "retros": [],
   "since": "2026-09-13",
