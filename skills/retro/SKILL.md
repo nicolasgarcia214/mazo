@@ -1,6 +1,6 @@
 ---
 name: retro
-description: Perform a retrospective (retro, post-mortem) self-evaluation of a skill that already ran in this conversation. Use when the user asks for a retro, retrospective, or post-mortem of a skill run, or wants to evaluate, grade, or score how a skill execution went. Traces the execution against the skill's specification, scores seven weighted dimensions (goal achievement, workflow discipline, tool efficiency, token economy, output quality, error handling, knowledge generalizability), writes a report to the shared .retros/ directory keyed by skill name, and can optionally file GitHub issues from the recommendations. Run it in the same conversation as the evaluated skill when possible; when that conversation is gone, durable artifacts support a reduced cross-session retro.
+description: Perform a retrospective (retro, post-mortem) self-evaluation of a skill that already ran in this conversation. Use when the user asks for a retro, retrospective, or post-mortem of a skill run, or wants to evaluate, grade, or score how a skill execution went. Traces the execution against the skill's specification, scores seven weighted dimensions (goal achievement, workflow discipline, tool efficiency, token economy, output quality, error handling, knowledge generalizability), writes a report to the skill's retros directory under mazo's evals_dir, and can file the recommendations as GitHub issues on the skill's origin repository, or draft one issue for the user to file without write access. Run it in the same conversation as the evaluated skill when possible; when that conversation is gone, durable artifacts support a reduced cross-session retro.
 argument-hint: "[optional: skill name to evaluate]"
 allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Agent
 ---
@@ -31,9 +31,9 @@ This skill runs on Claude Code, Codex and Pi. Four mechanics differ and are disp
 1. Check the argument passed to the skill for an explicit skill name (on Claude Code this arrives as `$ARGUMENTS`; on Codex, it is the text following `$retro`; on Pi, the argument appended after the expanded skill).
 2. If not provided, scan the conversation for skill invocation markers. On Claude Code: `<command-name>` tags, `/skill-name` patterns, or Skill tool calls. On Codex: `$skill-name` mentions or injected skill content. On Pi: `/skill:name` or a `<skill name="..." location="...">` block; loading instructions alone does not prove the workflow ran.
 3. If **multiple skills** detected — list them and ask the user which to evaluate. Stop and wait.
-4. If **no skill** detected — inform the user that no prior skill execution was found in this conversation and halt, unless the user is pointing at durable run artifacts, in which case switch to the Artifact-Based Fallback mode (see below).
+4. If **no skill** detected — inform the user that no prior skill execution was found in this conversation and halt, unless the user is pointing at durable run artifacts and the Optional issue-swarm and resolve-issue section below is active, in which case run its Artifact-Based Fallback.
 5. If a retro of `retro` is requested and no prior retro execution exists — decline: "No prior retro execution found to evaluate."
-6. Resolve the evaluated skill's SKILL.md path. Prefer the `location` supplied by the evaluated invocation; resolve its symlink before persisting a report. Otherwise search these roots, without a filesystem-wide search:
+6. Resolve the evaluated skill's SKILL.md path. Prefer the `location` supplied by the evaluated invocation. Otherwise search these roots, without a filesystem-wide search:
    - Project-local: `skills/`, `.claude/skills/`, `.pi/skills/`, `.agents/skills/`
    - User-level: the configured Pi agent directory's `skills/` (default `~/.pi/agent/skills/`), `~/.agents/skills/`, `~/.claude/skills/`, `~/.codex/skills/`
 
@@ -45,19 +45,20 @@ This skill runs on Claude Code, Codex and Pi. Four mechanics differ and are disp
    - Gate points (user gates, blocking decisions)
    - Allowed tools list
    - Whether subagents are used (Agent — a.k.a. Task — tool in allowed-tools, or delegated worker activity in the transcript)
+8. Run `mazo show <skill-name> --json` and keep these fields as the **Skill Record**: `content_hash` (written into the report), `origin` (Phase 4's target repository; `null` for a local-only skill), and the newest-first `grades` and `retros` arrays (Phase 0.5). If it exits non-zero, mazo does not know the skill: run the retro, print the report without persisting it, and skip Phase 4 with that reason.
 
 ## Phase 0.5: Prior Retro Scan
 
 Scan for prior retrospective reports to enable trend analysis and recommendation tracking.
 
-1. Determine retro directory: `{skills-root}/.retros/{skill-name}/`, where `{skills-root}` is the directory holding this skill — resolve this `SKILL.md` through its install symlink first, because every installed skill is a symlink into the source repo. Evaluating `triage-finding` from an install at `~/.claude/skills/retro/SKILL.md` resolves to `<repo>/skills/.retros/triage-finding/`. Keying by name, off this skill's own resolved root, means a retro of a skill installed from elsewhere still lands here and never writes into a third party's package.
-2. Glob for `*retro*.md` in the retro directory.
-3. If **none found** → note "First retro for this skill" in the trace. Skip to Phase 1.
-4. If **found** → sort by date extracted from the filename slug (`YYYY-MM-DD`). Read the YAML frontmatter of the **3 most recent** reports. From the **most recent only**, also read the `## Recommendations` section. Store as the Prior Retro Record.
+1. Determine the retro directory: run `mazo evals dir <skill-name>`. It prints two tab-separated lines, `grades<TAB><path>` and `retros<TAB><path>`; `{retros-dir}` is the path on the `retros` line. It sits under the user's `evals_dir`, keyed by the evaluated skill's name, so a retro of a skill installed from elsewhere never writes into a third party's package.
+2. Take the prior reports from the Skill Record's `retros` array, which mazo has already sorted newest first and filtered to files with a dated frontmatter.
+3. If **empty** → note "First retro for this skill" in the trace. Skip to Phase 1.
+4. If **non-empty** → read the YAML frontmatter of the `file` of the **3 most recent** entries. From the **most recent only**, also read the `## Recommendations` section. Store as the Prior Retro Record.
 
 **Token budget**: Frontmatter-only reads for the 2nd and 3rd most recent. Capped at 3 files total.
 
-5. Also glob `{skills-root}/.grades/{skill-name}/*.md` (static evaluations written by the `grade` skill). If any exist, read the most recent one's frontmatter and verdict line as the **static baseline**: note in the report where runtime behavior confirmed or contradicted the static grade (e.g., a dimension graded strong that failed in execution). Cap: 1 file, skip silently if none.
+5. Also take the first entry of the Skill Record's `grades` array (static evaluations written by the `grade` skill). If there is one, read its `file`'s frontmatter and verdict line as the **static baseline**: note in the report where runtime behavior confirmed or contradicted the static grade (e.g., a dimension graded strong that failed in execution). When its `stale` is `true`, the skill changed after it was graded: say so beside every comparison. Cap: 1 file, skip silently if none.
 
 ## Phase 1: Execution Trace Reconstruction
 
@@ -229,39 +230,48 @@ For each dimension:
    - ADDRESSED-REACTIVE counts as negative evidence in D7 scoring.
 8. **Assemble the report** using the template from [references/report-template.md](references/report-template.md).
 9. **Persist to disk**:
-   - **Directory**: `{skills-root}/.retros/{skill-name}/`, resolved in Phase 0.5 — keyed by the evaluated skill's name, not written inside its directory. A `triage-finding` retro goes to `<repo>/skills/.retros/triage-finding/`.
+   - **Directory**: `{retros-dir}`, resolved in Phase 0.5 with `mazo evals dir`.
    - **Filename**: `retro-{context-slug}-{YYYY-MM-DD}.md` where `{context-slug}` is a short (1-3 words, underscores) identifier derived from the task context (e.g., the target project, audit name, or key subject). Examples: `retro-uniswap_audit-2026-10-12.md`, `retro-login_refactor-2026-03-20.md`. If context is ambiguous, ask the user for a short label.
    - Collision handling: if slug exists, append `-2`, `-3`, etc.
-   - Include YAML frontmatter with machine-readable metadata
+   - Include YAML frontmatter with machine-readable metadata, including the Skill Record's `content_hash`
    - Create the directory if it doesn't exist
 10. **Print to terminal**: The scorecard table + top 3 recommendations as a concise summary.
 
 ## Phase 4: GitHub Issue Filing
 
-This phase converts retro recommendations into tracked GitHub issues. It runs after the report is written to disk and skips gracefully if no GitHub repository is available.
+This phase converts retro recommendations into GitHub issues on the repository the evaluated skill came from. It runs after the report is written to disk and skips gracefully when there is nowhere to file.
 
-Read [references/github-issues.md](references/github-issues.md) now — it defines the label set, issue-body template, body-content requirements, and report-update mechanics. Do not improvise labels or issue bodies.
+Read [references/github-issues.md](references/github-issues.md) now — it defines the label set, issue-body templates, body-content requirements, and report-update mechanics. Do not improvise labels or issue bodies.
 
 ### Step 4.1 — Repository Detection
 
-1. From the evaluated skill's directory (`{skill-dir}`), run:
+1. Take `origin` from the Skill Record. If it is `null`, print `Phase 4 skipped: {skill-name} has no GitHub origin (local-only skill)` and end Phase 4.
+2. `origin.repo` is `https://github.com/{owner}/{name}.git`; strip the `https://github.com/` prefix and the `.git` suffix and store `{owner}/{name}` as `{repo}`.
+3. Run:
    ```
-   gh repo view --json nameWithOwner,hasIssuesEnabled
+   gh repo view {repo} --json nameWithOwner,hasIssuesEnabled,viewerPermission
    ```
-2. If the command fails (not a git repo, no GitHub remote, `gh` not installed or not authenticated) or `hasIssuesEnabled` is `false`:
+4. If the command fails (`gh` not installed or not authenticated, repository gone) or `hasIssuesEnabled` is `false`:
    - Print: `Phase 4 skipped: {reason}` with a specific diagnostic.
    - End Phase 4. The retro is complete without issues.
-3. Store `nameWithOwner` as `{repo}` for subsequent steps.
+5. Set the **filing mode**: **write** when `viewerPermission` is `WRITE`, `MAINTAIN` or `ADMIN`; **propose** otherwise.
+6. Run `git ls-remote {origin.repo} HEAD` and keep its first field as `{upstream-head}`, the upstream default-branch HEAD. If it fails, use `unknown`.
 
-### Step 4.2 — Label Provisioning
-
-Create (or update) the four required labels using `gh label create --force -R {repo}`, with the exact names, colors, and descriptions defined in [references/github-issues.md](references/github-issues.md). If any label creation fails, log the warning but continue — issue creation can proceed without the tier label.
-
-### Step 4.3 — Recommendation Parsing
+### Step 4.2 — Recommendation Parsing
 
 From the Phase 3 report (already in memory), extract for each recommendation bullet: **tier**, **title**, **prescription**, **failure summary**, **supporting evidence**, **likely touchpoints**, **acceptance criteria**, and **category label** — following the field definitions and category-keyword rules in [references/github-issues.md](references/github-issues.md).
 
-Each issue gets three labels: `retro` + tier label (`retro:immediate` / `retro:structural` / `retro:process`) + category label.
+In write mode each issue gets three labels: `retro` + tier label (`retro:immediate` / `retro:structural` / `retro:process`) + category label. Propose mode uses no labels.
+
+### Step 4.3 — Duplicate Check
+
+For every issue title this phase would file or propose (write mode: `[retro] {title}` per recommendation; propose mode: the same per-recommendation titles plus the consolidated title from [references/github-issues.md](references/github-issues.md)), list the origin's open issues:
+
+```
+gh issue list -R {repo} --state open --search "{title} in:title" --json number,title,url
+```
+
+A result whose title equals the candidate title exactly, ignoring case, is a duplicate: record its URL, and link it instead of filing or proposing that recommendation. Search hits that differ in any other way are not duplicates.
 
 ### Step 4.4 — User Gate
 
@@ -269,37 +279,53 @@ Present a summary table before creating anything:
 
 ```
 Phase 4: GitHub Issue Filing
-Repository: {repo}
+Repository: {repo} ({write | propose: no write access})
+Installed commit: {origin.commit}  Upstream HEAD: {upstream-head}
 
-| # | Title | Tier | Labels |
-|---|-------|------|--------|
-| 1 | Fix report rendering | Immediate | retro, retro:immediate, bug |
-| ... | ... | ... | ... |
+| # | Title | Tier | Labels | Duplicate |
+|---|-------|------|--------|-----------|
+| 1 | Fix report rendering | Immediate | retro, retro:immediate, bug | — |
+| 2 | Cap token budget | Structural | — | #17 |
+| ... | ... | ... | ... | ... |
 
 (a) Create all · (b) Select specific · (s) Skip
 ```
 
+In propose mode the Labels column is `—` and (a) reads `Draft all`. When the installed commit differs from the upstream HEAD, the problem may already be fixed upstream: say so under the table.
+
 Wait for user input. This gate is **mandatory** — issues are externally visible artifacts.
 
-- **(a)**: Proceed with all recommendations.
+- **(a)**: Proceed with all non-duplicate recommendations.
 - **(b)**: Ask the user to specify issue numbers (e.g., "1,3,5"), then filter the list.
 - **(s)**: Print `Phase 4 skipped by user.` and end.
 
-### Step 4.5 — Issue Creation
+### Step 4.5 — Issue Creation (write mode)
+
+Create (or update) the four required labels using `gh label create --force -R {repo}`, with the exact names, colors, and descriptions defined in [references/github-issues.md](references/github-issues.md). If any label creation fails, log the warning but continue — issue creation can proceed without the tier label.
 
 For each selected recommendation, create an issue with `gh issue create` using the command template, issue-body template, and body-content requirements from [references/github-issues.md](references/github-issues.md). The issue must be self-contained and understandable without opening the retro report.
 
 Capture the returned issue URL and number. If an individual issue creation fails, log the error and continue with the remaining issues.
 
-### Step 4.6 — Report Update
+### Step 4.6 — Issue Proposal (propose mode)
+
+Create no labels and no issues. Write one consolidated issue covering every selected recommendation, using the consolidated template in [references/github-issues.md](references/github-issues.md):
+
+1. Write its body into the retro report under `## Proposed Issue`, and the same body to `{report-stem}.issue.md` next to the report.
+2. Print the command for the user to run:
+   ```
+   gh issue create -R {repo} --title "{consolidated title}" --body-file {retros-dir}/{report-stem}.issue.md
+   ```
+
+### Step 4.7 — Report Update
 
 Update the retro report written in Phase 3 step 9 (use `Edit` for targeted changes), per the mechanics in [references/github-issues.md](references/github-issues.md):
 
-1. **Inline annotation**: Append `[TRACKED](issue-url)` to each recommendation bullet that was filed.
-2. **Summary table**: Insert a `## Filed Issues` section after `## Recommendations`.
-3. **Frontmatter**: Add `github_issues` (list of issue numbers) and `github_repo` fields to the YAML frontmatter.
+1. **Inline annotation**: Append `[TRACKED](issue-url)` to each recommendation bullet that was filed or matched a duplicate.
+2. **Summary table**: In write mode, insert a `## Filed Issues` section after `## Recommendations`.
+3. **Frontmatter**: Add `github_repo` and `github_issues` (filed and duplicate issue numbers).
 
-### Step 4.7 — Terminal Summary
+### Step 4.8 — Terminal Summary
 
 Print:
 ```
@@ -308,11 +334,17 @@ Phase 4 complete: Filed {N} issues on {repo}
   - ...
 ```
 
-### Step 4.8 — Close The Flywheel
+In propose mode, print `Phase 4 complete: drafted 1 issue for {repo}` followed by the `gh issue create` command from Step 4.6.
+
+## Optional: issue-swarm and resolve-issue
+
+Run this section only when both `mazo show issue-swarm` and `mazo show resolve-issue` exit 0; otherwise skip it silently.
+
+### Close The Flywheel
 
 When issues were filed, offer the follow-up explicitly: the `issue-swarm` skill can burn down the retro backlog with `ISSUE_SCOPE=label:retro` (or a single tier, e.g. `label:retro:immediate`), and a single filed issue can go straight to `resolve-issue`. Do not launch either yourself — filing was the retro's job; fixing is a new, user-initiated run.
 
-## Artifact-Based Fallback (cross-session)
+### Artifact-Based Fallback (cross-session)
 
 The transcript-based flow above requires the evaluated run in this conversation. When the user asks to retro a run whose conversation is gone but which left durable artifacts — Resolution Records v1 under `.git/resolve-issue/` (from `resolve-issue`), an issue-swarm state dir under `.git/issue-swarm/` (state.json, prompts/, validation/), or `.goal/` artifacts — run a reduced-scope retro from those artifacts instead of halting:
 
@@ -333,7 +365,7 @@ The transcript-based flow above requires the evaluated run in this conversation.
 
 | Situation | Handling |
 |-----------|---------|
-| No prior skill execution | Inform user, halt — unless durable run artifacts exist and the user wants them evaluated: use Artifact-Based Fallback |
+| No prior skill execution | Inform user, halt — unless durable run artifacts exist, the optional issue-swarm and resolve-issue section is active, and the user wants them evaluated: use its Artifact-Based Fallback |
 | Compressed context | Note affected phases, lower confidence, score conservatively |
 | Multiple skills in conversation | List them, ask user to choose (or use the skill argument if one was passed) |
 | Partially completed skill | Evaluate only executed phases, note incompleteness in report |
@@ -351,10 +383,13 @@ The transcript-based flow above requires the evaluated run in this conversation.
 | Prior retro frontmatter malformed | Skip that retro, note it, proceed with others |
 | Many prior retros (>10) | Read only the 3 most recent for trends, track recommendations from the most recent only |
 | Prior recommendations too vague to track | Mark as NOT APPLICABLE with a note |
-| No git repo / no GitHub remote in skill dir | Print diagnostic, skip Phase 4 |
+| `mazo show <skill> --json` exits non-zero | Print the report without persisting it, skip Phase 4 |
+| `origin` is `null` (local-only skill) | Print diagnostic, skip Phase 4 |
 | `gh` not installed or not authenticated | Print diagnostic suggesting `gh auth login`, skip Phase 4 |
 | Issues disabled on the repository | Print diagnostic, skip Phase 4 |
+| No write access to the origin | Propose mode: no labels, no issues; one consolidated body in the report and a printed `gh issue create` command |
 | Label creation fails (permissions) | Log warning, continue without that label |
+| Open issue with the same title, ignoring case | Link it, do not file or propose a duplicate |
 | Individual issue creation fails | Log error, continue with remaining issues |
 | User selects (s) at Phase 4 gate | Skip, no issues created |
 | Zero recommendations in retro | Skip Phase 4 (nothing to file) |

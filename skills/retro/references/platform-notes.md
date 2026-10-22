@@ -9,7 +9,7 @@ When scanning the conversation for which skill previously ran:
 - **Claude Code**: look for `<command-name>` tags, `/skill-name` slash-command patterns, and Skill tool calls.
 - **Codex**: look for `$skill-name` mentions in user prompts and injected skill content (a SKILL.md body pasted into the context by the harness).
 
-- **Pi**: look for `/skill:name` commands or expanded `<skill name="..." location="...">` blocks. Arguments follow the expanded block. Prefer the supplied location for spec lookup, resolving its symlink before writing the report. The configured agent directory (default `~/.pi/agent`) and `~/.agents/skills/` are fallback skill roots. An invocation marker proves loading, not execution; reconstruct the actual tool turns.
+- **Pi**: look for `/skill:name` commands or expanded `<skill name="..." location="...">` blocks. Arguments follow the expanded block. Prefer the supplied location for spec lookup. The configured agent directory (default `~/.pi/agent`) and `~/.agents/skills/` are fallback skill roots. An invocation marker proves loading, not execution; reconstruct the actual tool turns.
 
 The same applies to detecting how the retro itself was invoked (`/retro`, `$retro`, or `/skill:retro`).
 
