@@ -17,7 +17,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::audit::{self, Backend, Caller, Pane, Vet, VetVerdict};
-use crate::config::{Config, Home, Judge};
+use crate::config::{self, Config, Home, Judge};
 use crate::inventory::{Inventory, Scope};
 use crate::ledger::Ledger;
 use crate::{Error, Result};
@@ -419,6 +419,17 @@ fn resolve(cfg: &Config, arg: &str, trust: bool) -> Result<(Source, bool)> {
     Ok((source, trusted))
 }
 
+/// A local source with `~` and `~/…` expanded against `home`, as config
+/// paths are; `~user` is refused, since nothing expands it.
+fn local(path: &Path, home: &str) -> Result<PathBuf> {
+    let raw = path.to_string_lossy();
+    let expanded = config::expand_tilde(&raw, home);
+    if expanded.starts_with('~') {
+        return Err(Error::Usage(format!("add {raw}: only ~ and ~/ expand to $HOME; ~user is not supported")));
+    }
+    Ok(expanded.into())
+}
+
 /// The refusal `mazo add <arg>` gives before reading the source, if any.
 pub fn precheck(cfg: &Config, arg: &str) -> Result<()> {
     resolve(cfg, arg, false).map(drop)
@@ -473,7 +484,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     let mut scratch = None;
     let (root, origin, subpath, commit, own) = match &source {
         Source::Local(path) => {
-            let root = fs::canonicalize(path).map_err(|e| usage(e.to_string()))?;
+            let root = fs::canonicalize(local(path, &config::home_dir()?)?).map_err(|e| usage(e.to_string()))?;
             let own =
                 root.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or_else(|| usage("no name".into()))?;
             (root.clone(), root.to_string_lossy().into_owned(), PathBuf::new(), None, own)
@@ -1359,7 +1370,9 @@ pub fn content_hash(dir: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{JUDGE_EXAMPLES, Remote, Source, content_hash, no_judge, renamed};
+    use std::path::Path;
+
+    use super::{JUDGE_EXAMPLES, Remote, Source, content_hash, local, no_judge, renamed};
 
     fn remote(arg: &str) -> Remote {
         match Source::parse(arg) {
@@ -1402,6 +1415,14 @@ mod tests {
             let r = remote(arg);
             assert_eq!((r.url.as_str(), r.path.join("/"), r.subpath.to_str()), (url, path.into(), Some(sub)), "{arg}");
         }
+    }
+
+    #[test]
+    fn a_tilde_source_resolves_under_home_and_tilde_user_is_refused() {
+        assert_eq!(local(Path::new("~/x"), "/h").unwrap(), Path::new("/h/x"));
+        assert_eq!(local(Path::new("~"), "/h").unwrap(), Path::new("/h"));
+        assert_eq!(local(Path::new("./x"), "/h").unwrap(), Path::new("./x"));
+        assert!(local(Path::new("~bob/x"), "/h").unwrap_err().to_string().contains("~user is not supported"));
     }
 
     #[test]
