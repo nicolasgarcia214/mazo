@@ -1845,7 +1845,12 @@ fn retire_project_removes_the_project_copy_of_a_name_the_global_store_also_holds
 fn status_and_usage_in_a_project_list_its_skills_and_outside_it_only_add_scope() {
     let (fx, dir) = fixture();
     let p = project(&fx);
-    let (status, usage) = (fx.mazo(&["status"]).stdout(), fx.mazo(&["usage"]).stdout());
+    // A git repository without a `mazo.lock` is no project: the output is as outside it.
+    let [status, usage] = ["status", "usage"].map(|args| {
+        let (outside, r) = (fx.mazo(&[args]), fx.mazo_in(&p, &[args]));
+        assert_eq!((r.code(), r.stdout(), r.stderr()), (outside.code(), outside.stdout(), outside.stderr()), "{args}");
+        outside.stdout()
+    });
     add_project(&fx, &p, &[&s(&dir), "--trust"]).assert_ok();
     // A read through the project's Claude link, which the scan, knowing no project, made other-origin.
     let ts = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)).round(jiff::Unit::Second).unwrap();
@@ -1868,6 +1873,11 @@ fn status_and_usage_in_a_project_list_its_skills_and_outside_it_only_add_scope()
         .map(|l| (l["home"].as_str().unwrap(), l["state"].as_str().unwrap(), l["scope"].as_str().unwrap()))
         .collect();
     assert_eq!(links, [(".claude/skills", "ok", "project"), (".agents/skills", "ok", "project")]);
+    // Reached through a symlink, the project is found at its physical root.
+    let alias = fx.root.join("alias");
+    std::os::unix::fs::symlink(&p, &alias).unwrap();
+    let r = fx.mazo_in(&alias.join("sub/dir"), &["status"]);
+    assert!(r.stdout().contains("\nproject: theirs (project) in sync\n"), "{}", r.stdout());
     let r = fx.mazo_in(&inside, &["usage"]);
     assert!(r.stdout().lines().any(|l| l.starts_with("theirs (project) ")), "{}", r.stdout());
     let rows = json(&inside, &["usage"])["rows"].clone();

@@ -367,11 +367,15 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
     let f = Filter::from(args);
     let start = view.start(args.since);
     let mut skills: BTreeSet<&str> = input.inv.skills.iter().map(String::as_str).collect();
+    let project = input.inv.project.as_ref();
     if args.all {
-        // Every skill in the ledger, so a retired or pruned one keeps a row.
-        skills.extend(input.events.iter().filter(|e| view.scope(e) == Scope::Global).map(|e| e.skill.as_str()));
+        // Every skill in the ledger, so a retired or pruned one keeps a row;
+        // a name only the project has keeps its project row alone.
+        let project_only = |s: &str| project.is_some_and(|p| p.skills.contains(s));
+        let ledger = input.events.iter().filter(|e| view.scope(e) == Scope::Global).map(|e| e.skill.as_str());
+        skills.extend(ledger.filter(|s| !project_only(s)));
     }
-    let project = input.inv.project.iter().flat_map(|p| &p.skills).map(|s| (s.as_str(), Scope::Project));
+    let project = project.into_iter().flat_map(|p| &p.skills).map(|s| (s.as_str(), Scope::Project));
     let mut rows: Vec<UsageRow> = skills
         .into_iter()
         .map(|s| (s, Scope::Global))

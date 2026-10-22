@@ -478,7 +478,7 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
         e.path = path;
         e
     };
-    let events = vec![
+    let mut events = vec![
         event("g", "unslop", Channel::Tool, "s1", &ago(1)),
         other(event("pu", "unslop", Channel::Tool, "s2", &ago(1)), at(".agents/skills/unslop/SKILL.md")),
         other(event("pr", "vetted", Channel::Read, "s3", &ago(2)), at(".claude/skills/vetted/SKILL.md")),
@@ -488,6 +488,11 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
             Some("/elsewhere/.claude/skills/vetted/SKILL.md".into()),
         ),
     ];
+    // The same project reached through a symlink.
+    let alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(p, alias.path().join("p")).unwrap();
+    let through = alias.path().join("p/.mazo/skills/unslop/SKILL.md").display().to_string();
+    events.push(other(event("pa", "unslop", Channel::Read, "s6", &ago(1)), Some(through)));
     let mut w = report_world(repo.path());
     let outside = report::usage(&w.input(&events), &args(), true, false);
     let outside_text = report::usage(&w.input(&events), &args(), false, false);
@@ -498,7 +503,7 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     let global = scoped(&json, "unslop", "global").unwrap();
     assert_eq!(counts(&global), [1, 0, 1, 0, 0, 0], "the project's load is not the global skill's: {global}");
     let own = scoped(&json, "unslop", "project").unwrap();
-    assert_eq!(counts(&own), [1, 0, 1, 0, 0, 0], "{own}");
+    assert_eq!(counts(&own), [1, 0, 1, 0, 1, 0], "the read through the symlink counts: {own}");
     assert_eq!((&own["grade"], &own["verdict"]), (&Value::Null, &Value::Null));
     let vetted = scoped(&json, "vetted", "project").unwrap();
     assert_eq!(counts(&vetted), [1, 1, 0, 0, 1, 0], "through either link or the store, not elsewhere: {vetted}");
@@ -507,6 +512,9 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
         (&"vet".into(), &"quality weak, value low value".into())
     );
     assert_eq!(scoped(&json, "vetted", "global"), None);
+    let all = report::usage(&input, &UsageArgs { all: true, ..args() }, true, false);
+    assert_eq!(scoped(&all, "vetted", "global"), None, "a name only the project has gets no global row");
+    assert!(scoped(&all, "vetted", "project").is_some());
     let text = report::usage(&input, &args(), false, false);
     for skill in ["unslop (project) ", "vetted (project) ", "unslop "] {
         assert!(text.lines().any(|l| l.starts_with(skill)), "{skill}: {text}");
