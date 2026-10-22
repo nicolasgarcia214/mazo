@@ -202,8 +202,7 @@ and a stale grade's `+N` or `+wip` in yellow. Piped output, or any output with
 `mazo add` of a source not on the `trusted` list, without `--trust`, first
 sends the skill to one call of the `[judge]`, with the same billing, login
 check and default $1 cap (for a judge that reports its cost) as `audit`. The
-judge sees every file of the skill (a file over 64 KiB, or past 256 KiB in
-all, only by its size) and the name and description of every skill in
+judge sees every file of the skill and the name and description of every skill in
 `source` and the store, and answers with a security finding (or
 none), a `quality` (`good`, `weak`, `poor`), a `value` (`worth trying`, `low
 value`, `irrelevant`, `redundant`, naming the skill it overlaps), its
@@ -211,7 +210,9 @@ reasons, what the skill is for, and up to three uses to try. An answer that
 breaks the schema is retried once. mazo prints the verdict, then:
 
 - A security finding refuses the install (exit 1) unless `--force`; with
-  `--force` the install still asks as below.
+  `--force` the install still asks as below. A file mazo did not send in
+  full (not text, over 64 KiB, or past 256 KiB in all) is a security finding
+  of its own: the refusal names each one and why, before the judge is called.
 - It asks `install <name>? [Y/n]` when the skill is worth trying and not
   `poor`, and `[y/N]` otherwise; Enter takes the default.
 - `--yes` accepts without asking. Without a terminal on stdin and without

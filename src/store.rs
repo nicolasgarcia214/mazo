@@ -512,16 +512,18 @@ fn now() -> Result<String> {
 }
 
 /// The most bytes of one file, and of all files, the vet judge is sent; a
-/// file past either is sent as its size alone.
+/// file past either, or one that is not text, is withheld.
 const VET_FILE_BYTES: u64 = 64 * 1024;
 const VET_TOTAL_BYTES: u64 = 256 * 1024;
 
 /// The vet gate, before anything is copied: one judge call on the files of
-/// the skill at `src` (`files`, with `skill_md` as its `SKILL.md`, within
-/// [`VET_FILE_BYTES`] and [`VET_TOTAL_BYTES`]) and the names and descriptions
-/// of every source and store skill, its verdict shown, then obeyed. A
-/// security finding refuses the install (exit 1) unless `--force`; then the
-/// user is asked y/N, defaulting to the verdict's
+/// the skill at `src` (`files`, with `skill_md` as its `SKILL.md`) and the
+/// names and descriptions of every source and store skill, its verdict
+/// shown, then obeyed. A file withheld from the judge (not text, or past
+/// [`VET_FILE_BYTES`] or [`VET_TOTAL_BYTES`]) was never reviewed, so it is a
+/// security finding of mazo's own. A security finding refuses the install
+/// (exit 1) unless `--force`, a withheld file before the judge is called;
+/// then the user is asked y/N, defaulting to the verdict's
 /// [`VetVerdict::default_yes`], unless `--yes`. A judge that gives no valid
 /// answer, or a No, refuses the install.
 fn gate(
@@ -533,35 +535,54 @@ fn gate(
     files: &[PathBuf],
     skill_md: &str,
 ) -> Result<Vet> {
-    let mut sent = Vec::new();
-    let mut total = 0;
+    let (mut sent, mut withheld, mut total) = (Vec::new(), Vec::new(), 0);
     for rel in files {
         let path = src.join(rel);
-        let fail = |e: std::io::Error| format!("{}: {e}", path.display());
-        let meta = fs::metadata(&path).map_err(fail)?;
-        if meta.is_dir() {
+        if path.is_dir() {
             continue;
         }
-        let skill = rel == Path::new("SKILL.md");
-        let size = if skill { skill_md.len() as u64 } else { meta.len() };
-        let text = if size > VET_FILE_BYTES || total + size > VET_TOTAL_BYTES {
-            format!("(not sent: {size} bytes, over the size cap)")
-        } else if skill {
-            total += size;
-            skill_md.to_string()
+        let bytes = if rel == Path::new("SKILL.md") {
+            skill_md.as_bytes().to_vec()
         } else {
-            total += size;
-            let bytes = fs::read(&path).map_err(fail)?;
-            String::from_utf8(bytes).unwrap_or_else(|e| format!("(not text, {} bytes)", e.as_bytes().len()))
+            fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?
         };
-        sent.push((rel.to_string_lossy().into_owned(), text));
+        let size = bytes.len() as u64;
+        let why = if size > VET_FILE_BYTES {
+            Err("over the per-file cap")
+        } else if total + size > VET_TOTAL_BYTES {
+            Err("over the total cap")
+        } else {
+            String::from_utf8(bytes).map_err(|_| "not text")
+        };
+        let rel = rel.to_string_lossy().into_owned();
+        let text = match why {
+            Ok(text) => {
+                total += size;
+                text
+            }
+            Err(why) => {
+                withheld.push(format!("{rel} ({size} bytes, {why})"));
+                format!("(withheld: {size} bytes, {why})")
+            }
+        };
+        sent.push((rel, text));
+    }
+    let withheld = (!withheld.is_empty()).then(|| format!("not sent to the judge in full: {}", withheld.join(", ")));
+    if let Some(withheld) = &withheld
+        && !args.force
+    {
+        return Err(format!("add refused: {withheld}; pass --force to install it anyway").into());
     }
     let existing: Vec<(String, String)> =
         inv.skills.iter().map(|s| (s.clone(), inv.description(s).unwrap_or_default())).collect();
     let input = audit::vet_input(name, &sent, &existing);
     let names: Vec<&str> = inv.skills.iter().map(String::as_str).collect();
-    let vet = audit::vet(c, name, &input, &names)?
+    let mut vet = audit::vet(c, name, &input, &names)?
         .map_err(|why| format!("add refused: vetting {name} failed: {why}; nothing was installed"))?;
+    if let Some(withheld) = withheld {
+        let found = vet.verdict.security.take();
+        vet.verdict.security = Some(found.map_or_else(|| withheld.clone(), |f| format!("{f}; {withheld}")));
+    }
     print!("{}", vet.text(name));
     if vet.verdict.security.is_some() && !args.force {
         return Err("add refused: the judge found a security issue; pass --force to install it anyway".into());

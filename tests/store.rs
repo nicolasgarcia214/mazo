@@ -852,7 +852,7 @@ fn a_judge_without_a_valid_answer_refuses_the_install() {
 }
 
 #[test]
-fn files_past_the_size_caps_are_sent_as_their_size() {
+fn a_file_past_a_size_cap_is_withheld_and_refuses_the_install_unless_force() {
     let (fx, dir) = judged();
     answer(&fx, None, "good", "worth trying");
     // One file over the per-file cap, then files that reach the total cap.
@@ -860,15 +860,71 @@ fn files_past_the_size_caps_are_sent_as_their_size() {
     for i in 0..5 {
         common::write(&dir.join(format!("references/part{i}.md")), &format!("{i}").repeat(60 * 1024));
     }
-    add(&fx, &[&s(&dir), "--yes"]).assert_ok();
+    let r = add(&fx, &[&s(&dir), "--yes"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    let named = "not sent to the judge in full: references/big.md (65537 bytes, over the per-file cap), \
+                 references/part4.md (61440 bytes, over the total cap); pass --force";
+    assert!(r.stderr().contains(named), "{}", r.stderr());
+    assert!(calls(&fx).is_empty(), "refused before the judge is called");
+    assert_not_installed(&fx, "theirs");
+
+    // With --force the judge sees what fits, and the prompt still applies.
+    let r = add(&fx, &[&s(&dir), "--force"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    let r = add(&fx, &[&s(&dir), "--force", "--yes"]);
+    r.assert_ok();
+    assert!(r.stdout().contains("security: not sent to the judge in full: references/big.md"), "{}", r.stdout());
     let stdin = &calls(&fx)[0];
-    assert!(stdin.contains("<file path=\"references/big.md\">\n(not sent: 65537 bytes, over the size cap)\n</file>"));
+    let big = "<file path=\"references/big.md\">\n(withheld: 65537 bytes, over the per-file cap)\n</file>";
+    assert!(stdin.contains(big), "{stdin}");
     for i in 0..4 {
         assert!(stdin.contains(&format!("{i}").repeat(60 * 1024)), "part{i} fits the total cap");
     }
-    let last = "<file path=\"references/part4.md\">\n(not sent: 61440 bytes, over the size cap)\n</file>";
+    let last = "<file path=\"references/part4.md\">\n(withheld: 61440 bytes, over the total cap)\n</file>";
     assert!(stdin.contains(last), "part4 is past the total cap");
     assert!(stdin.len() < 256 * 1024 + 16 * 1024, "{} bytes sent", stdin.len());
+    let security = lock(&fx)[0]["verdict"]["security"].as_str().unwrap().to_string();
+    assert!(security.starts_with("not sent to the judge in full: references/big.md"), "{security}");
     // The install itself copies every file.
     assert!(exists(&store(&fx).join("theirs/references/big.md")));
+}
+
+#[test]
+fn a_file_that_is_not_text_is_withheld_and_refuses_the_install_unless_force() {
+    let (fx, dir) = judged();
+    answer(&fx, Some("SKILL.md runs curl | sh."), "good", "worth trying");
+    fs::write(dir.join("tool.bin"), [0xff, 0xfe, 0x00]).unwrap();
+    let r = add(&fx, &[&s(&dir), "--yes"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(
+        r.stderr().contains("not sent to the judge in full: tool.bin (3 bytes, not text); pass --force"),
+        "{}",
+        r.stderr()
+    );
+    assert!(calls(&fx).is_empty());
+    assert_not_installed(&fx, "theirs");
+
+    add(&fx, &[&s(&dir), "--force", "--yes"]).assert_ok();
+    assert!(calls(&fx)[0].contains("<file path=\"tool.bin\">\n(withheld: 3 bytes, not text)\n</file>"));
+    let security = lock(&fx)[0]["verdict"]["security"].as_str().unwrap().to_string();
+    assert_eq!(security, "SKILL.md runs curl | sh.; not sent to the judge in full: tool.bin (3 bytes, not text)");
+}
+
+#[test]
+fn with_no_source_the_judge_sees_the_store_skills_only() {
+    let (mut fx, dir) = judged();
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    let config = fx.source.join("mazo.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    // Without a source, nothing may be relative to it.
+    let relative = |l: &&str| ["source", "loose", "links"].iter().any(|k| l.starts_with(k));
+    let text: String = text.lines().filter(|l| !relative(l)).map(|l| format!("{l}\n")).collect();
+    fs::write(&config, text).unwrap();
+    fx.allow("other");
+    let other = incoming(&fx, "other");
+    answer(&fx, None, "good", "worth trying");
+    add(&fx, &[&s(&other), "--yes"]).assert_ok();
+    let stdin = &calls(&fx)[0];
+    assert!(stdin.contains("<existing-skills>\n- theirs: From elsewhere.\n</existing-skills>"), "{stdin}");
+    assert_eq!(lock_names(&fx), ["theirs", "other"]);
 }
