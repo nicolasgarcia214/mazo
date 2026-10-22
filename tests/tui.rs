@@ -733,10 +733,16 @@ fn quitting_with_a_job_running_asks_and_kills_its_judge() {
     assert!(screen.iter().any(|l| l.contains(" audit busy · running ")), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains("judging 1/1 s2")), "{screen:#?}");
     press(&mut app, KeyCode::Tab);
-    press(&mut app, KeyCode::Char('x'));
-    let screen = text(&mut app, 200, 30);
-    assert!(screen.iter().any(|l| l.contains("the audit of busy is running; one job at a time")), "{screen:#?}");
-    press(&mut app, KeyCode::Esc);
+    // Retire and sync plan on the inventory the job may change, so they are refused too.
+    for key in ['x', 'r', 's'] {
+        press(&mut app, KeyCode::Char(key));
+        let screen = text(&mut app, 200, 30);
+        assert!(
+            screen.iter().any(|l| l.contains("the audit of busy is running; one job at a time")),
+            "{key}: {screen:#?}"
+        );
+        press(&mut app, KeyCode::Esc);
+    }
 
     for quit in [
         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),

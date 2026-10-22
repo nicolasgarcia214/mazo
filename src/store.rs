@@ -573,6 +573,17 @@ impl Target<'_> {
     }
 }
 
+/// Refuses the name `add` would install when any of its `paths` exists.
+fn unclaimed(paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
+    match paths.into_iter().find(|p| p.symlink_metadata().is_ok()) {
+        Some(p) => Err(Error::Usage(format!(
+            "add refused: {} already exists; pass --as <name> to install it under another name",
+            p.display()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Installs the skill of `from` in `child` (`None` for `from.root` itself)
 /// and adds it to `inv`. A bad skill or a name taken in any root, or at a
 /// project link, is a usage error, and a refused vet or a sync that would
@@ -603,15 +614,12 @@ fn install(
     let store = target.store();
     let to = store.join(&name);
     let links: Vec<(PathBuf, PathBuf)> = project.into_iter().flat_map(|p| project_links(p, &name)).collect();
-    let roots = cfg.source.iter().cloned().chain([dir(data)]).chain(project.map(|_| store.clone()));
-    let taken =
-        roots.map(|r| r.join(&name)).chain(links.iter().map(|(l, _)| l.clone())).find(|p| p.symlink_metadata().is_ok());
-    if let Some(p) = taken {
-        return Err(Error::Usage(format!(
-            "add refused: {} already exists; pass --as <name> to install it under another name",
-            p.display()
-        )));
-    }
+    let claimed = || {
+        let roots = cfg.source.iter().cloned().chain([dir(data)]).chain(project.map(|_| store.clone()));
+        roots.map(|r| r.join(&name)).chain(links.iter().map(|(l, _)| l.clone()))
+    };
+    // Checked before the judge is paid for, and again under the lock.
+    unclaimed(claimed())?;
 
     let vetted = match caller {
         Some(c) => Some((gate(c, inv, args.consent(), &name, contents(&src, &files, &skill_md)?, None)?, now()?)),
@@ -622,6 +630,7 @@ fn install(
     // The data lock guards the project's store and `mazo.lock` too, so two
     // adds into one project are serialized only when they share a data dir.
     let _lock = ledger::lock(data)?;
+    unclaimed(claimed())?;
     // Copied under a hidden name, which no root lists, then renamed into place.
     let staged = store.join(format!(".add-{name}"));
     let installed = stage(&src, &files, &skill_md, &staged)
@@ -1372,7 +1381,8 @@ pub fn content_hash(dir: &Path) -> Result<String> {
 mod tests {
     use std::path::Path;
 
-    use super::{JUDGE_EXAMPLES, Remote, Source, content_hash, local, no_judge, renamed};
+    use super::{JUDGE_EXAMPLES, Remote, Source, content_hash, local, no_judge, renamed, unclaimed};
+    use crate::Error;
 
     fn remote(arg: &str) -> Remote {
         match Source::parse(arg) {
@@ -1493,5 +1503,20 @@ mod tests {
         assert_eq!(first, sha.digest().to_string());
         std::fs::rename(dir.join("refs/x.md"), dir.join("refs/y.md")).unwrap();
         assert_ne!(content_hash(dir).unwrap(), first, "a renamed file changes the hash");
+    }
+
+    #[test]
+    fn a_name_claimed_by_a_dir_or_a_dangling_link_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, link) = (tmp.path().join("dir"), tmp.path().join("link"));
+        assert!(unclaimed([dir.clone(), link.clone()]).is_ok());
+        std::os::unix::fs::symlink(tmp.path().join("gone"), &link).unwrap();
+        std::fs::create_dir(&dir).unwrap();
+        for (paths, taken) in [([link.clone(), dir.clone()], &link), ([tmp.path().join("free"), dir.clone()], &dir)] {
+            match unclaimed(paths) {
+                Err(Error::Usage(e)) => assert!(e.contains(&format!("{} already exists", taken.display())), "{e}"),
+                other => panic!("{other:?}"),
+            }
+        }
     }
 }

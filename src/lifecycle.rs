@@ -317,7 +317,7 @@ pub fn retire(
         }
     }
     // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
-    let _lock = if to.is_some() { None } else { Some(ledger::lock(data)?) };
+    let _lock = ledger::lock(data)?;
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
