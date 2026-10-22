@@ -1,6 +1,7 @@
 //! Reports over the ledger: usage, unused, the card (show);
 //! collapse, held and cluster.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -98,6 +99,8 @@ struct View<'a> {
     authoring_sessions: HashSet<(Agent, &'a str)>,
     /// The ids of the events whose path is in a project skill's directory.
     project: HashSet<&'a str>,
+    /// The source repository's GitHub URL and HEAD, read once a card needs them.
+    upstream: OnceCell<Option<(String, String)>>,
 }
 
 /// Which events a report counts. The default is canonical origin, no probe
@@ -147,7 +150,7 @@ impl<'a> View<'a> {
             let of = |e: &Event| e.path.as_deref().and_then(|path| p.skill_of(path)).is_some();
             input.events.iter().filter(|e| of(e)).map(|e| e.id.as_str()).collect()
         });
-        View { input, today, events, authoring_sessions, project }
+        View { input, today, events, authoring_sessions, project, upstream: OnceCell::new() }
     }
 
     /// A project skill's event is one in its directory; every other is global.
@@ -788,6 +791,8 @@ pub struct Card<'a> {
     pub description: Option<String>,
     /// None for a name in no root without a source.
     pub path: Option<PathBuf>,
+    /// The GitHub repository and commit the skill came from (D24).
+    pub origin: Option<SkillOrigin>,
     /// None outside a git worktree.
     pub history: Option<CardHistory<'a>>,
     /// Newest first.
@@ -802,6 +807,51 @@ pub struct Card<'a> {
     pub examples: Examples,
     /// The latest skill record.
     pub audit: Option<&'a SkillRecord>,
+}
+
+/// Where a skill came from on GitHub: a store skill's lockfile entry, or the
+/// source repository's `origin` remote at its HEAD.
+#[derive(Serialize)]
+pub struct SkillOrigin {
+    /// `https://github.com/<owner>/<repo>.git`.
+    pub repo: String,
+    /// The skill's directory inside `repo`.
+    pub subpath: String,
+    pub r#ref: Option<String>,
+    pub commit: String,
+}
+
+/// `skill`'s [`SkillOrigin`]; None for a local install or one off github.com,
+/// and for a source repository with no `origin` remote on github.com. Read
+/// from the lockfile and git config only, never the network.
+fn origin_of(view: &View, skill: &str) -> Option<SkillOrigin> {
+    let inv = view.input.inv;
+    if let Some(locked) = vet_of(inv, skill) {
+        return Some(SkillOrigin {
+            repo: crate::store::github_repo(&locked.origin)?,
+            subpath: locked.subpath.clone(),
+            r#ref: locked.r#ref.clone(),
+            commit: locked.commit.clone()?,
+        });
+    }
+    let source = inv.source.as_deref().filter(|s| inv.root(skill) == Some(*s))?;
+    let worktree = inv.worktree.as_deref()?;
+    // Once per report, whatever the number of cards.
+    let (repo, head) = view
+        .upstream
+        .get_or_init(|| {
+            let remote = inventory::git(worktree, &["config", "--get", "remote.origin.url"])?;
+            let repo = crate::store::github_repo(remote.trim())?;
+            Some((repo, inventory::git(worktree, &["rev-parse", "HEAD"])?.trim().to_string()))
+        })
+        .clone()?;
+    let dir = std::fs::canonicalize(source.join(skill)).ok()?;
+    Some(SkillOrigin {
+        repo,
+        subpath: dir.strip_prefix(worktree).ok()?.to_string_lossy().into_owned(),
+        r#ref: None,
+        commit: head,
+    })
 }
 
 /// `xs` joined with `, `, or `none`.
@@ -937,6 +987,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         events,
         total_events: window.len(),
         description,
+        origin: origin_of(view, skill),
         path,
         history,
         grades,

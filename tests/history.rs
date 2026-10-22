@@ -179,7 +179,8 @@ fn real_git(skip: &Path) -> PathBuf {
 }
 
 /// AC: a report starts the same few git processes whatever the number of
-/// skills: `rev-parse` for the worktree, then one `status` and one `log`.
+/// skills: `rev-parse` for the worktree, then one `status` and one `log`;
+/// `show` adds one `config` for the origin remote, which this repository lacks.
 #[test]
 fn a_report_runs_one_log_and_one_status_whatever_the_skill_count() {
     for n in [1, 6] {
@@ -221,7 +222,12 @@ fn a_report_runs_one_log_and_one_status_whatever_the_skill_count() {
             let calls: Vec<String> = fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
             let sub = |c: &String| c.split(' ').nth(3).unwrap_or("").to_string();
             let subs: Vec<String> = calls.iter().map(sub).collect();
-            assert_eq!(subs, ["rev-parse", "status", "log"], "{n} skills, {args:?}: {calls:#?}");
+            let want: &[&str] = if args[0] == "show" {
+                &["rev-parse", "status", "log", "config"]
+            } else {
+                &["rev-parse", "status", "log"]
+            };
+            assert_eq!(subs, want, "{n} skills, {args:?}: {calls:#?}");
             if args[0] == "usage" {
                 let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
                 for r in v["rows"].as_array().unwrap() {
