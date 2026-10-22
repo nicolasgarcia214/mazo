@@ -273,7 +273,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             let inv = Inventory { project: store::Project::current()?, ..inv };
             cmd_status(&cfg, &inv, agent, json, render::colour(std::io::stderr().is_terminal(), no_color.as_deref()))
         }
-        Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
+        Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, inv, &data, agent, dry_run),
         Cmd::New { name, description } => lifecycle::new(&cfg, &inv, &name, &description),
         Cmd::Prune { name, yes, force } => {
             lifecycle::prune(cfg.need_source("prune")?, name.as_deref(), yes, force, std::io::stdin().is_terminal())
@@ -490,9 +490,27 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, c
     Ok(if failed { ExitCode::from(1) } else { ExitCode::SUCCESS })
 }
 
-fn cmd_sync(cfg: &Config, inv: &Inventory, agent: Option<Agent>, dry_run: bool) -> mazo::Result<ExitCode> {
+fn cmd_sync(
+    cfg: &Config,
+    mut inv: Inventory,
+    data: &std::path::Path,
+    agent: Option<Agent>,
+    dry_run: bool,
+) -> mazo::Result<ExitCode> {
     let homes = selected(cfg, agent);
-    let plan = match links::checked(cfg, inv, &homes) {
+    let mut plan = links::checked(cfg, &inv, &homes);
+    // Re-planned under the data lock, on an inventory read under it, so a
+    // concurrent `add`, `update` or `retire` cannot stale what is applied. A
+    // dry run, a refusal or an empty plan writes nothing, not even the lock.
+    let _lock = if !dry_run && plan.as_ref().is_ok_and(|p| !p.actions.is_empty()) {
+        let lock = ledger::lock(data)?;
+        inv = store::inventory(cfg.source.as_deref(), data)?;
+        plan = links::checked(cfg, &inv, &homes);
+        Some(lock)
+    } else {
+        None
+    };
+    let plan = match plan {
         Ok(plan) => plan,
         Err(errors) => {
             for e in &errors {

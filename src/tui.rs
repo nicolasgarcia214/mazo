@@ -212,6 +212,18 @@ fn cycle<T: Copy + PartialEq>(all: &[T], cur: Option<T>) -> Option<T> {
     }
 }
 
+/// Applies the confirmed sync `plan` under the data lock, as `mazo sync`
+/// does, or refuses when a re-plan on the inventory read under it differs.
+fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<String>> {
+    let _lock = ledger::lock(&d.dir)?;
+    let inv = store::inventory(d.cfg.source.as_deref(), &d.dir)?;
+    let homes: Vec<&Home> = d.cfg.homes.iter().collect();
+    match links::checked(&d.cfg, &inv, &homes) {
+        Ok(now) if now.actions == plan.actions => links::apply(plan),
+        _ => Err("sync refused: the links changed since the plan; press s to plan again".into()),
+    }
+}
+
 fn next_window(since: Since) -> Since {
     cycle(&WINDOWS, Some(since)).unwrap_or(WINDOWS[0])
 }
@@ -495,6 +507,8 @@ impl App {
                 }
                 self.refresh();
             }
+            // Its plan is of the inventory a running job may change.
+            KeyCode::Char('s') if self.running().is_some() => self.dialog = self.one_job(),
             KeyCode::Char('r') => {
                 if let Some(skill) = self.chosen() {
                     self.retire(skill);
@@ -753,8 +767,13 @@ impl App {
         }
     }
 
-    /// Opens the y/N dialog that retires `skill`.
+    /// Opens the y/N dialog that retires `skill`, unless a job is running:
+    /// the plan is of the inventory the job may change.
     fn retire(&mut self, skill: String) {
+        if let Some(busy) = self.one_job() {
+            self.dialog = Some(busy);
+            return;
+        }
         let what = match self.data.cfg.source.as_deref() {
             Some(source) if self.data.inv.root(&skill) == Some(source) => {
                 format!("move it to {}", source.join(".archive").join(&skill).display())
@@ -787,7 +806,7 @@ impl App {
                     Retired::Done(lines) => lines,
                 })
             }
-            Act::Sync(plan) => links::apply(&plan),
+            Act::Sync(plan) => synced(d, &plan),
         };
         out.extend(ran.unwrap_or_else(|e| vec![format!("ERROR: {e}")]));
         if let Err(e) = self.reload() {

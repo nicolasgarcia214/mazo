@@ -304,3 +304,20 @@ fn a_links_entry_colliding_with_a_skill_aborts_before_writes() {
     assert!(r.stderr().contains("claimed by two sources"), "{}", r.stderr());
     assert_eq!(fx.snapshot(), before);
 }
+
+#[test]
+fn sync_waits_for_the_data_lock_but_a_dry_run_does_not() {
+    let fx = fixture();
+    let held = mazo::ledger::lock(&fx.data.join("mazo")).unwrap();
+    let dry = fx.mazo(&["sync", "--agent", "pi", "--dry-run"]);
+    dry.assert_ok();
+    assert!(dry.stdout().contains("would link"), "{}", dry.stdout());
+
+    let mut sync = fx.command(&["sync", "--agent", "pi"]).stdout(std::process::Stdio::null()).spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(sync.try_wait().unwrap().is_none(), "sync ran while another process held the lock");
+    assert!(!exists(&fx.target), "sync wrote before it had the lock");
+    drop(held);
+    assert!(sync.wait().unwrap().success());
+    assert_eq!(names(&fx.target), fx.skills);
+}
