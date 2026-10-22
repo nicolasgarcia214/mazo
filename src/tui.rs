@@ -1,11 +1,13 @@
 //! The TUI of bare `mazo`: the usage table, the unused list and one skill's
 //! card, rendered from the typed report model over a finished scan. Its
-//! actions, `retire`, `sync` and `audit`, each ask y/N first and run the CLI
-//! command's own code path; the data is re-read after each. An audit runs on
-//! a background thread, one at a time, and reports in the job pane.
+//! actions, `retire`, `sync`, `update` and `audit`, each ask y/N first and run
+//! the CLI command's own code path; the data is re-read after each. An update
+//! or an audit runs on a background thread, one at a time, and reports in the
+//! job pane.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
@@ -40,7 +42,7 @@ const PANE_LINES: usize = 6;
 const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// The keys, as the footer lists them.
-const KEYS: [&str; 13] = [
+const KEYS: [&str; 14] = [
     "↑↓←→/hjkl move",
     "Enter card/retire",
     "Esc back",
@@ -52,6 +54,7 @@ const KEYS: [&str; 13] = [
     "A authoring",
     "r retire",
     "s sync",
+    "u/U update one/all",
     "x audit",
     "q quit",
 ];
@@ -127,14 +130,19 @@ enum Ask {
     Act(Act),
     /// Starts the job.
     Audit(String),
+    /// Starts the job: one store skill, or every one.
+    Update(Option<String>),
     /// Stops the running job and quits.
     Quit,
 }
 
-/// A background audit and what its pane shows.
+/// A background audit or update and what its pane shows.
 struct Job {
-    skill: String,
-    /// What the run reported, then what `mazo audit` prints.
+    /// `audit` or `update`.
+    verb: &'static str,
+    /// The skill, or every store skill.
+    target: String,
+    /// What the run reported, then what its CLI command prints.
     lines: Vec<String>,
     rx: mpsc::Receiver<String>,
     cancel: Arc<AtomicBool>,
@@ -378,7 +386,8 @@ impl App {
                         let lines = self.act(act);
                         self.dialog = Some(Dialog { lines, ask: None });
                     }
-                    Ask::Audit(skill) => self.start(skill),
+                    Ask::Audit(skill) => self.run_audit(skill),
+                    Ask::Update(skill) => self.run_update(skill),
                     Ask::Quit => {
                         self.stop();
                         return false;
@@ -461,6 +470,12 @@ impl App {
                     Ok(plan) => Dialog { lines: links::planned(&plan), ask: Some(Ask::Act(Act::Sync(plan))) },
                 });
             }
+            KeyCode::Char('u') => {
+                if let Some(skill) = self.chosen() {
+                    self.dialog = Some(self.update(Some(skill)));
+                }
+            }
+            KeyCode::Char('U') => self.dialog = Some(self.update(None)),
             KeyCode::Char('x') => {
                 if let Some(skill) = self.chosen() {
                     self.dialog = Some(self.audit(skill));
@@ -482,7 +497,7 @@ impl App {
     /// False, quitting, unless a job is running: then it asks first.
     fn quit(&mut self) -> bool {
         let Some(job) = self.running() else { return false };
-        let lines = vec![format!("the audit of {} is running; stop its judge and quit?", job.skill)];
+        let lines = vec![format!("the {} of {} is running; stop its judge and quit?", job.verb, job.target)];
         self.dialog = Some(Dialog { lines, ask: Some(Ask::Quit) });
         true
     }
@@ -490,9 +505,8 @@ impl App {
     /// The dialog that asks to audit `skill` under the cap `mazo audit` would
     /// use, or shows why it would refuse.
     fn audit(&self, skill: String) -> Dialog {
-        if let Some(job) = self.running() {
-            let lines = vec![format!("the audit of {} is running; one job at a time", job.skill)];
-            return Dialog { lines, ask: None };
+        if let Some(busy) = self.one_job() {
+            return busy;
         }
         let d = &self.data;
         match audit::plan(&d.cfg, &d.inv, &skill, None) {
@@ -510,26 +524,100 @@ impl App {
         }
     }
 
-    /// Starts auditing `skill` on a thread as `mazo audit <skill>` does, over
-    /// a copy of the data, its lines going to the job pane.
-    fn start(&mut self, skill: String) {
+    /// The dialog that refuses a second job while one runs.
+    fn one_job(&self) -> Option<Dialog> {
+        let job = self.running()?;
+        let lines = vec![format!("the {} of {} is running; one job at a time", job.verb, job.target)];
+        Some(Dialog { lines, ask: None })
+    }
+
+    /// The dialog that asks to update `skill`, or every store skill, as
+    /// `mazo update --yes` does, or shows why `skill` is not updatable. The
+    /// job cannot answer a y/N, so `y` here accepts each re-vet's verdict;
+    /// with no `--force`, a security finding still refuses.
+    fn update(&self, skill: Option<String>) -> Dialog {
+        if let Some(busy) = self.one_job() {
+            return busy;
+        }
+        let d = &self.data;
+        let why = skill.as_ref().and_then(|s| match d.inv.installed.get(s) {
+            None => Some("not a store skill"),
+            Some(l) => (!l.updatable()).then_some("installed from a local path"),
+        });
+        if let (Some(s), Some(why)) = (&skill, why) {
+            return Dialog { lines: vec![format!("{s}: not updatable; {why}")], ask: None };
+        }
+        let what = skill.as_deref().unwrap_or("every store skill");
+        let lines = match &d.cfg.judge {
+            None => vec![
+                format!("update {what} in the background?"),
+                "an untrusted skill is skipped: re-vetting it needs a [judge] in the config".into(),
+            ],
+            Some(judge) => {
+                let judge_name = name(judge.agent);
+                let cap = match audit::backend(judge, &d.cfg.homes) {
+                    Err(e) => format!("ERROR: {e}"),
+                    Ok(b) if b.budget_flag().is_some() => {
+                        format!("cap: {} per call", audit::usd(judge, audit::DEFAULT_BUDGET))
+                    }
+                    Ok(_) => format!("the {judge_name} judge reports no cost"),
+                };
+                vec![
+                    format!("update {what} and accept judge verdicts?"),
+                    format!("an untrusted skill that changed is re-vetted with one {judge_name} judge call; {cap}"),
+                    "a security finding still refuses its update".into(),
+                ]
+            }
+        };
+        Dialog { lines, ask: Some(Ask::Update(skill)) }
+    }
+
+    /// Runs `job` on a thread over a copy of the data, as the `verb` of
+    /// `target`: the lines it reports, then the text it returns, go to the
+    /// job pane.
+    fn start(
+        &mut self,
+        verb: &'static str,
+        target: String,
+        job: impl FnOnce(&Data, &audit::Pane) -> (String, bool) + Send + 'static,
+    ) {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let pane = audit::Pane { lines: tx, cancel: cancel.clone() };
-        let (data, name) = (self.data.clone(), skill.clone());
+        let data = self.data.clone();
         let thread = std::thread::spawn(move || {
-            let (out, ok) = caught(|| {
-                let args = audit::Args { limit: Some(audit::LIMIT), resynth: false, dry_run: false, json: false };
-                let ran = audit::plan(&data.cfg, &data.inv, &name, None)
-                    .and_then(|p| audit::command(&p, &args, &data.input(), &data.dir, false, Some(&pane)));
-                ran.unwrap_or_else(|e| (format!("ERROR: {e}"), false))
-            });
+            let (out, ok) = caught(verb, || job(&data, &pane));
             for line in out.lines() {
                 _ = pane.lines.send(line.into());
             }
             ok
         });
-        self.job = Some(Job { skill, lines: Vec::new(), rx, cancel, thread: Some(thread), ok: false });
+        self.job = Some(Job { verb, target, lines: Vec::new(), rx, cancel, thread: Some(thread), ok: false });
+    }
+
+    /// Audits `skill` in the background as `mazo audit <skill>` does.
+    fn run_audit(&mut self, skill: String) {
+        let name = skill.clone();
+        self.start("audit", skill, move |data, pane| {
+            let args = audit::Args { limit: Some(audit::LIMIT), resynth: false, dry_run: false, json: false };
+            let ran = audit::plan(&data.cfg, &data.inv, &name, None)
+                .and_then(|p| audit::command(&p, &args, &data.input(), &data.dir, false, Some(pane)));
+            ran.unwrap_or_else(|e| (format!("ERROR: {e}"), false))
+        });
+    }
+
+    /// Updates `skill`, or every store skill, in the background as `mazo
+    /// update [skill] --yes` does.
+    fn run_update(&mut self, skill: Option<String>) {
+        let target = skill.clone().unwrap_or_else(|| "every store skill".into());
+        self.start("update", target, move |data, pane| {
+            let names = Vec::from_iter(skill);
+            let args = store::Update { names: &names, yes: true, force: false, pane: Some(pane) };
+            match store::update(&data.cfg, &data.inv, &data.dir, &args) {
+                Ok(code) => (String::new(), code == ExitCode::SUCCESS),
+                Err(e) => (format!("ERROR: {e}"), false),
+            }
+        });
     }
 
     /// Takes the lines the job reported; once its thread ended, re-reads the
@@ -690,7 +778,7 @@ impl App {
                 .skip(job.lines.len().saturating_sub(PANE_LINES))
                 .map(|l| Line::raw(l.as_str()))
                 .collect();
-            let block = Block::bordered().title(format!(" audit {} · {state} ", job.skill));
+            let block = Block::bordered().title(format!(" {} {} · {state} ", job.verb, job.target));
             frame.render_widget(Paragraph::new(lines).block(block), pane);
         }
         if let Some(dialog) = &self.dialog {
@@ -758,12 +846,12 @@ impl App {
     }
 }
 
-/// What `job` returns, or a failure naming its panic: the pane shows it and
-/// the screen stays up.
-fn caught(job: impl FnOnce() -> (String, bool)) -> (String, bool) {
+/// What `job`, the `verb` run, returns, or a failure naming its panic: the
+/// pane shows it and the screen stays up.
+fn caught(verb: &str, job: impl FnOnce() -> (String, bool)) -> (String, bool) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|panic| {
         let why = panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str));
-        (format!("ERROR: the audit panicked: {}", why.unwrap_or("no message")), false)
+        (format!("ERROR: the {verb} panicked: {}", why.unwrap_or("no message")), false)
     })
 }
 
@@ -811,9 +899,9 @@ mod tests {
 
     #[test]
     fn a_job_that_panics_fails_with_its_message() {
-        assert_eq!(caught(|| ("done".into(), true)), ("done".into(), true));
-        assert_eq!(caught(|| panic!("boom")), ("ERROR: the audit panicked: boom".into(), false));
+        assert_eq!(caught("audit", || ("done".into(), true)), ("done".into(), true));
+        assert_eq!(caught("audit", || panic!("boom")), ("ERROR: the audit panicked: boom".into(), false));
         let n = 2;
-        assert_eq!(caught(|| panic!("boom {n}")), ("ERROR: the audit panicked: boom 2".into(), false));
+        assert_eq!(caught("update", || panic!("boom {n}")), ("ERROR: the update panicked: boom 2".into(), false));
     }
 }
