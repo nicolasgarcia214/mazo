@@ -1,8 +1,11 @@
 //! mazo: skill usage from agent transcripts, and sync of skill links.
 //!
-//! Four paths: write `tail → adapters → classify → ledger`, read
+//! Five paths: write `tail → adapters → classify → ledger`, read
 //! `ledger + inventory + evals → report`, sync `config + inventory + policy → links`,
-//! judge `ledger + adapters (condense) → audit`.
+//! judge `ledger + adapters (condense) → audit`, store `source → audit (vet) →
+//! store + mazo.lock → links` for `add` and `update` and `lifecycle → store` for
+//! `retire`, each on a project's store and lockfile with `--project`. The TUI
+//! draws the read path's report and runs the CLI's own code for its actions.
 
 pub mod adapters;
 pub mod audit;

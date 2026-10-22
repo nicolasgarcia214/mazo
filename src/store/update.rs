@@ -1,0 +1,310 @@
+//! `mazo update`: each skill re-cloned, re-vetted on its diff when its
+//! source is untrusted, and swapped in under the data lock.
+
+use std::cell::OnceCell;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::sync::mpsc;
+
+use super::ask::{Consent, Question};
+use super::lock::{checked, now, resolved, stage};
+use super::source::{Remote, Scratch};
+use super::vet::{gate, no_judge};
+use super::{Lock, Locked, Out, Target, content_hash, err, project_hint, project_inventory, project_root};
+use crate::audit::{self, Backend, Caller, Pane, Vet};
+use crate::config::{Config, Home, Judge};
+use crate::inventory::Inventory;
+use crate::{Error, Result};
+use crate::{ledger, links};
+
+/// `mazo update`'s arguments.
+pub struct Update<'a> {
+    /// The store skills to update; every one when empty.
+    pub names: &'a [String],
+    /// Accept a re-vetted update without asking.
+    pub yes: bool,
+    /// Apply an update with a security finding.
+    pub force: bool,
+    /// The TUI's job pane: what the update reports, and its judge's
+    /// progress, go there instead of to stdout and stderr.
+    pub pane: Option<&'a Pane>,
+    /// Update the project skills at the current directory's git root.
+    pub project: bool,
+    /// The TUI's dialogs, which take each re-vet's y/N in place of the
+    /// terminal.
+    pub asks: Option<&'a mpsc::Sender<Question>>,
+}
+
+/// `mazo update [names…] [--yes] [--force]`: re-clones each git-sourced
+/// store skill (every one when `names` is empty) and, when the copy at its
+/// subpath hashes differently, swaps it into the store and records the new
+/// commit and hash. A skill whose source is not trusted is first re-vetted
+/// by the judge on the diff from the installed copy ([`gate`]), and refused
+/// (exit 2, with [`no_judge`] once) when no judge is configured; a local-path one is
+/// not updatable. A skill that fails or is refused is left as it was and the
+/// rest still run; the exit code is the highest of the failures', 2 for no
+/// judge and 1 for the rest. A name that is not a store skill is a usage error.
+/// With `--project` it updates the project's skills and lockfile instead, the
+/// judge seeing the project's skills too; their links, relative to the
+/// project store, need no change.
+pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<ExitCode> {
+    let (names, out) = (args.names, Out(args.pane));
+    let project = if args.project { Some(project_root("update")?) } else { None };
+    let target = Target { data, project: project.as_deref() };
+    let with_project;
+    let inv = match &project {
+        Some(p) => {
+            with_project = project_inventory(inv, p)?;
+            &with_project
+        }
+        None => inv,
+    };
+    let lock = Lock::load(&target.lock_dir())?;
+    if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
+        return Err(Error::Usage(match project {
+            Some(_) => format!("update: not a project skill: {n}"),
+            None => format!("update: not a store skill: {n}{}", project_hint(n)),
+        }));
+    }
+    let consent = Consent { update: true, yes: args.yes, force: args.force, asks: args.asks };
+    let revet = cfg.judge.as_ref().map(|judge| Revet {
+        data,
+        judge,
+        homes: &cfg.homes,
+        consent,
+        pane: args.pane,
+        backend: OnceCell::new(),
+    });
+    let (mut updated, mut unjudged, mut code) = (false, false, 0);
+    for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
+        // A cancelled job starts nothing more.
+        if out.cancelled() {
+            return Err(audit::CANCELLED.into());
+        }
+        let mut remote = match l.remote() {
+            Ok(Some(remote)) => remote,
+            Ok(None) => {
+                out.line(&format!("{}: not updatable; installed from a local path", l.name));
+                continue;
+            }
+            Err(e) => {
+                out.error(&format!("ERROR: update {}: {e}", l.name));
+                code = code.max(1);
+                continue;
+            }
+        };
+        let vet = match &revet {
+            _ if l.trusted || remote.trusted_by(&cfg.trusted) => None,
+            None => {
+                out.error(&format!(
+                    "ERROR: update {}: update refused: {} is not trusted and re-vetting it needs a [judge], \
+                     which the config lacks; add it to trusted to update it without vetting",
+                    l.name, l.origin
+                ));
+                (unjudged, code) = (true, 2);
+                continue;
+            }
+            Some(r) => Some(r),
+        };
+        remote.subpath = if l.subpath == "." { PathBuf::new() } else { l.subpath.clone().into() };
+        match refresh(cfg, inv, target, l, &remote, vet, out) {
+            Ok(Some(commit)) => {
+                out.line(&format!("updated {} to {commit}", target.store().join(&l.name).display()));
+                updated = true;
+            }
+            Ok(None) => out.line(&format!("{}: up to date", l.name)),
+            Err(e) => {
+                out.error(&format!("ERROR: update {}: {e}", l.name));
+                code = code.max(1);
+            }
+        }
+    }
+    if updated {
+        let (plan, errors) = target.home_sync(cfg, inv, None);
+        for e in &errors {
+            out.error(e);
+        }
+        if errors.is_empty() {
+            for line in links::apply(&plan)? {
+                out.line(&line);
+            }
+        }
+        if !errors.is_empty() {
+            code = code.max(1);
+        }
+    }
+    if unjudged {
+        out.error(&no_judge());
+    }
+    Ok(ExitCode::from(code))
+}
+
+/// Clones `remote` into `<data>/.clone-<pid>` and, when the skill at its
+/// subpath hashes unlike `l`, passes it through the `vet` gate if there is
+/// one, then swaps the copy in for `<store>/<name>` of `target` under the
+/// data lock and records the commit and hash, and any new verdict, in its
+/// lockfile: the new commit, or `None` when up to date. A refused vet, a
+/// sync that would fail with the new copy (for the data directory's store),
+/// or any failed write leaves the old copy and the lockfile as they were;
+/// the sync's errors go to `out`. A cancel stops it before the swap, and a
+/// copy an interrupted swap set aside is put back first ([`recover`]).
+fn refresh(
+    cfg: &Config,
+    inv: &Inventory,
+    target: Target,
+    l: &Locked,
+    remote: &Remote,
+    vet: Option<&Revet>,
+    out: Out,
+) -> Result<Option<String>> {
+    let (data, store, lock_dir) = (target.data, target.store(), target.lock_dir());
+    let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
+    {
+        let _lock = ledger::lock(data)?;
+        recover(&to, &old).map_err(|e| err(&old, e))?;
+    }
+    let scratch = Scratch(data.join(format!(".clone-{}", std::process::id())));
+    let clone = scratch.0.as_path();
+    let _ = fs::remove_dir_all(clone);
+    let commit = remote.clone_into(clone, &|| out.cancelled())?;
+    let src = resolved(&clone.join(&remote.subpath), Some(clone))?;
+    let (skill_md, files) = checked(&src, &l.name, l.name != remote.name())?;
+
+    // Staged under a name of this process's own, so that the judge and the
+    // y/N prompt run without the data lock.
+    let staged = Scratch(store.join(format!(".update-{}-{}", l.name, std::process::id())));
+    let content_hash = stage(&src, &files, &skill_md, &staged.0)?;
+    if content_hash == l.content_hash {
+        return Ok(None);
+    }
+    let vetted = match vet {
+        Some(r) => Some((r.vet(inv, &l.name, &skill_md, &store, &staged.0)?, now()?)),
+        None => None,
+    };
+
+    let _lock = ledger::lock(data)?;
+    // The judge saw the diff from the copy then installed, and ran unlocked.
+    if let Some(((_, diffed), _)) = &vetted
+        && super::content_hash(&to)? != *diffed
+    {
+        return Err(format!(
+            "update refused: {} changed while it was vetted; the skill was left as it was",
+            to.display()
+        )
+        .into());
+    }
+    if out.cancelled() {
+        return Err(audit::CANCELLED.into());
+    }
+    recover(&to, &old).map_err(|e| err(&old, e))?;
+    let swapped = fs::rename(&to, &old).map_err(|e| err(&to, e)).and_then(|()| {
+        fs::rename(&staged.0, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to)))
+    });
+    swapped?;
+
+    let (_, errors) = target.home_sync(cfg, inv, None);
+    let recorded = if errors.is_empty() {
+        Lock::load(&lock_dir).and_then(|mut lock| {
+            let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;
+            entry.commit = Some(commit.clone());
+            entry.content_hash = content_hash;
+            if let Some(((vet, _), at)) = vetted {
+                (entry.vetted_at, entry.r#for, entry.r#try) = (Some(at), Some(vet.r#for), vet.r#try);
+                entry.verdict = Some(vet.verdict);
+            }
+            lock.save(&lock_dir)
+        })
+    } else {
+        Err("update refused; the skill was left as it was".into())
+    };
+    if let Err(e) = recorded {
+        fs::remove_dir_all(&to).and_then(|()| fs::rename(&old, &to)).map_err(|e| err(&to, e))?;
+        for e in &errors {
+            out.error(e);
+        }
+        return Err(e);
+    }
+    // Installed and recorded; a hidden leftover is listed by no root.
+    let _ = recover(&to, &old);
+    Ok(Some(commit))
+}
+
+/// Undoes a swap interrupted after it set `store/<name>` aside as `old`:
+/// `old` goes back to `to` when `to` is missing, and is removed only when
+/// `to` is there.
+fn recover(to: &Path, old: &Path) -> std::io::Result<()> {
+    match (old.symlink_metadata(), to.symlink_metadata()) {
+        (Err(_), _) => Ok(()),
+        (Ok(_), Ok(_)) => fs::remove_dir_all(old),
+        (Ok(_), Err(_)) => fs::rename(old, to),
+    }
+}
+
+/// `update`'s re-vets: the judge, set up and its login checked the first
+/// time a changed untrusted skill needs it, so that an update of trusted
+/// skills alone never touches it.
+struct Revet<'a> {
+    data: &'a Path,
+    judge: &'a Judge,
+    homes: &'a [Home],
+    consent: Consent<'a>,
+    pane: Option<&'a Pane>,
+    backend: OnceCell<Box<dyn Backend>>,
+}
+
+impl Revet<'_> {
+    fn caller(&self) -> Result<Caller<'_>> {
+        if self.backend.get().is_none() {
+            let backend = audit::backend(self.judge, self.homes)?;
+            self.with(backend.as_ref()).login()?;
+            let _ = self.backend.set(backend);
+        }
+        Ok(self.with(self.backend.get().expect("set above").as_ref()))
+    }
+
+    fn with<'s>(&'s self, backend: &'s dyn Backend) -> Caller<'s> {
+        Caller { data: self.data, judge: self.judge, backend, pane: self.pane }
+    }
+
+    /// The vet gate on an update of the store skill `name` to the copy
+    /// staged in `staged`: its new `skill_md` and the `git diff --no-index`
+    /// from `store/<name>`, with the staged copy's paths shown as the
+    /// installed one's. Binary files are diffed as text, so that none hides
+    /// behind "Binary files differ": a diff that is not text is withheld
+    /// whole. The verdict, and the [`content_hash`] of the copy diffed from.
+    fn vet(&self, inv: &Inventory, name: &str, skill_md: &str, store: &Path, staged: &Path) -> Result<(Vet, String)> {
+        self.consent.answerable()?;
+        let c = self.caller()?;
+        let diffed = content_hash(&store.join(name))?;
+        let staged = staged.file_name().ok_or("no staged copy")?.to_string_lossy().into_owned();
+        // Every flag that user config could otherwise change is set.
+        let out = std::process::Command::new("git")
+            .current_dir(store)
+            .args(["diff", "--no-index", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames"])
+            .args(["--src-prefix=a/", "--dst-prefix=b/", "--", name, &staged])
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        // 1 means the copies differ, which the hash already said.
+        if !matches!(out.status.code(), Some(0 | 1)) {
+            return Err(format!("git diff: {}", String::from_utf8_lossy(&out.stderr).trim()).into());
+        }
+        let (from, to) = (format!("/{staged}/"), format!("/{name}/"));
+        let diff = out.stdout.split_inclusive(|b| *b == b'\n').flat_map(|line| {
+            let header = [&b"diff --git "[..], b"--- ", b"+++ "].iter().any(|h| line.starts_with(h));
+            match std::str::from_utf8(line) {
+                Ok(text) if header => text.replace(&from, &to).into_bytes(),
+                _ => line.to_vec(),
+            }
+        });
+        let vet = gate(
+            &c,
+            inv,
+            self.consent,
+            name,
+            vec![("SKILL.md".into(), skill_md.as_bytes().to_vec())],
+            Some(diff.collect()),
+        )?;
+        Ok((vet, diffed))
+    }
+}
