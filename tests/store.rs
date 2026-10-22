@@ -1,5 +1,6 @@
-//! `mazo add` of a local directory into the store, and the store as a second
-//! skill root for `status`, `sync`, `show` and `new`, and `retire` of a store skill.
+//! `mazo add` of a local directory or a git repository into the store, the
+//! store as a second skill root for `status`, `sync`, `show` and `new`, and
+//! `retire` of a store skill.
 
 mod common;
 
@@ -272,4 +273,151 @@ fn a_used_store_skill_holds_the_source_skill_it_cites() {
     assert_eq!(r.code(), 1, "{}", r.stdout());
     assert!(r.stderr().contains(&format!("{mine} is held by theirs")), "{}", r.stderr());
     assert!(exists(&fx.source.join(mine).join("SKILL.md")));
+}
+
+/// A bare repository `origin/<repo>.git` holding a skill per `(subpath, name)`,
+/// `.` being its root, and its `file://` URL.
+fn bare_repo(fx: &Fixture, repo: &str, skills: &[(&str, &str)]) -> String {
+    let work = fx.root.join("work").join(repo);
+    for (sub, name) in skills {
+        let dir = work.join(sub);
+        common::write(
+            &dir.join("SKILL.md"),
+            &format!("---\nname: {name}\ndescription: From a repo.\n---\n\n# {name}\n"),
+        );
+        common::write(&dir.join("agents/openai.yaml"), "policy:\n  allow_implicit_invocation: false\n");
+    }
+    common::git(&work, &["init", "-q"], common::NOW);
+    common::git(&work, &["add", "."], common::NOW);
+    common::git(&work, &["commit", "-q", "-m", "skills"], common::NOW);
+    let bare = fx.root.join("origin").join(format!("{repo}.git"));
+    common::git(&work, &["clone", "-q", "--bare", ".", &s(&bare)], common::NOW);
+    format!("file://{}", bare.display())
+}
+
+fn head(url: &str) -> String {
+    let dir = url.strip_prefix("file://").unwrap();
+    let out = std::process::Command::new("git").args(["-C", dir, "rev-parse", "HEAD"]).output().unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// The fixture with its data directory, where `add` clones, already made.
+fn git_fixture() -> Fixture {
+    let (fx, _) = fixture();
+    fs::create_dir_all(fx.data.join("mazo")).unwrap();
+    fx
+}
+
+/// No clone is left in the data directory.
+fn assert_no_clone(fx: &Fixture) {
+    let left: Vec<_> = fs::read_dir(fx.data.join("mazo"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".clone"))
+        .map(|e| e.path())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[test]
+fn add_clones_a_one_skill_repo_and_records_its_origin_and_commit() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    let r = add(&fx, &[&url, "--trust"]);
+    r.assert_ok();
+    let to = store(&fx).join("theirs");
+    assert!(r.stdout().contains(&format!("installed {}", to.display())), "{}", r.stdout());
+    assert!(exists(&to.join("SKILL.md")));
+    assert!(!exists(&to.join(".git")));
+    assert_eq!(fs::read_link(fx.home.join(".codex/skills/theirs")).unwrap(), to);
+    let entries = lock(&fx);
+    let e = entries[0].as_table().unwrap();
+    let mut keys: Vec<&str> = e.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, ["commit", "content_hash", "installed_at", "name", "origin", "subpath", "trusted"]);
+    assert_eq!(e["origin"].as_str(), Some(url.as_str()));
+    assert_eq!(e["subpath"].as_str(), Some("."));
+    assert_eq!(e["commit"].as_str(), Some(head(&url).as_str()));
+    assert_eq!(head(&url).len(), 40);
+    assert_no_clone(&fx);
+}
+
+#[test]
+fn a_repo_with_several_skills_needs_skill_or_a_subpath() {
+    let mut fx = git_fixture();
+    fx.allow("one");
+    fx.allow("two");
+    let url = bare_repo(&fx, "pack", &[("skills/one", "one"), ("skills/two", "two")]);
+    let before = fx.snapshot();
+    let r = add(&fx, &[&format!("{url}/skills"), "--trust"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains("pass --skill with one of: one, two"), "{}", r.stderr());
+    assert_eq!(fx.snapshot(), before);
+
+    let r = add(&fx, &[&format!("{url}/skills"), "--skill", "nope", "--trust"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains("no skill named nope; the skills here are: one, two"), "{}", r.stderr());
+    assert_eq!(fx.snapshot(), before);
+
+    add(&fx, &[&format!("{url}/skills"), "--skill", "two", "--trust"]).assert_ok();
+    add(&fx, &[&format!("{url}/skills/one"), "--trust"]).assert_ok();
+    let entries = lock(&fx);
+    let got: Vec<(&str, &str, &str)> = entries
+        .iter()
+        .map(|e| (e["name"].as_str().unwrap(), e["origin"].as_str().unwrap(), e["subpath"].as_str().unwrap()))
+        .collect();
+    assert_eq!(got, [("two", url.as_str(), "skills/two"), ("one", url.as_str(), "skills/one")]);
+    assert!(exists(&store(&fx).join("one/SKILL.md")) && exists(&store(&fx).join("two/SKILL.md")));
+    assert_no_clone(&fx);
+}
+
+#[test]
+fn a_repo_on_the_trust_list_installs_without_trust() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    let before = fx.snapshot();
+    let r = add(&fx, &[&url]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains("is not on the trust list"), "{}", r.stderr());
+    assert_eq!(fx.snapshot(), before);
+
+    // The owner and repository of a file URL are its first two path segments.
+    let segments: Vec<&str> = url.strip_prefix("file:///").unwrap().split('/').take(2).collect();
+    let config = fx.source.join("mazo.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, format!("trusted = [{:?}]\n{text}", segments.join("/"))).unwrap();
+    add(&fx, &[&url]).assert_ok();
+    assert_eq!(lock(&fx)[0]["trusted"].as_bool(), Some(true));
+}
+
+#[test]
+fn a_failed_clone_exits_1_with_gits_error_and_writes_nothing() {
+    let fx = git_fixture();
+    let url = format!("file://{}", fx.root.join("origin/missing.git").display());
+    let before = fx.snapshot();
+    let r = add(&fx, &[&url, "--trust"]);
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(r.stderr().contains(&format!("git clone {url}: fatal:")), "{}", r.stderr());
+    assert_eq!(fx.snapshot(), before);
+    assert!(!exists(&store(&fx)));
+    assert!(!exists(&fx.data.join("mazo/mazo.lock")));
+}
+
+#[test]
+fn a_subpath_symlinked_out_of_the_clone_is_refused() {
+    let fx = git_fixture();
+    let outside = incoming(&fx, "outside");
+    let work = fx.root.join("work/linky");
+    fs::create_dir_all(&work).unwrap();
+    std::os::unix::fs::symlink(&outside, work.join("outside")).unwrap();
+    common::git(&work, &["init", "-q"], common::NOW);
+    common::git(&work, &["add", "."], common::NOW);
+    common::git(&work, &["commit", "-q", "-m", "link"], common::NOW);
+    let bare = fx.root.join("origin/linky.git");
+    common::git(&work, &["clone", "-q", "--bare", ".", &s(&bare)], common::NOW);
+    let before = fx.snapshot();
+    let r = add(&fx, &[&format!("file://{}/outside", bare.display()), "--trust"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains(&format!("{} leaves the repository", outside.display())), "{}", r.stderr());
+    assert_eq!(fx.snapshot(), before);
 }

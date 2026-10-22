@@ -307,6 +307,7 @@ mod tests {
         let cfg = Config {
             source: source.clone(),
             loose: vec![],
+            trusted: vec![],
             homes: vec![home],
             policy: Default::default(),
             judge: None,

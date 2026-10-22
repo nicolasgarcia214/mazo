@@ -77,6 +77,7 @@ impl World {
         let cfg = Config {
             source: source.into(),
             loose: vec![],
+            trusted: vec![],
             homes: homes.iter().map(|&(name, agent, _)| home(name, agent, &source.join(name))).collect(),
             policy: Default::default(),
             judge: None,
