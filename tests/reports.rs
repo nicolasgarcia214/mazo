@@ -549,7 +549,7 @@ fn grade_of(source: &Path, skill: &str) -> (String, Value) {
     let rows = report::usage_table(&input, &args()).rows;
     let r = rows.iter().find(|r| r.skill == skill).unwrap();
     (
-        report::usage_cells(&input, r, false)[10].clone(),
+        report::usage_cells(&input, r, false)[11].clone(),
         row(&report::usage(&input, &args(), true, false), skill)["grade"].clone(),
     )
 }

@@ -21,6 +21,10 @@
     }
   ],
   "content_hash": "b18d76b94385689c2130e563f995bd22419000ef",
+  "ctx": {
+    "claude": "on",
+    "codex": "on"
+  },
   "description": "Shared goal contract. Not for prose review (that is the unslop skill).",
   "events": [
     {

@@ -1,11 +1,11 @@
-skill              sess slash tool typed read ref agents last    30d                              grade audit
-unslop                5     1    4     1    1   1 C      1d ago  ·····················▃▃····▃█· 7 stale audit: Good on <short> texts
-writing-for-agents    1     1    0     0    1   0 CX     6d ago  ·······················█······       8 not judged
-goal-plan             1     1    0     0    0   0 C      4d ago  ·························█····       - not judged
-goal-smart            1     0    1     0    0   0 C      12d ago ·················█············       - not judged
-fresh                 0     0    0     0    0   0        -       ······························       - not judged
-goal-execute          0     0    0     0    0   0        -       ······························       - not judged
-pruned                0     0    0     0    0   0        -       ······························       - not judged
-wfa-helper            0     0    0     0    0   0        -       ······························       - not judged
+skill              sess slash tool typed read ref agents ctx  last    30d                              grade audit
+unslop                5     1    4     1    1   1 C      C◐X● 1d ago  ·····················▃▃····▃█· 7 stale audit: Good on <short> texts
+writing-for-agents    1     1    0     0    1   0 CX     C●X● 6d ago  ·······················█······       8 not judged
+goal-plan             1     1    0     0    0   0 C      C●X● 4d ago  ·························█····       - not judged
+goal-smart            1     0    1     0    0   0 C      C●X● 12d ago ·················█············       - not judged
+fresh                 0     0    0     0    0   0        C●X● -       ······························       - not judged
+goal-execute          0     0    0     0    0   0        C●X● -       ······························       - not judged
+pruned                0     0    0     0    0   0             -       ······························       - not judged
+wfa-helper            0     0    0     0    0   0        C●X● -       ······························       - not judged
 coverage: claude since 2026-09-10 (typed since 2026-02-24) · codex since 2026-03-29
-legend: agents C Claude, X Codex, P Pi; · no events that day; stale the skill changed since the grade; (project) a project skill, counted apart
+legend: agents C Claude, X Codex, P Pi; ● name and description in context: Claude on, every Codex skill, Pi by default; ◐ name only in context: Claude name-only; ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; × off: Claude off; · no events that day; stale the skill changed since the grade; (project) a project skill, counted apart

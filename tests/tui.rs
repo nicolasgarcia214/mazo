@@ -302,7 +302,7 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
     // The side card takes 100 of the 250 columns.
     let audit = 150 - header.find("audit").unwrap();
     let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(12).max(5));
-    assert!(skill_spare > 5 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
+    assert!(skill_spare > 0 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
 
     let buf = buffer(&mut app, 250, 30);
     let selected = mazo::theme::selected().bg.unwrap();
