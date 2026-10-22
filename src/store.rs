@@ -5,6 +5,7 @@
 //! `<git root>/mazo.lock`.
 
 use std::cell::OnceCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::{self, Backend, Caller, Pane, Vet, VetVerdict};
 use crate::config::{Config, Home, Judge};
-use crate::inventory::Inventory;
+use crate::inventory::{Inventory, Scope};
 use crate::ledger::Ledger;
 use crate::{Error, Result};
 use crate::{ledger, links, policy, work, yaml};
@@ -96,6 +97,59 @@ fn unlink_project(project: &Path, name: &str) -> Result<Vec<String>> {
         }
     }
     Ok(out)
+}
+
+/// A project with a `mazo.lock` at its git root, whose skills `status` and
+/// `usage` list beside the global ones.
+#[derive(Debug, Clone)]
+pub struct Project {
+    pub root: PathBuf,
+    /// The skills of its store.
+    pub skills: BTreeSet<String>,
+    /// Each skill's entry in its `mazo.lock`.
+    pub installed: BTreeMap<String, Locked>,
+}
+
+impl Project {
+    /// The project at the current directory's git root, the nearest ancestor
+    /// holding `.git`; `None` outside one. No `git` runs, so a report that
+    /// loads it calls git as it did before.
+    pub fn current() -> Result<Option<Project>> {
+        let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
+        cwd.ancestors().find(|d| d.join(".git").exists()).map_or(Ok(None), Project::at)
+    }
+
+    /// The project at git root `root`; `None` when it has no `mazo.lock`.
+    pub fn at(root: &Path) -> Result<Option<Project>> {
+        if !root.join("mazo.lock").exists() {
+            return Ok(None);
+        }
+        let store = root.join(PROJECT_STORE);
+        let skills = if store.exists() { crate::inventory::canonical_skills(&store)? } else { BTreeSet::new() };
+        let installed = Lock::load(root)?.skills.into_iter().map(|l| (l.name.clone(), l)).collect();
+        Ok(Some(Project { root: root.to_path_buf(), skills, installed }))
+    }
+
+    /// The project skill whose directory, in the store or a project skill
+    /// dir, holds `path`; `None` for a path of no project skill.
+    pub fn skill_of(&self, path: &str) -> Option<&str> {
+        let rest = Path::new(path).strip_prefix(&self.root).ok()?;
+        let dir = [PROJECT_STORE].iter().chain(&PROJECT_LINKS).find(|d| rest.starts_with(d))?;
+        let name = rest.strip_prefix(dir).ok()?.components().next()?.as_os_str().to_str()?;
+        self.skills.get(name).map(String::as_str)
+    }
+
+    /// Each skill's link in each project skill dir, as `status` checks it;
+    /// an entry's `home` is the dir, relative to the root.
+    pub fn links(&self) -> Vec<links::Entry> {
+        let entries = |name| {
+            PROJECT_LINKS.into_iter().zip(project_links(&self.root, name)).map(|(dir, (path, target))| {
+                let state = links::state(&path, &target);
+                links::Entry { home: dir.into(), path, state, scope: Scope::Project }
+            })
+        };
+        self.skills.iter().flat_map(|name| entries(name)).collect()
+    }
 }
 
 /// `<data dir>/mazo.lock`, or a project's: one `[[skill]]` per installed skill.

@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::{Config, Home};
-use crate::inventory::Inventory;
+use crate::inventory::{Inventory, Scope};
 use crate::policy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,7 @@ pub struct Entry {
     pub home: String,
     pub path: PathBuf,
     pub state: State,
+    pub scope: Scope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,14 +165,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         }
         for (name, src) in &t.entries {
             let path = t.dir.join(name);
-            let state = match fs::symlink_metadata(&path) {
-                Err(_) => State::Missing,
-                Ok(m) if m.file_type().is_symlink() => match fs::read_link(&path) {
-                    Ok(text) if text == *src => State::Ok,
-                    _ => State::WrongLink,
-                },
-                Ok(_) => State::Obstructed,
-            };
+            let state = state(&path, src);
             match state {
                 State::Missing => plan.actions.push(Action::Link { source: src.clone(), path: path.clone() }),
                 State::WrongLink | State::Obstructed => {
@@ -186,7 +180,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
                 }
                 _ => {}
             }
-            plan.entries.push(Entry { home: t.home.clone(), path, state });
+            plan.entries.push(Entry { home: t.home.clone(), path, state, scope: Scope::Global });
         }
         if !exists {
             continue;
@@ -208,10 +202,22 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
             if owned_dangling {
                 plan.actions.push(Action::Remove(path.clone()));
             }
-            plan.entries.push(Entry { home: t.home.clone(), path, state });
+            plan.entries.push(Entry { home: t.home.clone(), path, state, scope: Scope::Global });
         }
     }
     plan
+}
+
+/// The state of the entry at `path` that should be a link to `src`.
+pub fn state(path: &Path, src: &Path) -> State {
+    match fs::symlink_metadata(path) {
+        Err(_) => State::Missing,
+        Ok(m) if m.file_type().is_symlink() => match fs::read_link(path) {
+            Ok(text) if text == src => State::Ok,
+            _ => State::WrongLink,
+        },
+        Ok(_) => State::Obstructed,
+    }
 }
 
 /// The directory with its nearest existing ancestor resolved through symlinks.

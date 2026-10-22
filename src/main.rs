@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use mazo::config::{self, Config, Home};
-use mazo::inventory::Inventory;
+use mazo::inventory::{Inventory, Scope};
 use mazo::ledger::{self, Agent, Channel, Ledger};
 use mazo::lifecycle::{self, Retired};
 use mazo::report::{self, Since, UsageArgs};
@@ -259,6 +259,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Scan { reparse, report, json } => cmd_scan(&cfg, &inv, reparse, report, json),
         Cmd::Usage { since, agent, channel, all, authoring, json } => {
             let args = UsageArgs { since, agent, channel, all, authoring };
+            let inv = Inventory { project: store::Project::current()?, ..inv };
             with_scanned(&cfg, &inv, |input| Ok(report::usage(input, &args, json, tty)))
         }
         Cmd::Unused { since, json } => with_scanned(&cfg, &inv, |input| Ok(report::unused(input, since, json, tty))),
@@ -269,6 +270,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
         Cmd::Status { agent, json } => {
+            let inv = Inventory { project: store::Project::current()?, ..inv };
             cmd_status(&cfg, &inv, agent, json, render::colour(std::io::stderr().is_terminal(), no_color.as_deref()))
         }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, &inv, agent, dry_run),
@@ -427,36 +429,55 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
 }
 
-/// `colour` paints the `ERROR:` and `warning:` prefixes on stderr.
+/// `colour` paints the `ERROR:` and `warning:` prefixes on stderr. Inside
+/// a project, its skills' links are checked too, and `--json` lists them all
+/// under `project`.
 fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, colour: bool) -> mazo::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let skill_errors = policy::per_skill(cfg, inv);
     let plan = links::plan(cfg, inv, &homes, None);
+    let project = inv.project.as_ref().map(store::Project::links);
     let policy_errors = policy::home_errors(cfg, inv, &homes);
     let home_errors = || policy_errors.iter().chain(&plan.conflicts);
     let data = ledger::data_dir()?;
     let warnings = policy::freshness(cfg, &ledger::load_coverage(&data)?, jiff::Timestamp::now());
-    let drift: Vec<&links::Entry> = plan.entries.iter().filter(|e| e.state != links::State::Ok).collect();
+    let drift: Vec<&links::Entry> =
+        plan.entries.iter().chain(project.iter().flatten()).filter(|e| e.state != links::State::Ok).collect();
     let failed = !skill_errors.is_empty() || home_errors().next().is_some() || drift.iter().any(|e| e.state.is_error());
+    let name = |e: &links::Entry| e.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     if json {
-        let entries: Vec<serde_json::Value> = drift
-            .iter()
-            .map(|e| serde_json::json!({"home": e.home, "path": e.path, "state": e.state.label(), "error": e.state.is_error()}))
-            .collect();
+        let row = |e: &links::Entry| {
+            let (state, error) = (e.state.label(), e.state.is_error());
+            serde_json::json!({"home": e.home, "path": e.path, "state": state, "error": error, "scope": e.scope})
+        };
+        let entries: Vec<serde_json::Value> = drift.iter().map(|e| row(e)).collect();
         let policy: Vec<&String> = skill_errors.iter().chain(policy_errors.iter().map(|(_, e)| e)).collect();
         let conflicts: Vec<&String> = plan.conflicts.iter().map(|(_, e)| e).collect();
-        let v = serde_json::json!({"drift": entries, "policy": policy, "conflicts": conflicts, "warnings": warnings});
+        let mut v =
+            serde_json::json!({"drift": entries, "policy": policy, "conflicts": conflicts, "warnings": warnings});
+        if let Some(project) = &project {
+            v["project"] = project.iter().map(row).collect();
+        }
         println!("{v}");
     } else {
         for h in &homes {
             let (errors, info): (Vec<&links::Entry>, Vec<&links::Entry>) =
-                drift.iter().filter(|e| e.home == h.name).partition(|e| e.state.is_error());
+                drift.iter().filter(|e| e.scope == Scope::Global && e.home == h.name).partition(|e| e.state.is_error());
             if errors.is_empty() && !home_errors().any(|(home, _)| *home == h.name) {
                 println!("{}: in sync ({} skills)", h.name, inv.skills.len());
             }
             for e in errors.into_iter().chain(info) {
-                let name = e.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                println!("{}: {name} {}", e.home, e.state.finding());
+                println!("{}: {} {}", e.home, name(e), e.state.finding());
+            }
+        }
+        for skill in inv.project.iter().flat_map(|p| &p.skills) {
+            let suffix = Scope::Project.suffix();
+            let mut bad = drift.iter().filter(|e| e.scope == Scope::Project && name(e) == *skill).peekable();
+            if bad.peek().is_none() {
+                println!("project: {skill}{suffix} in sync");
+            }
+            for e in bad {
+                println!("{}: {skill}{suffix} {}", e.home, e.state.finding());
             }
         }
         for e in skill_errors.iter().chain(home_errors().map(|(_, e)| e)).chain(&warnings) {
