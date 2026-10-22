@@ -1,0 +1,47 @@
+# Managing skills
+
+This guide covers linking skills into the homes and managing the skills of
+`source` with `mazo status`, `mazo sync`, `mazo new`, `mazo retire` and
+`mazo prune`. Back to the [README](../README.md).
+
+## `mazo status`
+
+Reports drift and policy for every home and, inside a project, its skills'
+links (see [project skills](project-skills.md#status-and-usage-in-a-project)).
+Writes nothing.
+
+## `mazo sync`
+
+Links every skill, from `source` and the store, into every home, and replaces
+`skills/install.sh` for linking. It checks
+everything first and writes nothing if any check fails. `--dry-run` prints the
+actions without taking them.
+
+While it writes, `sync` holds the data lock, and it re-plans under the lock. A
+dry run, a refusal or an empty plan takes no lock.
+
+## `mazo new`
+
+`mazo new <name> --description <text>` creates `<name>/SKILL.md` in `source`,
+plus `agents/openai.yaml` when `codex_manifest` is on. When `claude_name_only`
+is on, it prints the `skillOverrides` line to add to each Claude home. It
+refuses a name that already has an entry or a store skill, and it does not
+sync.
+
+## `mazo retire`
+
+`mazo retire <name>` moves a skill of `source` to `.archive/` (`git mv` when
+tracked) and prunes its links. A store skill is removed instead: mazo deletes
+its links, its `mazo.lock` entry and its store directory.
+
+It refuses a skill used in the last 30 days, or one held or named by a skill
+used in that time, unless `--force`. It holds the data lock while it writes. It
+writes nothing if the resulting sync would fail, and it never commits.
+`--project` retires a project skill instead (see
+[project skills](project-skills.md)).
+
+## `mazo prune`
+
+`mazo prune [<name>]` permanently deletes archived skills from `.archive/`. It
+asks first, or takes `--yes`. In a git repository it refuses a file whose
+content is in no `HEAD` path unless `--force`.
