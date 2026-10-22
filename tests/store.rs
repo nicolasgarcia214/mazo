@@ -1,6 +1,6 @@
 //! `mazo add` of a local directory or a git repository into the store, the
-//! store as a second skill root for `status`, `sync`, `show` and `new`, and
-//! `retire` of a store skill.
+//! store as a second skill root for `status`, `sync`, `show` and `new`,
+//! `update` of git-sourced store skills, and `retire` of a store skill.
 
 mod common;
 
@@ -420,4 +420,210 @@ fn a_subpath_symlinked_out_of_the_clone_is_refused() {
     assert_eq!(r.code(), 2, "{}", r.stderr());
     assert!(r.stderr().contains(&format!("{} leaves the repository", outside.display())), "{}", r.stderr());
     assert_eq!(fx.snapshot(), before);
+}
+
+/// Commits `text` at `rel` in `repo`'s work tree and pushes it to the bare repository.
+fn push_change(fx: &Fixture, repo: &str, rel: &str, text: &str) {
+    let work = fx.root.join("work").join(repo);
+    common::write(&work.join(rel), text);
+    common::git(&work, &["add", "-A"], common::NOW);
+    common::git(&work, &["commit", "-q", "-m", "change"], common::NOW);
+    let bare = fx.root.join("origin").join(format!("{repo}.git"));
+    common::git(&work, &["push", "-q", &s(&bare), "HEAD"], common::NOW);
+}
+
+fn lock_text(fx: &Fixture) -> String {
+    fs::read_to_string(fx.data.join("mazo/mazo.lock")).unwrap()
+}
+
+fn entry<'a>(entries: &'a [toml::Value], name: &str) -> &'a toml::Table {
+    entries.iter().find(|e| e["name"].as_str() == Some(name)).unwrap().as_table().unwrap()
+}
+
+/// Nothing staged or set aside is left in the store.
+fn assert_no_leftovers(fx: &Fixture) {
+    let left: Vec<_> = fs::read_dir(store(fx))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+    assert_no_clone(fx);
+}
+
+/// Two trusted repositories, `one` and `two`, each installed.
+fn two_installed() -> (Fixture, String, String) {
+    let mut fx = git_fixture();
+    fx.allow("one");
+    fx.allow("two");
+    let one = bare_repo(&fx, "one", &[(".", "one")]);
+    let two = bare_repo(&fx, "two", &[(".", "two")]);
+    add(&fx, &[&one, "--trust"]).assert_ok();
+    add(&fx, &[&two, "--trust"]).assert_ok();
+    (fx, one, two)
+}
+
+#[test]
+fn update_installs_a_changed_skill_and_records_its_commit_and_hash() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    let was = entry(&lock(&fx), "theirs").clone();
+    let to = store(&fx).join("theirs");
+
+    let skill_md = "---\nname: theirs\ndescription: From a repo, v2.\n---\n\n# theirs\n";
+    push_change(&fx, "theirs", "SKILL.md", skill_md);
+    push_change(&fx, "theirs", "references/new.md", "new\n");
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert!(r.stdout().contains(&format!("updated {} to {}", to.display(), head(&url))), "{}", r.stdout());
+    assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), skill_md);
+    assert_eq!(fs::read_to_string(to.join("references/new.md")).unwrap(), "new\n");
+    let now = entry(&lock(&fx), "theirs").clone();
+    assert_eq!(now["commit"].as_str(), Some(head(&url).as_str()));
+    assert_ne!(now["content_hash"], was["content_hash"]);
+    assert_eq!(now["content_hash"].as_str(), Some(mazo::store::content_hash(&to).unwrap().as_str()));
+    for key in ["name", "origin", "subpath", "trusted", "installed_at"] {
+        assert_eq!(now[key], was[key], "{key}");
+    }
+    for skills in skills_dirs(&fx) {
+        let link = skills.join("theirs");
+        assert_eq!(fs::read_link(&link).unwrap(), to, "{}", skills.display());
+        assert_eq!(fs::read_to_string(link.join("SKILL.md")).unwrap(), skill_md);
+    }
+    assert_no_leftovers(&fx);
+
+    // A removed file goes with the update; nothing links to it.
+    let work = fx.root.join("work/theirs");
+    fs::remove_file(work.join("references/new.md")).unwrap();
+    push_change(&fx, "theirs", "references/renamed.md", "new\n");
+    fx.mazo(&["update", "theirs"]).assert_ok();
+    assert!(!exists(&to.join("references/new.md")));
+    assert!(exists(&to.join("references/renamed.md")));
+    let r = fx.mazo(&["status"]);
+    assert_eq!(r.code(), 0, "{}{}", r.stdout(), r.stderr());
+}
+
+#[test]
+fn an_unchanged_skill_is_up_to_date_and_its_entry_untouched() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    let before = fx.snapshot();
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert_eq!(r.stdout(), "theirs: up to date\n");
+    assert_eq!(fx.snapshot(), before, "the lockfile and the store are byte-identical");
+    assert_no_leftovers(&fx);
+}
+
+#[test]
+fn an_untrusted_skill_is_skipped_until_its_source_is_trusted() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    let path = fx.data.join("mazo/mazo.lock");
+    fs::write(&path, lock_text(&fx).replace("trusted = true", "trusted = false")).unwrap();
+    push_change(&fx, "theirs", "references/new.md", "new\n");
+    let before = fx.snapshot();
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert_eq!(r.stdout(), format!("theirs: skipped; {url} is not trusted and re-vetting is not available yet\n"));
+    assert_eq!(fx.snapshot(), before);
+
+    let segments: Vec<&str> = url.strip_prefix("file:///").unwrap().split('/').take(2).collect();
+    let config = fx.source.join("mazo.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, format!("trusted = [{:?}]\n{text}", segments.join("/"))).unwrap();
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert!(r.stdout().contains("updated"), "{}", r.stdout());
+    assert!(exists(&store(&fx).join("theirs/references/new.md")));
+}
+
+#[test]
+fn a_local_path_skill_is_not_updatable() {
+    let (fx, dir) = fixture();
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    fs::write(dir.join("references/notes.md"), "changed\n").unwrap();
+    let before = fx.snapshot();
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert_eq!(r.stdout(), "theirs: not updatable; installed from a local path\n");
+    assert_eq!(fx.snapshot(), before);
+}
+
+#[test]
+fn a_failed_clone_leaves_that_skill_and_updates_the_rest() {
+    let (fx, one, two) = two_installed();
+    push_change(&fx, "one", "references/new.md", "one\n");
+    push_change(&fx, "two", "references/new.md", "two\n");
+    let was = entry(&lock(&fx), "one").clone();
+    let bare = fx.root.join("origin/one.git");
+    fs::rename(&bare, fx.root.join("origin/moved.git")).unwrap();
+    let r = fx.mazo(&["update"]);
+    assert_eq!(r.code(), 1, "{}{}", r.stdout(), r.stderr());
+    assert!(r.stderr().contains(&format!("ERROR: update one: git clone {one}: fatal:")), "{}", r.stderr());
+    assert!(r.stdout().contains(&format!("updated {} to {}", store(&fx).join("two").display(), head(&two))));
+    assert_eq!(entry(&lock(&fx), "one"), &was);
+    assert!(!exists(&store(&fx).join("one/references/new.md")));
+    assert!(exists(&store(&fx).join("two/references/new.md")));
+    assert_no_leftovers(&fx);
+}
+
+#[test]
+fn update_with_names_touches_only_those_and_refuses_an_unknown_one() {
+    let (fx, _, two) = two_installed();
+    push_change(&fx, "one", "references/new.md", "one\n");
+    push_change(&fx, "two", "references/new.md", "two\n");
+    let before = fx.snapshot();
+    for args in [&["update", "two", "nope"][..], &["update", fx.skills[0].as_str()]] {
+        let r = fx.mazo(args);
+        assert_eq!(r.code(), 2, "{}", r.stderr());
+        assert!(r.stderr().contains("update: not a store skill: "), "{}", r.stderr());
+        assert_eq!(fx.snapshot(), before);
+    }
+
+    let was = entry(&lock(&fx), "one").clone();
+    let r = fx.mazo(&["update", "two"]);
+    r.assert_ok();
+    assert_eq!(r.stdout(), format!("updated {} to {}\n", store(&fx).join("two").display(), head(&two)));
+    assert_eq!(entry(&lock(&fx), "one"), &was);
+    assert!(!exists(&store(&fx).join("one/references/new.md")));
+}
+
+#[test]
+fn an_update_the_sync_would_refuse_leaves_the_skill_as_it_was() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    push_change(&fx, "theirs", "agents/openai.yaml", "policy:\n  allow_implicit_invocation: true\n");
+    let (before, was) = (fx.snapshot(), lock_text(&fx));
+    let r = fx.mazo(&["update"]);
+    assert_eq!(r.code(), 1, "{}{}", r.stdout(), r.stderr());
+    assert!(r.stderr().contains("agents/openai.yaml must set"), "{}", r.stderr());
+    assert!(r.stderr().contains("ERROR: update theirs: update refused"), "{}", r.stderr());
+    let after = fx.snapshot();
+    let changed: Vec<&Path> =
+        after.iter().filter(|(p, v)| before.get(*p) != Some(*v)).map(|(p, _)| p.as_path()).collect();
+    assert!(changed.iter().all(|p| p.starts_with(fx.data.join("mazo")) && !p.starts_with(store(&fx))), "{changed:?}");
+    assert_eq!(lock_text(&fx), was);
+    assert_no_leftovers(&fx);
+}
+
+#[test]
+fn update_keeps_the_name_an_as_install_rewrote() {
+    let mut fx = git_fixture();
+    fx.allow("other");
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add(&fx, &[&url, "--as", "other", "--trust"]).assert_ok();
+    push_change(&fx, "theirs", "SKILL.md", "---\nname: theirs\ndescription: v2.\n---\n");
+    fx.mazo(&["update"]).assert_ok();
+    let to = store(&fx).join("other");
+    assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), "---\nname: other\ndescription: v2.\n---\n");
+    assert_eq!(
+        entry(&lock(&fx), "other")["content_hash"].as_str(),
+        Some(mazo::store::content_hash(&to).unwrap().as_str())
+    );
 }
