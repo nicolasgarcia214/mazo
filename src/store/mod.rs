@@ -121,6 +121,7 @@ struct Fetched<'a> {
     root: PathBuf,
     origin: String,
     subpath: PathBuf,
+    r#ref: Option<String>,
     commit: Option<String>,
     /// The name of a skill at `root` itself.
     own: String,
@@ -131,8 +132,8 @@ struct Fetched<'a> {
 
 /// `mazo add <source> [--skill <name> | --all] [--as <name>] [--trust]
 /// [--yes] [--force]`: copies the skills chosen at `source` (a local path, or
-/// a repository shallow-cloned into `<data dir>/.clone-<pid>`) into the store,
-/// each recorded in the lockfile and linked into every home ([`install`]). A
+/// a repository shallow-cloned at its ref, resolved first, into
+/// `<data dir>/.clone-<pid>`) into the store, each recorded in the lockfile and linked into every home ([`install`]). A
 /// source that is not trusted is first vetted by the judge ([`gate`]),
 /// with `--all` once its judge calls are agreed to ([`confirm_calls`]). A
 /// source of several skills installs the one `--skill` names, every one with
@@ -145,7 +146,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     let project = if args.project { Some(project_root("add")?) } else { None };
     let (arg, out) = (args.source, Out(args.pane));
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
-    let (source, trusted) = resolve(cfg, arg, args.trust)?;
+    let (mut source, trusted) = resolve(cfg, arg, args.trust)?;
     // The judge is set up, and its login checked, before anything is cloned.
     let backend = match &cfg.judge {
         Some(judge) if !trusted => Some((judge, audit::backend(judge, &cfg.homes)?)),
@@ -161,23 +162,25 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         c.login()?;
     }
     let mut scratch = None;
-    let (root, origin, subpath, commit, own) = match &source {
+    let (root, origin, subpath, r#ref, commit, own) = match &mut source {
         Source::Local(path) => {
             let root = fs::canonicalize(local(path, &config::home_dir()?)?).map_err(|e| usage(e.to_string()))?;
             let own =
                 root.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or_else(|| usage("no name".into()))?;
-            (root.clone(), root.to_string_lossy().into_owned(), PathBuf::new(), None, own)
+            (root.clone(), root.to_string_lossy().into_owned(), PathBuf::new(), None, None, own)
         }
         Source::Git(remote) => {
+            remote.resolve(&|| out.cancelled())?;
             fs::create_dir_all(data).map_err(|e| err(data, e))?;
             let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
             let _ = fs::remove_dir_all(clone);
             let commit = remote.clone_into(clone, &|| out.cancelled())?;
-            (clone.join(&remote.subpath), remote.url.clone(), remote.subpath.clone(), Some(commit), remote.name())
+            let (url, subpath, r#ref) = (remote.url.clone(), remote.subpath.clone(), remote.r#ref.clone());
+            (clone.join(&subpath), url, subpath, r#ref, Some(commit), remote.name())
         }
     };
     let clone = scratch.as_ref().map(|s| s.0.as_path());
-    let from = Fetched { root, origin, subpath, commit, own, clone, trusted };
+    let from = Fetched { root, origin, subpath, r#ref, commit, own, clone, trusted };
     let children = skills_in(&from.root, &from.own, args)?;
     if children.is_empty() {
         out.line("nothing selected; nothing was installed");
@@ -327,6 +330,7 @@ fn install(
         name: name.clone(),
         origin: from.origin.clone(),
         subpath,
+        r#ref: from.r#ref.clone(),
         commit: from.commit.clone(),
         content_hash,
         trusted: from.trusted,

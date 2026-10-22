@@ -844,6 +844,84 @@ fn update_keeps_the_name_an_as_install_rewrote() {
     );
 }
 
+/// [`bare_repo`] `pack`, `theirs` at `skills/theirs` on `master` and, with
+/// another description, on `release/v2`, served as
+/// `https://github.com/acme/pack.git` by an `insteadOf` rewrite; its
+/// `file://` URL.
+fn github_pack(fx: &mut Fixture) -> String {
+    let file = bare_repo(fx, "pack", &[("skills/theirs", "theirs")]);
+    let work = fx.root.join("work/pack");
+    common::git(&work, &["checkout", "-q", "-b", "release/v2"], common::NOW);
+    push_change(fx, "pack", "skills/theirs/SKILL.md", "---\nname: theirs\ndescription: v2.\n---\n");
+    common::git(&work, &["checkout", "-q", "master"], common::NOW);
+    fx.set_env("GIT_CONFIG_COUNT", Some(Path::new("1")));
+    fx.set_env(
+        "GIT_CONFIG_KEY_0",
+        Some(Path::new(&format!("url.{}.insteadOf", file.strip_suffix("pack.git").unwrap()))),
+    );
+    fx.set_env("GIT_CONFIG_VALUE_0", Some(Path::new("https://github.com/acme/")));
+    file
+}
+
+#[test]
+fn a_github_tree_url_installs_its_ref_and_update_follows_it() {
+    let mut fx = git_fixture();
+    github_pack(&mut fx);
+    add(&fx, &["https://github.com/acme/pack/tree/release/v2/skills/theirs", "--trust"]).assert_ok();
+    let to = store(&fx).join("theirs");
+    assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), "---\nname: theirs\ndescription: v2.\n---\n");
+    let e = entry(&lock(&fx), "theirs").clone();
+    assert_eq!(e["origin"].as_str(), Some("https://github.com/acme/pack.git"));
+    assert_eq!((e["ref"].as_str(), e["subpath"].as_str()), (Some("release/v2"), Some("skills/theirs")));
+
+    // A change on the default branch is not the ref's.
+    push_change(&fx, "pack", "skills/theirs/SKILL.md", "---\nname: theirs\ndescription: master.\n---\n");
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert_eq!(r.stdout(), "theirs: up to date\n");
+    let work = fx.root.join("work/pack");
+    common::git(&work, &["checkout", "-q", "release/v2"], common::NOW);
+    push_change(&fx, "pack", "skills/theirs/SKILL.md", "---\nname: theirs\ndescription: v3.\n---\n");
+    fx.mazo(&["update"]).assert_ok();
+    assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), "---\nname: theirs\ndescription: v3.\n---\n");
+    let now = entry(&lock(&fx), "theirs").clone();
+    let tip = head(&format!("file://{}", work.display()));
+    assert_eq!((now["ref"].as_str(), now["commit"].as_str()), (Some("release/v2"), Some(tip.as_str())));
+    assert_no_leftovers(&fx);
+}
+
+#[test]
+fn a_github_blob_url_at_a_commit_installs_that_commit_and_stays_there() {
+    let mut fx = git_fixture();
+    let file = github_pack(&mut fx);
+    // A git before 2.49, which has no `clone --revision`.
+    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|d| d.join("git")).find(|p| p.is_file());
+    let shim = fx.root.join("bin/git");
+    common::write(
+        &shim,
+        &format!(
+            "#!/bin/sh\nfor a; do [ \"$a\" = --revision ] && {{ echo 'unknown option' >&2; exit 129; }}; done\nexec '{}' \"$@\"\n",
+            git.unwrap().display()
+        ),
+    );
+    fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let sha = head(&file);
+    push_change(&fx, "pack", "skills/theirs/SKILL.md", "---\nname: theirs\ndescription: later.\n---\n");
+    let url = format!("https://github.com/acme/pack/blob/{sha}/skills/theirs/SKILL.md");
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    let to = store(&fx).join("theirs");
+    assert_eq!(
+        fs::read_to_string(to.join("SKILL.md")).unwrap(),
+        "---\nname: theirs\ndescription: From a repo.\n---\n\n# theirs\n"
+    );
+    let e = entry(&lock(&fx), "theirs").clone();
+    assert_eq!((e["ref"].as_str(), e["commit"].as_str()), (Some(sha.as_str()), Some(sha.as_str())));
+    assert_eq!(e["subpath"].as_str(), Some("skills/theirs"));
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert_eq!(r.stdout(), "theirs: up to date\n");
+}
+
 /// The fixture of [`fixture`] with a command judge: a stub that saves each
 /// call's stdin under `calls/` and answers with the text of `answer`.
 fn judged() -> (Fixture, PathBuf) {

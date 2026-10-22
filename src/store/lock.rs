@@ -28,6 +28,9 @@ pub struct Locked {
     pub origin: String,
     /// The skill's directory inside `origin`; `.` when `origin` is the skill.
     pub subpath: String,
+    /// The branch, tag or commit `origin` is cloned at; its default branch when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     /// [`content_hash`] of the installed copy.
@@ -49,11 +52,14 @@ pub struct Locked {
 }
 
 impl Locked {
-    /// The repository `mazo update` fetches it from; `None` when it was
-    /// installed from a local path.
+    /// The repository `mazo update` fetches it from, at its ref; `None`
+    /// when it was installed from a local path.
     pub(super) fn remote(&self) -> std::result::Result<Option<Remote>, String> {
         Ok(match Source::parse(&self.origin)? {
-            Source::Git(remote) => Some(remote),
+            Source::Git(mut remote) => {
+                remote.r#ref.clone_from(&self.r#ref);
+                Some(remote)
+            }
             Source::Local(_) => None,
         })
     }

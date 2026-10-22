@@ -202,6 +202,7 @@ links both, and a name in both is a conflict. `mazo.lock` there records one
 name = "theirs"
 origin = "https://github.com/owner/repo.git" # a git URL, or a local path's physical directory
 subpath = "skills/theirs"         # its directory inside origin; "." for origin itself
+ref = "main"                      # the branch, tag or commit cloned; none for the default branch
 commit = "9fceb02…"               # the commit cloned; local paths have none
 content_hash = "3f2a…"            # SHA-1 of its sorted relative paths and file contents
 trusted = true
