@@ -62,6 +62,10 @@
       "maxItems": 5,
       "type": "array"
     },
+    "for": {
+      "maxLength": 300,
+      "type": "string"
+    },
     "improvements": {
       "items": {
         "additionalProperties": false,
@@ -98,6 +102,14 @@
         "type": "string"
       },
       "maxItems": 5,
+      "type": "array"
+    },
+    "try": {
+      "items": {
+        "maxLength": 200,
+        "type": "string"
+      },
+      "maxItems": 3,
       "type": "array"
     },
     "verdict": {
@@ -141,7 +153,9 @@
     "failures",
     "improvements",
     "versus_grades",
-    "examples"
+    "examples",
+    "for",
+    "try"
   ],
   "type": "object"
 }

@@ -17,6 +17,7 @@ use crate::history::Commit;
 use crate::inventory::{self, Inventory};
 use crate::ledger::{Actor, Agent, Channel, Coverage, Event, Origin, name};
 use crate::render::{self, Align};
+use crate::store::Locked;
 
 /// A report window: the last N days, or everything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -585,11 +586,11 @@ pub struct CardUsage {
 /// What a skill is for and how to use it, atop the card.
 #[derive(Serialize)]
 pub struct Manual {
-    /// The vet's `for` from the lockfile, else the frontmatter description.
+    /// The `for` of [`Manual::guide`]'s pick, else the frontmatter description.
     pub r#for: Option<String>,
     /// The first line of each real example, cut to [`USE_CHARS`].
     pub your_use: Vec<String>,
-    /// The vet's uses to try, from the lockfile.
+    /// The uses to try of [`Manual::guide`]'s pick.
     pub r#try: Vec<String>,
 }
 
@@ -645,6 +646,23 @@ fn wrap(text: &str, width: usize, max: usize) -> Vec<String> {
 }
 
 impl Manual {
+    /// For and Try: the latest skill audit's when it has them and is newer
+    /// than the vet or there is no vet, else the vet's from the lockfile;
+    /// with neither, `description` and no Try.
+    fn guide(
+        vet: Option<&Locked>,
+        audit: Option<&SkillRecord>,
+        description: Option<String>,
+    ) -> (Option<String>, Vec<String>) {
+        let vetted = vet.and_then(|l| l.vetted_at.as_deref()).and_then(|t| t.parse::<Timestamp>().ok());
+        let newer = |a: &&SkillRecord| vetted.is_none_or(|v| a.audited_at.parse::<Timestamp>().is_ok_and(|at| at > v));
+        let (r#for, r#try) = match audit.filter(|a| a.result.r#for.is_some()).filter(newer) {
+            Some(a) => (a.result.r#for.clone(), &a.result.r#try[..]),
+            None => (vet.and_then(|l| l.r#for.clone()).or(description), vet.map_or(&[][..], |l| &l.r#try[..])),
+        };
+        (r#for, r#try.iter().take(MANUAL_ITEMS).cloned().collect())
+    }
+
     /// For, Your use and Try under a label column, each omitted when empty;
     /// empty when all three are.
     pub fn text(&self) -> String {
@@ -815,10 +833,11 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
     // The lockfile's vet record is the store copy's; a source skill of the
     // same name shadows it.
     let vet = inv.installed.get(skill).filter(|_| inv.root(skill) != inv.source.as_deref());
+    let (r#for, r#try) = Manual::guide(vet, audit, description.clone());
     let manual = Manual {
-        r#for: vet.and_then(|l| l.r#for.clone()).or_else(|| description.clone()),
+        r#for,
         your_use: examples.real.iter().take(MANUAL_ITEMS).map(|r| first_line(&r.text)).collect(),
-        r#try: vet.map_or(Vec::new(), |l| l.r#try.iter().take(MANUAL_ITEMS).cloned().collect()),
+        r#try,
     };
 
     Card {

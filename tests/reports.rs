@@ -799,6 +799,52 @@ fn show_gives_an_unvetted_source_skill_its_description_alone() {
     assert!(text.starts_with("for:      Removes slop from prose.\n\nunslop: since "), "{text}");
 }
 
+/// For and Try come from the latest skill audit when it is newer than the
+/// vet or there is no vet, else from the vet; a source skill with no audit
+/// keeps its description.
+#[test]
+fn the_manual_takes_for_and_try_from_the_newer_of_the_audit_and_the_vet() {
+    let repo = report_repo();
+    let data = tempfile::tempdir().unwrap();
+    write(&data.path().join("store/vetted/SKILL.md"), "---\nname: vetted\ndescription: Not the For.\n---\n");
+    let lock = |vet: &str| {
+        let entry = "[[skill]]\nname = \"vetted\"\norigin = \"/x\"\nsubpath = \".\"\ncontent_hash = \"h\"\n\
+                     installed_at = \"2026-01-01T00:00:00Z\"\n";
+        write(&data.path().join("mazo.lock"), &format!("{entry}{vet}"));
+    };
+    let vetted = "trusted = false\nvetted_at = \"2026-05-01T00:00:00Z\"\nfor = \"Vet for.\"\ntry = [\"Vet try.\"]\n";
+    let audit = |skill: &str, at: &str| -> mazo::audit::SkillRecord {
+        let mut r: Value = serde_json::from_str(&common::skill_record("V.", at)).unwrap();
+        r["skill"] = skill.into();
+        r["result"]["for"] = "Audit for.".into();
+        r["result"]["try"] = serde_json::json!(["Audit try 1.", "Audit try 2."]);
+        serde_json::from_value(r).unwrap()
+    };
+    let manual = |skill: &str, audits: &[mazo::audit::SkillRecord]| {
+        let mut w = report_world(repo.path());
+        w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
+        w.audits = audits.iter().map(|r| (r.skill.clone(), r.clone())).collect();
+        let input = w.input(&[]);
+        let v: Value =
+            serde_json::from_str(&report::show(&input, skill, Since::Days(30), 20, true, false).unwrap()).unwrap();
+        let text = report::show(&input, skill, Since::Days(30), 20, false, false).unwrap();
+        assert!(text.starts_with(&format!("for:      {}\n", v["manual"]["for"].as_str().unwrap())), "{text}");
+        (v["manual"]["for"].clone(), v["manual"]["try"].clone())
+    };
+    let from_audit = (Value::from("Audit for."), serde_json::json!(["Audit try 1.", "Audit try 2."]));
+    let from_vet = (Value::from("Vet for."), serde_json::json!(["Vet try."]));
+
+    lock(vetted);
+    assert_eq!(manual("vetted", &[audit("vetted", "2026-06-01T00:00:00Z")]), from_audit, "audit newer than vet");
+    assert_eq!(manual("vetted", &[audit("vetted", "2026-04-01T00:00:00Z")]), from_vet, "vet newer than audit");
+    assert_eq!(manual("vetted", &[]), from_vet, "no audit");
+    lock("trusted = true\n");
+    assert_eq!(manual("vetted", &[audit("vetted", "2026-04-01T00:00:00Z")]), from_audit, "no vet");
+    assert_eq!(manual("unslop", &[audit("unslop", "2026-04-01T00:00:00Z")]), from_audit, "a source skill's audit");
+    let description = (Value::from("Removes slop from prose."), serde_json::json!([]));
+    assert_eq!(manual("unslop", &[]), description, "a source skill with no audit");
+}
+
 /// Every part at its longest, words and one unbroken run: the manual stays
 /// within 15 lines of 80 columns, cutting with `…`.
 #[test]

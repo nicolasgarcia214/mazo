@@ -1675,7 +1675,7 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
         r["judge"],
         serde_json::json!({"agent": "claude", "model": "sonnet", "cost_usd": 0.1, "billing": "subscription"})
     );
-    assert_eq!(r["prompt"], "skill-v1");
+    assert_eq!(r["prompt"], "skill-v2");
     assert_eq!(r["result"], skill_answer("s00"));
 
     let show = fx.mazo(&["show", "unslop"]);
@@ -1695,6 +1695,61 @@ fn the_skill_record_holds_every_field_and_the_card_shows_the_latest() {
     let json: serde_json::Value = serde_json::from_str(&stdout(&fx.mazo(&["show", "unslop", "--json"]))).unwrap();
     assert_eq!(&json["audit"], r);
     assert_eq!(json["examples"]["curated"], r["result"]["examples"]);
+}
+
+#[test]
+fn stage_two_lists_the_seen_uses_and_keeps_the_for_and_try_it_answers() {
+    let fx = Fixture::new(CLAUDE, claude_sessions(3));
+    for (n, asked) in [("1", "Tidy a changelog."), ("2", "Shorten an email."), ("3", "Tidy a changelog.")] {
+        let mut a = answer(3);
+        a["asked"] = asked.into();
+        fx.reply(n, "0.1", &a);
+    }
+    // No For, then four Try items: each refused and retried.
+    let mut no_for = skill_answer("s00");
+    no_for.as_object_mut().unwrap().remove("for");
+    fx.reply("4", "0.1", &no_for);
+    let mut many = skill_answer("s00");
+    many["try"] = serde_json::json!(["One.", "Two.", "Three.", "Four."]);
+    fx.reply("5", "0.1", &many);
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "two invalid answers drop the report");
+    assert!(stdout(&out).contains("more than 3 try items"), "{}", stdout(&out));
+
+    let resynth = fx.mazo(&["audit", "unslop", "--resynth"]);
+    assert_eq!(resynth.status.code(), Some(0), "{}", stderr(&resynth));
+    let calls = fx.calls();
+    let input = calls.last().unwrap().stdin.as_str();
+    assert!(
+        input.ends_with("<seen-uses>\n- Shorten an email.\n- Tidy a changelog.\n</seen-uses>\n"),
+        "each use once: {input}"
+    );
+    assert!(audit::SKILL_PROMPT.contains("not among `<seen-uses>`"));
+    let r = &fx.skill_records()[0];
+    assert_eq!(r["prompt"], "skill-v2");
+    assert_eq!(r["result"]["for"], skill_answer("s00")["for"]);
+    assert_eq!(r["result"]["try"], skill_answer("s00")["try"]);
+}
+
+/// A skill record written before For and Try loads unchanged, and the
+/// manual falls back to the description.
+#[test]
+fn a_skill_record_written_before_for_and_try_still_loads() {
+    let fx = Fixture::new(CLAUDE, claude_sessions(1));
+    fx.mazo(&["audit", "unslop"]);
+    let mut record = fx.skill_records().pop().unwrap();
+    let result = record["result"].as_object_mut().unwrap();
+    result.remove("for");
+    result.remove("try");
+    record["prompt"] = "skill-v1".into();
+    fs::write(fx.data().join("audits.jsonl"), format!("{record}\n")).unwrap();
+
+    let out = fx.mazo(&["show", "unslop", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(json["audit"], record);
+    assert_eq!(json["manual"]["for"], json["description"]);
+    assert_eq!(json["manual"]["try"], serde_json::json!([]));
 }
 
 #[test]

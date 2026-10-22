@@ -29,5 +29,7 @@ pub fn skill_answer(session: &str) -> serde_json::Value {
         ],
         "versus_grades": "",
         "examples": [{"situation": "A short note.", "asked": "Tidy the note.", "happened": "It was tidied.", "tip": "Say the tone.", "session": session}],
+        "for": "Tidies short prose so it reads plainly.",
+        "try": ["Tidy a release note.", "Tidy a PR description."],
     })
 }
