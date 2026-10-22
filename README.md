@@ -5,18 +5,39 @@ linked to one skills directory. It reads the session logs that Claude Code,
 Codex and Pi already write, stores each skill load in its own ledger, and
 replaces `skills/install.sh` for linking.
 
-## Get started
+## Install
 
-mazo runs on Linux and macOS and needs a Rust toolchain, a skills directory
-(one subdirectory per skill, each holding a `SKILL.md`) and at least one of
-Claude Code, Codex or Pi.
+mazo runs on Linux and macOS (x86_64 and aarch64) and needs at least one of
+Claude Code, Codex or Pi. A release ships a prebuilt binary through npm,
+Homebrew and a shell installer:
 
-The repository is private: only users invited to it can install mazo. Cargo
-fetches it with your git credentials when `CARGO_NET_GIT_FETCH_WITH_CLI=true`.
+```
+npx mazo                          # or: npm install -g mazo
+brew install nicolasgarcia214/tap/mazo
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nicolasgarcia214/mazo/releases/latest/download/mazo-installer.sh | sh
+```
+
+These download from the repository's GitHub releases, so they work once a
+release is published and readable. Until then, or to build from source with a
+Rust toolchain, Cargo fetches the repository with your git credentials when
+`CARGO_NET_GIT_FETCH_WITH_CLI=true`:
 
 ```
 CARGO_NET_GIT_FETCH_WITH_CLI=true \
   cargo install --locked --git https://github.com/nicolasgarcia214/mazo
+```
+
+mazo collects no telemetry. It sends data only to the `[judge]` you configure
+(see [Vetting a skill](#vetting-a-skill)); its only other network use is the
+git clone that `mazo add` and `mazo update` make of the source you name.
+
+## Get started
+
+You need a skills directory (one subdirectory per skill, each holding a
+`SKILL.md`) for your own skills, or none if you only install others' with
+`mazo add`.
+
+```
 mazo init                         # write the config; add --source <skills dir> for your own skills
 mazo sync                         # link every skill into every agent home
 mazo usage                        # see which skills your agents load

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Personal skill manager: usage from agent transcripts, sync of skill links"
 license = "MIT"
+repository = "https://github.com/nicolasgarcia214/mazo"
+homepage = "https://github.com/nicolasgarcia214/mazo"
 publish = false
 
 [lib]
@@ -30,3 +32,12 @@ url = "2.5"
 
 [dev-dependencies]
 tempfile = "3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# Releases go out through dist, not crates.io
+[package.metadata.dist]
+dist = true
