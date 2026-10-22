@@ -1815,3 +1815,28 @@ fn update_and_retire_project_outside_a_git_repository_exit_2_and_write_nothing()
         assert_eq!((fx.snapshot(), snapshot(&[&outside])), before, "{verb}");
     }
 }
+
+#[test]
+fn retire_project_removes_the_project_copy_of_a_name_the_global_store_also_holds() {
+    let (fx, dir) = fixture();
+    let p = project(&fx);
+    // `add --project` refuses a name the global store holds; a later global add does not check the project.
+    add_project(&fx, &p, &[&s(&dir), "--trust"]).assert_ok();
+    add(&fx, &[&s(&dir), "--trust"]).assert_ok();
+    let global = store(&fx).join("theirs");
+    let links: Vec<PathBuf> = skills_dirs(&fx).iter().map(|d| d.join("theirs")).collect();
+
+    let r = in_project(&fx, &p, &["retire", "theirs"]);
+    r.assert_ok();
+    assert!(
+        r.stdout().ends_with(&format!("removed   {}\n", p.join(".mazo/skills/theirs").display())),
+        "{}",
+        r.stdout()
+    );
+    assert_not_in_project(&p, "theirs");
+    assert!(exists(&global.join("SKILL.md")));
+    assert_eq!(lock_names(&fx), ["theirs"]);
+    for link in &links {
+        assert_eq!(fs::read_link(link).unwrap(), global, "{}", link.display());
+    }
+}

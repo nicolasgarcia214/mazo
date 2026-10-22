@@ -87,7 +87,7 @@ fn project_links(project: &Path, name: &str) -> [(PathBuf, PathBuf); 2] {
 
 /// Removes `name`'s links in the project skill dirs, those that still point
 /// at its project store directory, and returns the lines reporting it.
-pub fn unlink_project(project: &Path, name: &str) -> Result<Vec<String>> {
+fn unlink_project(project: &Path, name: &str) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for (link, target) in project_links(project, name) {
         if fs::read_link(&link).is_ok_and(|t| t == target) {
@@ -444,13 +444,41 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
 
 /// The store a command acts on: the data directory's, or a project's.
 #[derive(Clone, Copy)]
-struct Target<'a> {
-    data: &'a Path,
+pub struct Target<'a> {
+    pub data: &'a Path,
     /// The project's git root, for `--project`.
-    project: Option<&'a Path>,
+    pub project: Option<&'a Path>,
 }
 
 impl Target<'_> {
+    /// The sync of every home after a change to this store, over `inv`
+    /// without `gone`: its plan and the errors that stop it. Empty for a
+    /// project's store, which the homes do not link.
+    pub fn home_sync(self, cfg: &Config, inv: &Inventory, gone: Option<&Path>) -> (links::Plan, Vec<String>) {
+        if self.project.is_some() {
+            return Default::default();
+        }
+        let homes: Vec<&Home> = cfg.homes.iter().collect();
+        let plan = links::plan(cfg, inv, &homes, gone);
+        let errors = links::sync_errors(cfg, inv, &homes, &plan);
+        (plan, errors)
+    }
+
+    /// Removes the skill `name` at `from` in this store: its links (`plan`'s,
+    /// and a project's own), then its lock entry, then its directory, so
+    /// that a failure leaves at worst an unrecorded skill, never an entry for
+    /// a missing one. The lines reporting it.
+    pub fn remove(self, from: &Path, name: &str, plan: &links::Plan) -> Result<Vec<String>> {
+        let mut out = links::apply(plan)?;
+        if let Some(p) = self.project {
+            out.extend(unlink_project(p, name)?);
+        }
+        Lock::remove(&self.lock_dir(), name)?;
+        fs::remove_dir_all(from).map_err(|e| format!("{}: {e}", from.display()))?;
+        out.push(format!("removed   {}", from.display()));
+        Ok(out)
+    }
+
     fn store(self) -> PathBuf {
         self.project.map_or_else(|| dir(self.data), project_dir)
     }
@@ -717,10 +745,8 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             }
         }
     }
-    if updated && project.is_none() {
-        let homes: Vec<&Home> = cfg.homes.iter().collect();
-        let plan = links::plan(cfg, inv, &homes, None);
-        let errors = links::sync_errors(cfg, inv, &homes, &plan);
+    if updated {
+        let (plan, errors) = target.home_sync(cfg, inv, None);
         for e in &errors {
             out.error(e);
         }
@@ -803,13 +829,7 @@ fn refresh(
     });
     swapped?;
 
-    let errors = match target.project {
-        Some(_) => Vec::new(),
-        None => {
-            let homes: Vec<&Home> = cfg.homes.iter().collect();
-            links::sync_errors(cfg, inv, &homes, &links::plan(cfg, inv, &homes, None))
-        }
-    };
+    let (_, errors) = target.home_sync(cfg, inv, None);
     let recorded = if errors.is_empty() {
         Lock::load(&lock_dir).and_then(|mut lock| {
             let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;

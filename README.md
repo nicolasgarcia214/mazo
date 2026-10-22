@@ -171,7 +171,9 @@ origins as `update` does the store's, re-vetting an untrusted one on its
 diff, and rewrites the project's `mazo.lock`; the relative links need no
 change. `mazo retire --project <name>` removes the project skill's
 directory, its `mazo.lock` entry and both of its links, with the same
-blockers and `--force` as a global retire. Without `--project`, `update` and
+blockers and `--force` as a global retire; blockers match usage by skill
+name, so recent use of a global skill of the same name also blocks retiring
+the project copy, which `--force` overrides. Without `--project`, `update` and
 `retire` act on global skills only, and name a project skill's `--project`
 when given one. Outside a git repository, `--project` exits 2 and writes
 nothing.

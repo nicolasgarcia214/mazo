@@ -6,7 +6,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use crate::config::{Config, Home};
+use crate::config::Config;
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent, Ledger};
 use crate::{Error, Result};
@@ -275,18 +275,27 @@ pub fn retire(
         }
         None => inv,
     };
-    if let Some(p) = &project
-        && inv.root(name) != Some(store::project_dir(p).as_path())
-    {
-        return Err(Error::Usage(format!("{name} is not a project skill")));
-    }
-    let Some(root) = inv.root(name) else {
-        let hint = store::project_hint(name);
-        // Only a store skill retires without a source.
-        if hint.is_empty() {
-            cfg.need_source(&format!("retire {name}"))?;
+    let root = match &project {
+        // The global store may hold a skill of the same name, ahead of it.
+        Some(p) => {
+            let store = store::project_dir(p);
+            let roots = inv.origins.get(name).into_iter().flatten();
+            let Some(root) = roots.into_iter().find(|r| **r == store) else {
+                return Err(Error::Usage(format!("{name} is not a project skill")));
+            };
+            root.as_path()
         }
-        return Err(Error::Usage(format!("{name} is not a canonical skill{hint}")));
+        None => {
+            let Some(root) = inv.root(name) else {
+                let hint = store::project_hint(name);
+                // Only a store skill retires without a source.
+                if hint.is_empty() {
+                    cfg.need_source(&format!("retire {name}"))?;
+                }
+                return Err(Error::Usage(format!("{name} is not a canonical skill{hint}")));
+            };
+            root
+        }
     };
     let from = root.join(name);
     // A source skill is archived; a store skill is removed.
@@ -309,24 +318,16 @@ pub fn retire(
     }
     // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
     let _lock = if to.is_some() { None } else { Some(ledger::lock(data)?) };
-    let mut out = Vec::new();
-    if let Some(p) = &project {
-        // The homes link no project skill; the same order as a store skill's.
-        out.extend(store::unlink_project(p, name)?);
-        store::Lock::remove(p, name)?;
-        std::fs::remove_dir_all(&from).map_err(|e| format!("{}: {e}", from.display()))?;
-        out.push(format!("removed   {}", from.display()));
-        return Ok(Retired::Done(out));
-    }
     let mut rest = inv.clone();
     rest.skills.remove(name);
     rest.origins.remove(name);
-    let homes: Vec<&Home> = cfg.homes.iter().collect();
-    let plan = links::plan(cfg, &rest, &homes, Some(&from));
-    let errors = links::sync_errors(cfg, &rest, &homes, &plan);
+    let target = store::Target { data, project: project.as_deref() };
+    let (plan, errors) = target.home_sync(cfg, &rest, Some(&from));
     if !errors.is_empty() {
         return Ok(Retired::Refused(errors));
     }
+
+    let mut out = Vec::new();
 
     if let Some(to) = &to {
         let archive = root.join(".archive");
@@ -339,15 +340,10 @@ pub fn retire(
         out.push(format!("archived  {} -> {}", from.display(), to.display()));
         out.extend(links::apply(&plan)?);
     } else {
-        // Links first, then the lock entry, then the directory: a failure
-        // leaves at worst an unrecorded store skill, never an entry for a
-        // missing one.
-        out.extend(links::apply(&plan)?);
-        store::Lock::remove(data, name)?;
-        std::fs::remove_dir_all(&from).map_err(|e| format!("{}: {e}", from.display()))?;
-        out.push(format!("removed   {}", from.display()));
+        out.extend(target.remove(&from, name, &plan)?);
     }
-    if cfg.policy.claude_name_only {
+    // The homes' settings name only global skills.
+    if cfg.policy.claude_name_only && project.is_none() {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
             if let Some(v) = policy::settings(h).ok().and_then(|s| s["skillOverrides"].get(name).cloned()) {
                 out.push(format!("{} can drop:\n  \"{name}\": {v}", h.settings().display()));
