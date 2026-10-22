@@ -8,6 +8,11 @@ and `show`: the usage table, the unused list and a skill's card. Off a
 terminal, bare `mazo` prints the help. The TUI scans first and writes nothing
 but what an action writes, and it re-reads the data after each action.
 
+The top bar shows the view, the number of listed skills, the name filter, the
+window, and any agent, channel or authoring filter that is set. The footer
+lists the keys that work on the current screen; while a dialog is open, it
+lists the dialog's keys instead.
+
 ## Keys
 
 | Key | Action |

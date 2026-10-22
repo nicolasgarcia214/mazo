@@ -58,14 +58,19 @@ fn typed(app: &mut App, s: &str) {
     }
 }
 
-/// The table rows on `screen`: the lines after the header, up to the blank
-/// line or the coverage note.
+/// The table rows on `screen`: the lines after the top bar and the table
+/// header, up to the blank line or the coverage note, without the gutter.
 fn rows(screen: &[String]) -> Vec<String> {
-    screen[1..]
+    screen[2..]
         .iter()
+        .map(|l| body(l))
         .take_while(|l| !l.is_empty() && !l.starts_with("coverage:") && !l.starts_with("window:"))
-        .cloned()
         .collect()
+}
+
+/// `line` of the body without the two-column gutter or inset and the scrollbar.
+fn body(line: &str) -> String {
+    line.chars().skip(2).collect::<String>().trim_end_matches(['│', '┃']).trim_end().to_string()
 }
 
 /// The words of `skill`'s row on `screen`.
@@ -143,8 +148,9 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     assert_eq!(app.screen(), Screen::Card);
     let screen = text(&mut app, 200, 100);
     // The card opens with the manual, as `show` prints it.
-    assert_eq!(screen[..3], ["for:      Removes slop from prose.", "your use: - Tighten the release notes.", ""]);
-    assert_eq!(screen[3], format!("unslop: since {}", common::ago(30).get(..10).unwrap()));
+    let card: Vec<String> = screen[1..].iter().map(|l| body(l)).collect();
+    assert_eq!(card[..3], ["for:      Removes slop from prose.", "your use: - Tighten the release notes.", ""]);
+    assert_eq!(card[3], format!("unslop: since {}", common::ago(30).get(..10).unwrap()));
 
     let json = report::show(&input, "unslop", report::SHOW_SINCE, report::SHOW_LIMIT, true, false).unwrap();
     let audit = &serde_json::from_str::<serde_json::Value>(&json).unwrap()["audit"];
@@ -155,14 +161,14 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
         audit["judge"]["billing"].as_str().unwrap_or("unknown"),
         audit["result"]["verdict"].as_str().unwrap(),
     );
-    assert!(screen.contains(&line), "{line:?} not in {screen:#?}");
+    assert!(card.contains(&line), "{line:?} not in {screen:#?}");
 
     // A page is the card's visible height, not the list's.
     let card = report::skill_card(&input, "unslop", &UsageArgs::new(report::SHOW_SINCE), report::SHOW_LIMIT);
     let card = report::card_text(&input, &card, false);
-    let height = text(&mut app, 200, 30).iter().position(|l| l.starts_with("card unslop · ")).unwrap();
+    let height = text(&mut app, 200, 30).iter().position(|l| l.starts_with("↑↓←→/hjkl move")).unwrap() - 1;
     press(&mut app, KeyCode::Char('l'));
-    assert_eq!(text(&mut app, 200, 30)[0], card.lines().nth(height).unwrap());
+    assert_eq!(body(&text(&mut app, 200, 30)[1]), card.lines().nth(height).unwrap());
 
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen(), Screen::Usage);
@@ -178,12 +184,12 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     let screen = draw(&mut app, 200, 40);
     let lines: Vec<String> = screen.iter().map(|(t, _)| t.clone()).collect();
     assert_eq!(row(&lines, "goal-plan")[1], "held");
-    let line = lines.iter().find(|l| l.starts_with("goal-plan ")).unwrap();
+    let line = rows(&lines).into_iter().find(|l| l.starts_with("goal-plan ")).unwrap();
     assert!(line.ends_with("held by goal-smart; named by unslop"), "{line}");
     assert_eq!(colour_of(&screen, "goal-plan", "held"), ratatui_colour("held"));
     assert_eq!(colour_of(&screen, "goal-plan", "named by"), ratatui_colour("named by unslop"));
     assert_eq!(colour_of(&screen, "goal-plan", "held by"), Color::Reset);
-    assert!(lines.iter().any(|l| l.starts_with("unused · window 60d")), "{lines:#?}");
+    assert!(lines[0].contains(" unused ") && lines[0].contains("window 60d"), "{lines:#?}");
 
     // From the last row of 30d, the shorter 60d list keeps a row selected.
     press(&mut app, KeyCode::Char('w'));
@@ -204,7 +210,7 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert_eq!(app.screen(), Screen::Unused);
     press(&mut app, KeyCode::Enter);
     let skill = after.last().unwrap().split_whitespace().next().unwrap();
-    assert!(text(&mut app, 200, 40).iter().any(|l| l.starts_with(&format!("{skill}: "))));
+    assert!(text(&mut app, 200, 40).iter().any(|l| body(l).starts_with(&format!("{skill}: "))));
 }
 
 #[test]
@@ -219,7 +225,7 @@ fn slash_leaves_only_the_rows_whose_name_matches() {
     let shown = rows(&screen);
     assert!(!shown.is_empty() && shown.len() < all, "{screen:#?}");
     assert!(shown.iter().all(|r| r.starts_with("goal-")), "{screen:#?}");
-    assert!(screen.iter().any(|l| l.contains(&format!("{} skills · filter /goal", shown.len()))), "{screen:#?}");
+    assert!(screen[0].contains(&format!("{} skills · filter /goal", shown.len())), "{screen:#?}");
 }
 
 #[test]
@@ -241,7 +247,7 @@ fn w_a_c_and_capital_a_change_the_footer_and_counts_as_the_usage_flags_do() {
         assert_eq!(words(&text(&mut app, 200, 40)), expected(&input, &default));
         press(&mut app, KeyCode::Char(key));
         let screen = text(&mut app, 200, 40);
-        assert!(screen.iter().any(|l| l.starts_with("usage · ") && l.contains(footer)), "{key}: {screen:#?}");
+        assert!(screen[0].contains(footer), "{key}: {screen:#?}");
         assert_ne!(expected(&input, &args), expected(&input, &default), "{key} changes nothing in the fixture");
         assert_eq!(words(&screen), expected(&input, &args), "{key}");
     }
@@ -253,13 +259,34 @@ fn a_narrow_terminal_drops_columns_from_the_right_and_keeps_skill_and_sess() {
     let input = golden.world.input(&golden.events);
     let mut app = app(&input);
     let screen = text(&mut app, 60, 30);
-    let keys = screen.iter().rev().take_while(|l| !l.starts_with("usage · ")).flat_map(|l| l.split(" · ")).count();
-    assert_eq!(keys, 15, "every key shows: {screen:#?}");
-    let header: Vec<&str> = screen[0].split_whitespace().collect();
+    let keys = screen.iter().rev().take_while(|l| !body(l).starts_with("coverage:")).flat_map(|l| l.split(" · "));
+    assert_eq!(keys.count(), 15, "every key shows: {screen:#?}");
+    let header: Vec<&str> = screen[1].split_whitespace().collect();
     assert_eq!(header[..2], ["skill", "sess"]);
     assert!(!header.contains(&"grade"), "{screen:#?}");
     let sess = report::usage_table(&input, &UsageArgs::new(Since::Days(30))).rows[0].sess;
     assert_eq!(row(&screen, "unslop")[1], sess.to_string());
+}
+
+/// The footer lists only the keys that work on the screen, and a list with
+/// no row says why instead of showing an empty table.
+#[test]
+fn the_footer_lists_the_screens_keys_and_an_empty_list_says_why() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let mut app = app(&input);
+    let footer = |app: &mut App| text(app, 200, 40).last().unwrap().clone();
+    assert!(footer(&mut app).contains("Tab usage/unused") && footer(&mut app).contains("a agent"));
+    press(&mut app, KeyCode::Tab);
+    assert!(footer(&mut app).contains("Tab usage/unused") && !footer(&mut app).contains("a agent"));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen(), Screen::Card);
+    assert!(!footer(&mut app).contains("Tab usage/unused") && footer(&mut app).contains("a agent"));
+    press(&mut app, KeyCode::Esc);
+    typed(&mut app, "/zzz");
+    let screen = text(&mut app, 200, 40);
+    assert!(screen.iter().any(|l| l.trim() == "no skill matches /zzz"), "{screen:#?}");
+    assert_eq!(screen.last().unwrap(), "Enter keep · Esc clear");
 }
 
 #[test]
@@ -453,7 +480,7 @@ fn r_retires_a_source_skill_from_usage_after_y_and_the_list_drops_it() {
     // Any key closes the result; the list was re-read.
     press(&mut app, KeyCode::Char('j'));
     let screen = text(&mut app, 200, 20);
-    assert!(screen.iter().any(|l| l.starts_with("usage · ") && l.contains("0 skills · filter /idle")), "{screen:#?}");
+    assert!(screen[0].contains(" usage ") && screen[0].contains("0 skills · filter /idle"), "{screen:#?}");
 }
 
 #[test]
@@ -604,7 +631,7 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.screen(), Screen::Card, "{skill}");
         let screen = text(&mut app, 200, 20);
-        assert!(screen.iter().any(|l| l.starts_with(&format!("{skill}: "))), "{skill}: {screen:#?}");
+        assert!(screen.iter().any(|l| body(l).starts_with(&format!("{skill}: "))), "{skill}: {screen:#?}");
         assert!(!screen.iter().any(|l| l.contains(&format!("retire {skill}"))), "{skill}: {screen:#?}");
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.screen(), Screen::Unused);
@@ -706,7 +733,7 @@ fn y_audits_in_the_background_and_the_pane_shows_the_result() {
     // The data was re-read: the card shows the new audit.
     press(&mut app, KeyCode::Enter);
     let screen = text(&mut app, 200, 60);
-    assert!(screen.iter().any(|l| l.starts_with("audit: ") && l.contains(", 1 sessions, ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| body(l).starts_with("audit: ") && l.contains(", 1 sessions, ")), "{screen:#?}");
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
     assert!(!text(&mut app, 200, 30).iter().any(|l| l.contains(" audit busy ")));

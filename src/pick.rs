@@ -5,9 +5,11 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style, Stylize};
-use ratatui::text::Line;
+use ratatui::style::Stylize;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+
+use crate::theme;
 
 /// The keys, as the footer lists them.
 const KEYS: &str = "↑↓/jk move · Space select · a all · Enter install · Esc/q cancel";
@@ -73,12 +75,15 @@ impl Picker {
     pub fn draw(&self, frame: &mut Frame, area: Rect) {
         let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(area);
         let count = self.selected.iter().filter(|s| **s).count();
-        let status = format!("install from this source: {count} of {} selected", self.items.len());
-        frame.render_widget(Paragraph::new(vec![Line::raw(status), Line::raw(KEYS).dim()]), footer);
+        let status = Line::from(vec![
+            Span::raw("install from this source: "),
+            Span::raw(count.to_string()).fg(theme::ACCENT).bold(),
+            Span::raw(format!(" of {} selected", self.items.len())),
+        ]);
+        frame.render_widget(Paragraph::new(vec![status, theme::hints(KEYS)]), footer);
         let width = self.items.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0);
         // The rows from the one that keeps the cursor in view.
         let first = self.cursor.saturating_sub(usize::from(body.height).saturating_sub(1));
-        let reversed = Style::new().add_modifier(Modifier::REVERSED);
         let lines: Vec<Line> = self
             .items
             .iter()
@@ -86,8 +91,15 @@ impl Picker {
             .enumerate()
             .skip(first)
             .map(|(i, ((name, description), s))| {
-                let line = Line::raw(format!("[{}] {name:<width$}  {description}", if *s { 'x' } else { ' ' }));
-                if i == self.cursor { line.patch_style(reversed) } else { line }
+                let check =
+                    if *s { Span::raw("[x]").fg(theme::GOOD).bold() } else { Span::raw("[ ]").fg(theme::MUTED) };
+                let line = Line::from(vec![
+                    theme::gutter(i == self.cursor),
+                    check,
+                    Span::raw(format!(" {name:<width$}  ")),
+                    Span::raw(description.clone()).fg(theme::MUTED),
+                ]);
+                if i == self.cursor { line.patch_style(theme::selected()) } else { line }
             })
             .collect();
         frame.render_widget(Paragraph::new(lines), body);

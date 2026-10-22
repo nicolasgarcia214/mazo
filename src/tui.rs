@@ -20,10 +20,10 @@ use ratatui::crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use ratatui::crossterm::execute;
-use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Modifier, Style, Stylize};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::audit::{self, SkillRecord};
 use crate::config::{Config, Home};
@@ -35,6 +35,7 @@ use crate::pick::{Picker, Step};
 use crate::render::{self, Align, Colour};
 use crate::report::{self, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
 use crate::store::{self, Question};
+use crate::theme;
 
 /// The windows `w` cycles through.
 const WINDOWS: [Since; 3] = [Since::Days(30), Since::Days(60), Since::All];
@@ -46,35 +47,53 @@ const PANE_LINES: usize = 6;
 /// exit on SIGTERM before it is killed.
 const STOP_WAIT: Duration = Duration::from_secs(10);
 
+/// The frames of a running job's spinner, one per 100 ms.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The screens a key works on.
+#[derive(Clone, Copy)]
+enum On {
+    All,
+    Lists,
+    NotUnused,
+}
+
 /// The keys, as the footer lists them.
-const KEYS: [&str; 15] = [
-    "↑↓←→/hjkl move",
-    "Enter card/retire",
-    "Esc back",
-    "Tab usage/unused",
-    "/ filter",
-    "w window",
-    "a agent",
-    "c channel",
-    "A authoring",
-    "r retire",
-    "s sync",
-    "i add",
-    "u/U update one/all",
-    "x audit",
-    "q quit",
+const KEYS: [(&str, On); 15] = [
+    ("↑↓←→/hjkl move", On::All),
+    ("Enter card/retire", On::Lists),
+    ("Esc back", On::All),
+    ("Tab usage/unused", On::Lists),
+    ("/ filter", On::Lists),
+    ("w window", On::All),
+    ("a agent", On::NotUnused),
+    ("c channel", On::NotUnused),
+    ("A authoring", On::NotUnused),
+    ("r retire", On::All),
+    ("s sync", On::All),
+    ("i add", On::All),
+    ("u/U update one/all", On::All),
+    ("x audit", On::All),
+    ("q quit", On::All),
 ];
 
-/// [`KEYS`] joined with ` · ` into lines of at most `width` columns.
-fn keys(width: usize) -> Vec<Line<'static>> {
+/// The [`KEYS`] that work on `screen`, joined with ` · ` into lines of at
+/// most `width` columns.
+fn keys(screen: Screen, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<String> = vec![];
-    for key in KEYS {
+    for (key, on) in KEYS {
+        let works = match on {
+            On::All => true,
+            On::Lists => screen != Screen::Card,
+            On::NotUnused => screen != Screen::Unused,
+        };
         match lines.last_mut() {
+            _ if !works => {}
             Some(l) if l.chars().count() + 3 + key.chars().count() <= width => *l = format!("{l} · {key}"),
             _ => lines.push(key.to_string()),
         }
     }
-    lines.into_iter().map(|l| Line::raw(l).dim()).collect()
+    lines.iter().map(|l| theme::hints(l)).collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,6 +183,8 @@ struct Job {
     /// The thread until it ends; it returns whether the run succeeded.
     thread: Option<JoinHandle<bool>>,
     ok: bool,
+    /// When it started: its spinner's frame and its running time.
+    started: Instant,
 }
 
 /// Lines over the screen that take the next key: `y` does `ask`, any other
@@ -239,34 +260,52 @@ fn window(since: Since) -> String {
 fn token(t: &str) -> Span<'static> {
     let span = Span::raw(t.to_string());
     match render::status_colour(t) {
-        Some(Colour::Red) => span.red(),
-        Some(Colour::Yellow) => span.yellow(),
+        Some(Colour::Red) => span.fg(theme::BAD),
+        Some(Colour::Yellow) => span.fg(theme::WARN),
         None => span,
     }
 }
 
-/// A cell's spans: each `; `-separated note, and a grade's `+N` or `+wip`
-/// mark apart from its score, styled as a status token.
-fn styled(cell: &str) -> Vec<Span<'static>> {
-    let mut out = Vec::new();
-    for (i, piece) in cell.split("; ").enumerate() {
-        if i > 0 {
-            out.push(Span::raw("; "));
+/// The spans of `cell` in the column `head`: a sparkline in the accent with
+/// its empty days muted, a grade of 9 or more green and its mark apart,
+/// `today` in the accent, and zero counts, `-` and `not judged` muted. In
+/// any other column each `; `-separated note is styled as a status token.
+fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
+    let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
+    match (head, cell) {
+        (_, "-" | "0" | "not judged") => vec![muted(cell)],
+        (_, "today") => vec![Span::raw("today").fg(theme::ACCENT)],
+        ("30d", _) => cell
+            .chars()
+            .map(|c| if c == '·' { muted("·") } else { Span::raw(c.to_string()).fg(theme::ACCENT) })
+            .collect(),
+        ("grade", _) => {
+            let (score, mark) = cell.split_at(cell.find('+').unwrap_or(cell.len()));
+            let high = score.parse::<f64>().is_ok_and(|s| s >= 9.0);
+            let score = if high { Span::raw(score.to_string()).fg(theme::GOOD) } else { Span::raw(score.to_string()) };
+            [score].into_iter().chain((!mark.is_empty()).then(|| token(mark))).collect()
         }
-        match piece.find('+') {
-            Some(at) if at > 0 && render::status_colour(&piece[at..]).is_some() => {
-                out.extend([token(&piece[..at]), token(&piece[at..])]);
+        ("quality", _) => match cell.split_once(": ") {
+            Some((judge, verdict)) => vec![muted(&format!("{judge}: ")), Span::raw(verdict.to_string())],
+            None => vec![Span::raw(cell.to_string())],
+        },
+        _ => {
+            let mut out = Vec::new();
+            for (i, piece) in cell.split("; ").enumerate() {
+                if i > 0 {
+                    out.push(Span::raw("; "));
+                }
+                out.push(if piece == "weak-only" { muted(piece) } else { token(piece) });
             }
-            _ => out.push(token(piece)),
+            out
         }
     }
-    out
 }
 
-/// The header and rows of a table as lines, one space between columns. The
-/// columns past the first two that do not fit in `width` are dropped from
-/// the right. The skill column is never styled, so a name never takes a
-/// status colour.
+/// The header and rows of a table as lines, one space between columns, the
+/// header bold in the accent. The columns past the first two that do not fit
+/// in `width` are dropped from the right. The skill column is never styled,
+/// so a name never takes a status colour.
 fn table(header: &[(&str, Align)], rows: &[Vec<String>], width: usize) -> Vec<Line<'static>> {
     let chars = |s: &str| s.chars().count();
     let mut widths: Vec<usize> = header.iter().map(|(h, _)| chars(h)).collect();
@@ -286,12 +325,13 @@ fn table(header: &[(&str, Align)], rows: &[Vec<String>], width: usize) -> Vec<Li
     }
     let line = |cells: Vec<&str>, style: bool| {
         let mut spans = Vec::new();
-        for (i, (cell, (&w, (_, align)))) in cells.into_iter().zip(widths.iter().zip(header)).take(shown).enumerate() {
+        for (i, (cell, (&w, (head, align)))) in cells.into_iter().zip(widths.iter().zip(header)).take(shown).enumerate()
+        {
             if i > 0 {
                 spans.push(Span::raw(" "));
             }
             let pad = Span::raw(" ".repeat(w - chars(cell)));
-            let text = if style && i > 0 { styled(cell) } else { vec![Span::raw(cell.to_string())] };
+            let text = if style && i > 0 { styled(head, cell) } else { vec![Span::raw(cell.to_string())] };
             match align {
                 Align::Left => spans.extend(text.into_iter().chain([pad])),
                 Align::Right => spans.extend(std::iter::once(pad).chain(text)),
@@ -299,7 +339,7 @@ fn table(header: &[(&str, Align)], rows: &[Vec<String>], width: usize) -> Vec<Li
         }
         Line::from(spans)
     };
-    let mut out = vec![line(header.iter().map(|(h, _)| *h).collect(), false).bold()];
+    let mut out = vec![line(header.iter().map(|(h, _)| *h).collect(), false).fg(theme::ACCENT).bold()];
     out.extend(rows.iter().map(|r| line(r.iter().map(String::as_str).collect(), true)));
     out
 }
@@ -381,7 +421,7 @@ impl App {
     fn open(&mut self, skill: &str) {
         let input = self.data.input();
         let card = report::skill_card(&input, skill, &self.args(self.card_since), SHOW_LIMIT);
-        let lines = report::card_text(&input, &card, false).lines().map(String::from).collect();
+        let lines = report::card_text(&input, &card, true).lines().map(String::from).collect();
         self.card = Some((skill.to_string(), lines));
     }
 
@@ -678,7 +718,9 @@ impl App {
             }
             ok
         });
-        self.job = Some(Job { verb, target, lines: Vec::new(), rx, asks, cancel, thread: Some(thread), ok: false });
+        let started = Instant::now();
+        self.job =
+            Some(Job { verb, target, lines: Vec::new(), rx, asks, cancel, thread: Some(thread), ok: false, started });
     }
 
     /// Audits `skill` in the background as `mazo audit <skill>` does.
@@ -848,95 +890,116 @@ impl App {
         }
     }
 
-    /// The footer's first line: the view, its window and the active filters.
-    fn status(&self) -> String {
-        match &self.dialog {
-            Some(Dialog { ask: Some(Ask::Source(_)), .. }) => return "Enter add · Esc cancels".into(),
-            Some(Dialog { ask: Some(Ask::Pick(..)), .. }) => return "add: pick the skills to install".into(),
+    /// The footer's hints while a dialog is open or the filter is being
+    /// typed; `None` when the footer lists the [`KEYS`].
+    fn hints(&self) -> Option<String> {
+        Some(match &self.dialog {
+            Some(Dialog { ask: Some(Ask::Source(_)), .. }) => "Enter add · Esc cancels".into(),
+            Some(Dialog { ask: Some(Ask::Pick(..)), .. }) => "add: pick the skills to install".into(),
             Some(Dialog { ask: Some(Ask::Answer(_, default)), .. }) => {
                 let default = if *default { "yes" } else { "no" };
-                return format!("Enter {default} · y yes · n/Esc no · q quit");
+                format!("Enter {default} · y yes · n/Esc no · q quit")
             }
-            Some(Dialog { ask: Some(_), .. }) => return "y apply · any other key cancels".into(),
-            Some(_) => return "any key closes".into(),
-            None => {}
+            Some(Dialog { ask: Some(_), .. }) => "y apply · any other key cancels".into(),
+            Some(_) => "any key closes".into(),
+            None if self.typing => "Enter keep · Esc clear".into(),
+            None => return None,
+        })
+    }
+
+    /// The top bar: the name, the tabs or the card's trail, then the count
+    /// of listed skills and the filter, the window, and the agent, channel
+    /// and authoring filters when set.
+    fn header(&self) -> Line<'static> {
+        let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
+        let mut spans = vec![Span::raw(" ♠ mazo ").fg(Color::Black).bg(theme::ACCENT).bold(), Span::raw("  ")];
+        match (self.screen, &self.card) {
+            (Screen::Card, Some((skill, _))) => {
+                let back = if self.back == Screen::Unused { "unused" } else { "usage" };
+                spans.extend([muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]);
+            }
+            _ => {
+                for (s, label) in [(Screen::Usage, "usage"), (Screen::Unused, "unused")] {
+                    spans.push(if s == self.screen {
+                        Span::raw(label).fg(theme::ACCENT).bold().underlined()
+                    } else {
+                        muted(label)
+                    });
+                    spans.push(Span::raw("  "));
+                }
+            }
         }
-        let counts = |since: Since| {
-            let agent = self.agent.map_or("all".into(), name);
-            let channel = self.channel.map_or("all".into(), name);
-            let authoring = if self.authoring { "on" } else { "off" };
-            format!("window {} · agent {agent} · channel {channel} · authoring {authoring}", window(since))
-        };
-        let mut line = match (self.screen, &self.card) {
-            (Screen::Card, Some((skill, _))) => format!("card {skill} · {}", counts(self.card_since)),
-            (Screen::Unused, _) => format!("unused · window {}", window(self.unused_since)),
-            _ => format!("usage · {}", counts(self.usage_since)),
-        };
+        let mut chips: Vec<(&str, String)> = Vec::new();
         if self.screen != Screen::Card {
-            line.push_str(&format!(" · {} skills", self.listed().len()));
+            chips.push(("", format!("{} skills", self.listed().len())));
             if self.typing || !self.filter.is_empty() {
-                line.push_str(&format!(" · filter /{}{}", self.filter, if self.typing { "_" } else { "" }));
+                chips.push(("filter ", format!("/{}{}", self.filter, if self.typing { "_" } else { "" })));
             }
         }
-        line
+        let since = match self.screen {
+            Screen::Usage => self.usage_since,
+            Screen::Unused => self.unused_since,
+            Screen::Card => self.card_since,
+        };
+        chips.push(("window ", window(since)));
+        if self.screen != Screen::Unused {
+            chips.extend(self.agent.map(|a| ("agent ", name(a))));
+            chips.extend(self.channel.map(|c| ("channel ", name(c))));
+            chips.extend(self.authoring.then(|| ("authoring ", "on".to_string())));
+        }
+        spans.push(Span::raw(" "));
+        for (i, (label, value)) in chips.into_iter().enumerate() {
+            if i > 0 {
+                spans.push(muted(" · "));
+            }
+            spans.extend([muted(label), Span::raw(value).fg(theme::ACCENT)]);
+        }
+        Line::from(spans)
     }
 
     pub fn draw(&mut self, frame: &mut Frame) {
-        let mut footer_lines = vec![Line::raw(self.status())];
-        footer_lines.extend(keys(frame.area().width.into()));
+        let footer_lines = match self.hints() {
+            Some(hints) => vec![theme::hints(&hints)],
+            None => keys(self.screen, frame.area().width.into()),
+        };
         let height = Constraint::Length(footer_lines.len() as u16);
         let pane_height = self.job.as_ref().map_or(0, |j| j.lines.len().clamp(1, PANE_LINES) as u16 + 2);
-        let [body, pane, info, footer] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(pane_height), Constraint::Length(1), height])
-                .areas(frame.area());
+        let [top, body, info, pane, footer] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Length(pane_height),
+            height,
+        ])
+        .areas(frame.area());
+        frame.render_widget(Paragraph::new(self.header()), top);
         frame.render_widget(Paragraph::new(footer_lines), footer);
         if let Some(job) = &self.job {
-            let state = match (&job.thread, job.ok) {
-                (Some(_), _) => "running",
-                (None, true) => "done · Esc closes",
-                (None, false) => "failed · Esc closes",
-            };
-            let lines: Vec<Line> = job
-                .lines
-                .iter()
-                .skip(job.lines.len().saturating_sub(PANE_LINES))
-                .map(|l| Line::raw(l.as_str()))
-                .collect();
-            let block = Block::bordered().title(format!(" {} {} · {state} ", job.verb, job.target));
-            frame.render_widget(Paragraph::new(lines).block(block), pane);
+            draw_job(frame, job, pane);
+        }
+        match (self.screen, &self.card) {
+            (Screen::Card, Some((skill, lines))) => {
+                let area = body.union(info);
+                let text: Vec<Line> = lines.iter().skip(self.scroll).map(|l| card_line(l, skill)).collect();
+                frame.render_widget(Paragraph::new(text), area.inner(Margin::new(2, 0)));
+                scrollbar(frame, area, lines.len(), self.scroll, area.height.into());
+                self.page = usize::from(area.height).max(1);
+            }
+            _ => self.draw_list(frame, body, info),
         }
         if let Some(dialog) = &self.dialog {
             let area = body.union(info);
-            if let Some(Ask::Pick(picker, _)) = &dialog.ask {
-                let block = Block::bordered();
-                frame.render_widget(Clear, area);
-                picker.draw(frame, block.inner(area));
-                frame.render_widget(block, area);
-                return;
-            }
-            let room = usize::from(area.height.saturating_sub(2)).max(1);
-            let mut lines: Vec<Line> = dialog.lines.iter().flat_map(|l| l.lines()).map(Line::raw).collect();
-            if let Some(Ask::Source(source)) = &dialog.ask {
-                lines.push(Line::raw(typed_line(source, area.width.saturating_sub(2).into())));
-            }
-            if lines.len() > room {
-                let more = lines.len() - room + 1;
-                lines.truncate(room - 1);
-                lines.push(Line::raw(format!("… and {more} more")));
-            }
-            frame.render_widget(Clear, area);
-            frame.render_widget(Paragraph::new(lines).block(Block::bordered()), area);
-            return;
+            // The screen behind stays in view, dimmed.
+            frame.buffer_mut().set_style(area, Style::new().add_modifier(Modifier::DIM));
+            draw_dialog(frame, dialog, area);
         }
-        if let (Screen::Card, Some((_, lines))) = (self.screen, &self.card) {
-            let area = body.union(info);
-            let text: Vec<Line> = lines.iter().skip(self.scroll).map(|l| Line::raw(l.as_str())).collect();
-            frame.render_widget(Paragraph::new(text), area);
-            self.page = usize::from(area.height).max(1);
-            return;
-        }
+    }
+
+    /// The current list as a table in `body` from the row that keeps the
+    /// selection in view, and its coverage note in `info`.
+    fn draw_list(&mut self, frame: &mut Frame, body: Rect, info: Rect) {
         let input = self.data.input();
-        let (mut lines, note) = match self.screen {
+        let (header, rows, note) = match self.screen {
             Screen::Unused => {
                 let rows: Vec<Vec<String>> = self
                     .unused
@@ -945,10 +1008,7 @@ impl App {
                     .filter(|r| self.matches(&r.skill))
                     .map(|r| report::unused_cells(r, false))
                     .collect();
-                (
-                    table(&report::UNUSED_HEADER, &rows, body.width.into()),
-                    report::coverage_note("window", &self.unused.window),
-                )
+                (&report::UNUSED_HEADER[..], rows, report::coverage_note("window", &self.unused.window))
             }
             _ => {
                 let rows: Vec<Vec<String>> = self
@@ -958,26 +1018,210 @@ impl App {
                     .filter(|r| self.matches(&r.skill))
                     .map(|r| report::usage_cells(&input, r, false))
                     .collect();
-                (
-                    table(&report::USAGE_HEADER, &rows, body.width.into()),
-                    report::coverage_note("coverage", &self.usage.coverage),
-                )
+                (&report::USAGE_HEADER[..], rows, report::coverage_note("coverage", &self.usage.coverage))
             }
         };
-        frame.render_widget(Paragraph::new(note), info);
-        // The header, then the rows from the one that keeps the selection in view.
+        frame.render_widget(Paragraph::new(Line::raw(format!("  {note}")).fg(theme::MUTED).italic()), info);
+        if rows.is_empty() {
+            let why = match self.screen {
+                _ if !self.filter.is_empty() => format!("no skill matches /{}", self.filter),
+                Screen::Unused => "no unused skill in this window".into(),
+                _ => "no skill used in this window · w widens it".into(),
+            };
+            let line = Line::raw(why).fg(theme::MUTED).italic().centered();
+            frame.render_widget(Paragraph::new(line), body.centered_vertically(Constraint::Length(1)));
+            return;
+        }
+        // Room for the gutter and the scrollbar.
+        let mut lines = table(header, &rows, usize::from(body.width).saturating_sub(3));
         self.page = usize::from(body.height).saturating_sub(1).max(1);
         let rows = lines.split_off(1.min(lines.len()));
+        let total = rows.len();
         let first = self.selected.saturating_sub(self.page - 1);
-        let reversed = Style::new().add_modifier(Modifier::REVERSED);
-        lines.extend(
-            rows.into_iter()
-                .enumerate()
-                .skip(first)
-                .map(|(i, l)| if i == self.selected { l.patch_style(reversed) } else { l }),
-        );
+        lines[0].spans.insert(0, theme::gutter(false));
+        lines.extend(rows.into_iter().enumerate().skip(first).map(|(i, mut l)| {
+            let selected = i == self.selected;
+            l.spans.insert(0, theme::gutter(selected));
+            if selected { l.patch_style(theme::selected()) } else { l }
+        }));
         frame.render_widget(Paragraph::new(lines), body);
+        let below = Rect { y: body.y + 1, height: body.height.saturating_sub(1), ..body };
+        scrollbar(frame, below, total, first, self.page);
     }
+}
+
+impl Dialog {
+    /// The title and colour of its border: red for what removes or stops,
+    /// yellow for a verdict to answer, the accent for the rest.
+    fn frame(&self) -> (&'static str, Color) {
+        match &self.ask {
+            Some(Ask::Act(Act::Retire(_))) => ("retire", theme::BAD),
+            Some(Ask::Act(Act::Sync(_))) => ("sync", theme::ACCENT),
+            Some(Ask::Audit(_)) => ("audit", theme::ACCENT),
+            Some(Ask::Update(_)) => ("update", theme::ACCENT),
+            Some(Ask::Quit) => ("quit", theme::BAD),
+            Some(Ask::Source(_) | Ask::Pick(..)) => ("add", theme::ACCENT),
+            Some(Ask::Answer(..)) => ("confirm", theme::WARN),
+            None if self.lines.iter().any(|l| l.contains("ERROR:") || l.contains(" refused")) => ("error", theme::BAD),
+            None => ("mazo", theme::ACCENT),
+        }
+    }
+}
+
+/// `line` with a leading status token, such as `ERROR:`, in its colour.
+fn status_line(line: &str) -> Line<'static> {
+    match line.split_once(' ') {
+        Some((head, rest)) if render::status_colour(head).is_some() => {
+            Line::from(vec![token(head).bold(), Span::raw(format!(" {rest}"))])
+        }
+        _ => Line::raw(line.to_string()),
+    }
+}
+
+/// `dialog` in a rounded box centred over `area`, sized to its lines; a
+/// picker takes the whole area less a margin.
+fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
+    let (title, colour) = dialog.frame();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(colour))
+        .title(Span::raw(format!(" {title} ")).fg(colour).bold())
+        .padding(Padding::new(2, 2, 1, 1));
+    if let Some(Ask::Pick(picker, _)) = &dialog.ask {
+        let modal = area.inner(Margin::new(2, 1));
+        frame.render_widget(Clear, modal);
+        picker.draw(frame, block.inner(modal));
+        frame.render_widget(block, modal);
+        return;
+    }
+    // Borders and padding take 6 columns and 4 rows.
+    let raw: Vec<&str> = dialog.lines.iter().flat_map(|l| l.lines()).collect();
+    let mut wide = raw.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    if let Some(Ask::Source(source)) = &dialog.ask {
+        wide = wide.max(source.chars().count() + 3);
+    }
+    let width = (wide as u16 + 6).clamp(area.width.min(48), area.width);
+    let mut lines: Vec<Line> = raw.iter().map(|l| status_line(l)).collect();
+    // A question's first line is its headline.
+    if dialog.ask.is_some()
+        && let Some(first) = lines.first_mut()
+    {
+        *first = first.clone().bold();
+    }
+    if let Some(Ask::Source(source)) = &dialog.ask {
+        let typed = typed_line(source, width.saturating_sub(6).into());
+        let typed = typed.strip_suffix('_').unwrap_or(&typed);
+        let (prompt, typed) = typed.strip_prefix("> ").map_or(("", typed), |t| ("> ", t));
+        lines.push(Line::from(vec![
+            Span::raw(prompt).fg(theme::ACCENT).bold(),
+            Span::raw(typed.to_string()),
+            Span::raw("_").fg(theme::ACCENT).slow_blink(),
+        ]));
+    }
+    let room = usize::from(area.height.saturating_sub(4)).max(1);
+    if lines.len() > room {
+        let more = lines.len() - room + 1;
+        lines.truncate(room - 1);
+        lines.push(Line::raw(format!("… and {more} more")).fg(theme::MUTED));
+    }
+    let modal = area.centered(Constraint::Length(width), Constraint::Length(lines.len() as u16 + 4));
+    frame.render_widget(Clear, modal);
+    frame.render_widget(Paragraph::new(lines).block(block), modal);
+}
+
+/// The job pane: a spinner and the running time while the job runs, then a
+/// check or a cross, in a box of the same colour, over its last lines.
+fn draw_job(frame: &mut Frame, job: &Job, area: Rect) {
+    let elapsed = job.started.elapsed();
+    let (icon, state, colour) = match (&job.thread, job.ok) {
+        (Some(_), _) => {
+            let spin = SPINNER[(elapsed.as_millis() / 100) as usize % SPINNER.len()];
+            (spin, format!("running · {}s", elapsed.as_secs()), theme::ACCENT)
+        }
+        (None, true) => ("✓", "done · Esc closes".into(), theme::GOOD),
+        (None, false) => ("✗", "failed · Esc closes".into(), theme::BAD),
+    };
+    let title = Line::from(vec![
+        Span::raw(format!(" {icon}")).fg(colour).bold(),
+        Span::raw(format!(" {} {} · {state} ", job.verb, job.target)).bold(),
+    ]);
+    let lines: Vec<Line> =
+        job.lines.iter().skip(job.lines.len().saturating_sub(PANE_LINES)).map(|l| status_line(l)).collect();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(colour))
+        .title(title)
+        .padding(Padding::horizontal(1));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// A scrollbar down the right edge of `area` when `total` rows overflow the
+/// `page` shown from row `first`.
+fn scrollbar(frame: &mut Frame, area: Rect, total: usize, first: usize, page: usize) {
+    if total <= page {
+        return;
+    }
+    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("│"))
+        .track_style(Style::new().fg(theme::MUTED))
+        .thumb_symbol("┃")
+        .thumb_style(Style::new().fg(theme::ACCENT));
+    let mut state = ScrollbarState::new(total - page + 1).position(first).viewport_content_length(page);
+    frame.render_stateful_widget(bar, area, &mut state);
+}
+
+/// A line of `skill`'s card as `show` prints it at a terminal: its `ESC [ n
+/// m` styles kept, a table header bold in the accent. A line with none
+/// takes the heading's accent, a section title's bold, a histogram bar's
+/// accent, or the accent on its leading `label:`.
+fn card_line(line: &str, skill: &str) -> Line<'static> {
+    if line.contains('\x1b') {
+        return Line::from(sgr(line));
+    }
+    if line.starts_with(&format!("{skill}: ")) {
+        return Line::raw(line.to_string()).fg(theme::ACCENT).bold();
+    }
+    if line.ends_with(':') && !line.starts_with(' ') {
+        return Line::raw(line.to_string()).bold();
+    }
+    let at = line.find('█').or_else(|| {
+        let (label, _) = line.split_once(": ")?;
+        let lower = label.starts_with(|c: char| c.is_ascii_lowercase());
+        (lower && label.bytes().all(|b| b.is_ascii_lowercase() || b == b' ')).then_some(label.len() + 1)
+    });
+    match at {
+        Some(at) if line[at..].starts_with('█') => {
+            Line::from(vec![Span::raw(line[..at].to_string()), Span::raw(line[at..].to_string()).fg(theme::ACCENT)])
+        }
+        Some(at) => {
+            Line::from(vec![Span::raw(line[..at].to_string()).fg(theme::ACCENT), Span::raw(line[at..].to_string())])
+        }
+        None => Line::raw(line.to_string()),
+    }
+}
+
+/// `text` as spans styled by the `ESC [ n m` sequences [`render`] writes:
+/// 1, a table header, bold in the accent; 31 and 33 its red and yellow; 0
+/// resets.
+fn sgr(text: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut style = Style::new();
+    for (i, part) in text.split("\x1b[").enumerate() {
+        let (code, rest) = if i == 0 { ("", part) } else { part.split_once('m').unwrap_or(("", part)) };
+        style = match code {
+            "0" => Style::new(),
+            "1" => style.fg(theme::ACCENT).bold(),
+            "31" => style.fg(theme::BAD),
+            "33" => style.fg(theme::WARN),
+            _ => style,
+        };
+        if !rest.is_empty() {
+            spans.push(Span::styled(rest.to_string(), style));
+        }
+    }
+    spans
 }
 
 /// The dialog that takes an add's source.
