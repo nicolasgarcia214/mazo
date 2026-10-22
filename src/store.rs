@@ -388,11 +388,12 @@ fn install(
         }
         return Err(e);
     }
+    // Recorded: the next skill of this add plans its links with this one.
+    *inv = with;
     println!("installed {}", to.display());
     for line in links::apply(&plan)? {
         println!("{line}");
     }
-    *inv = with;
     Ok(())
 }
 

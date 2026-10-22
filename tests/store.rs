@@ -429,11 +429,13 @@ fn several_skills_off_a_terminal_list_their_names_and_install_nothing() {
     assert_eq!(fx.snapshot(), before);
 }
 
-/// `mazo add args…` with stdin and stdout a terminal: `keys` is typed once
-/// the picker has the terminal. The exit code and everything the terminal showed.
-fn add_in_picker(fx: &Fixture, args: &[&str], keys: &str) -> (i32, String) {
+/// `mazo add args…` with stdin, stdout and stderr a terminal: each step's
+/// keys are typed once the terminal has shown its text, the first being the
+/// picker's status line. The exit code and everything the terminal showed.
+fn add_in_picker(fx: &Fixture, args: &[&str], steps: &[(&str, &str)]) -> (i32, String) {
     use std::io::{Read, Write};
     use std::os::fd::{FromRawFd, OwnedFd};
+    use std::sync::{Arc, Mutex};
     let (mut controller, mut terminal) = (0, 0);
     let size = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
     // SAFETY: openpty writes two new descriptors, owned below.
@@ -444,35 +446,43 @@ fn add_in_picker(fx: &Fixture, args: &[&str], keys: &str) -> (i32, String) {
     let mut child = fx
         .command(&[&["add"], args].concat())
         .stdin(std::process::Stdio::from(terminal.try_clone().unwrap()))
-        .stdout(std::process::Stdio::from(terminal))
+        .stdout(std::process::Stdio::from(terminal.try_clone().unwrap()))
+        .stderr(std::process::Stdio::from(terminal))
         .spawn()
         .unwrap();
     let mut output = fs::File::from(controller);
     let mut input = output.try_clone().unwrap();
-    let (tx, rx) = std::sync::mpsc::channel();
-    // Reads until the child closes the terminal, saying when the picker drew.
-    let reader = std::thread::spawn(move || {
-        let (mut seen, mut buf) = (Vec::new(), [0; 4096]);
-        while let Ok(n) = output.read(&mut buf).map_err(drop).and_then(|n| if n == 0 { Err(()) } else { Ok(n) }) {
-            seen.extend_from_slice(&buf[..n]);
-            if String::from_utf8_lossy(&seen).contains("selected") {
-                let _ = tx.send(());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    // Reads until the child closes the terminal.
+    let reader = std::thread::spawn({
+        let seen = Arc::clone(&seen);
+        move || {
+            let mut buf = [0; 4096];
+            while let Ok(n @ 1..) = output.read(&mut buf) {
+                seen.lock().unwrap().extend_from_slice(&buf[..n]);
             }
         }
-        String::from_utf8_lossy(&seen).into_owned()
     });
-    rx.recv_timeout(std::time::Duration::from_secs(30)).expect("the picker drew");
-    input.write_all(keys.as_bytes()).unwrap();
+    let shown = || String::from_utf8_lossy(&seen.lock().unwrap()).into_owned();
+    for (text, keys) in steps {
+        let start = std::time::Instant::now();
+        while !shown().contains(text) {
+            assert!(start.elapsed().as_secs() < 30, "never showed {text:?}: {}", shown());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        input.write_all(keys.as_bytes()).unwrap();
+    }
     let code = child.wait().unwrap().code().expect("exited");
     drop(input);
-    (code, reader.join().unwrap())
+    reader.join().unwrap();
+    (code, shown())
 }
 
 #[test]
 fn at_a_terminal_the_picker_lists_each_skill_with_its_description_and_installs_the_selected() {
     let (fx, url) = pack(&["one", "two", "three"]);
     // The list is sorted: one, three, two. Select three and two.
-    let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], "j j \r");
+    let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], &[("selected", "j j \r")]);
     assert_eq!(code, 0, "{screen}");
     assert!(screen.contains("From a repo."), "{screen}");
     assert!(screen.contains("\x1b[?1049l"), "the picker left the alternate screen: {screen}");
@@ -486,7 +496,7 @@ fn cancelling_or_selecting_nothing_in_the_picker_installs_nothing() {
     let (fx, url) = pack(&["one", "two"]);
     let before = fx.snapshot();
     for keys in ["\r", "a q", "a \x1b"] {
-        let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], keys);
+        let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], &[("selected", keys)]);
         assert_eq!(code, 0, "{keys:?}: {screen}");
         assert!(screen.contains("nothing selected; nothing was installed"), "{keys:?}: {screen}");
         assert_eq!(fx.snapshot(), before, "{keys:?}");
@@ -879,6 +889,22 @@ fn every_skill_of_several_goes_through_the_vet_gate() {
     assert!(calls[0].contains("# one") && calls[1].contains("# two"), "{calls:?}");
     assert_eq!(lock_names(&fx), ["one", "two"]);
     assert!(lock(&fx).iter().all(|e| e.get("verdict").is_some()), "{:?}", lock(&fx));
+}
+
+#[test]
+fn the_vet_prompt_after_the_picker_reads_the_answer_typed_to_it() {
+    let (mut fx, _) = judged();
+    fs::create_dir_all(fx.data.join("mazo")).unwrap();
+    fx.allow("one");
+    fx.allow("two");
+    let url = bare_repo(&fx, "pack", &[("skills/one", "one"), ("skills/two", "two")]);
+    answer(&fx, None, "good", "worth trying");
+    let steps = [("selected", "j \r"), ("install two? [Y/n]", "y\r")];
+    let (code, screen) = add_in_picker(&fx, &[&format!("{url}/skills")], &steps);
+    assert_eq!(code, 0, "{screen}");
+    assert_eq!(calls(&fx).len(), 1);
+    assert_eq!(lock_names(&fx), ["two"]);
+    assert_not_installed(&fx, "one");
 }
 
 #[test]
