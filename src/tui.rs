@@ -42,7 +42,7 @@ const STOP_WAIT: Duration = Duration::from_secs(10);
 /// The keys, as the footer lists them.
 const KEYS: [&str; 13] = [
     "↑↓←→/hjkl move",
-    "Enter card",
+    "Enter card/retire",
     "Esc back",
     "Tab usage/unused",
     "/ filter",
@@ -405,6 +405,10 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.shift(1),
             KeyCode::Left | KeyCode::Char('h') => self.shift(-(self.page as isize)),
             KeyCode::Right | KeyCode::Char('l') => self.shift(self.page as isize),
+            // An unused store skill is past its install-date window: retire first.
+            KeyCode::Enter if self.screen == Screen::Unused && self.selected_unused_store().is_some() => {
+                self.retire(self.selected_unused_store().unwrap());
+            }
             KeyCode::Enter if list => {
                 if let Some(skill) = self.listed().get(self.selected).map(|s| s.to_string()) {
                     (self.back, self.screen, self.card_since, self.scroll) =
@@ -444,14 +448,7 @@ impl App {
             }
             KeyCode::Char('r') => {
                 if let Some(skill) = self.chosen() {
-                    let what = match self.data.cfg.source.as_deref() {
-                        Some(source) if self.data.inv.root(&skill) == Some(source) => {
-                            format!("move it to {}", source.join(".archive").join(&skill).display())
-                        }
-                        _ => "remove it from the store".into(),
-                    };
-                    let lines = vec![format!("retire {skill}: {what} and prune its links?")];
-                    self.dialog = Some(Dialog { lines, ask: Some(Ask::Act(Act::Retire(skill))) });
+                    self.retire(skill);
                 }
             }
             KeyCode::Char('s') => {
@@ -567,6 +564,25 @@ impl App {
         if thread.is_finished() {
             _ = thread.join();
         }
+    }
+
+    /// Opens the y/N dialog that retires `skill`.
+    fn retire(&mut self, skill: String) {
+        let what = match self.data.cfg.source.as_deref() {
+            Some(source) if self.data.inv.root(&skill) == Some(source) => {
+                format!("move it to {}", source.join(".archive").join(&skill).display())
+            }
+            _ => "remove it from the store".into(),
+        };
+        let lines = vec![format!("retire {skill}: {what} and prune its links?")];
+        self.dialog = Some(Dialog { lines, ask: Some(Ask::Act(Act::Retire(skill))) });
+    }
+
+    /// The selected unused-list skill when it is `unused` and read from the store.
+    fn selected_unused_store(&self) -> Option<String> {
+        let row = self.unused.skills.iter().filter(|r| self.matches(&r.skill)).nth(self.selected)?;
+        let store = self.data.inv.root(&row.skill) != self.data.inv.source.as_deref();
+        (row.status == "unused" && store).then(|| row.skill.clone())
     }
 
     /// Runs `act` through the CLI command's code path, never forced, then

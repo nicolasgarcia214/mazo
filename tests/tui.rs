@@ -301,6 +301,11 @@ impl Actions {
 
     /// The app over what is on disk now.
     fn app(&self) -> App {
+        self.app_at(jiff::Timestamp::now())
+    }
+
+    /// The app over what is on disk, as of `now`.
+    fn app_at(&self, now: jiff::Timestamp) -> App {
         let (inv, ledger) = (self.inv(), Ledger::load(&self.data).unwrap());
         let coverage = ledger::load_coverage(&self.data).unwrap();
         let audits = Default::default();
@@ -310,7 +315,7 @@ impl Actions {
             events: ledger.events(),
             coverage: &coverage,
             audits: &audits,
-            now: jiff::Timestamp::now(),
+            now,
             tz: jiff::tz::TimeZone::UTC,
         };
         App::new(&input, &self.data)
@@ -512,6 +517,59 @@ fn a_store_skill_installed_long_ago_is_not_new_after_an_action() {
     typed(&mut app, "/");
     press(&mut app, KeyCode::Enter);
     assert_eq!(row(&text(&mut app, 200, 20), "stored")[1], "unused");
+}
+
+#[test]
+fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_the_card() {
+    let fx = Actions::new(true);
+    let fresh = fx.data.parent().unwrap().join("in/fresh");
+    common::write(&fresh.join("SKILL.md"), "---\nname: fresh\ndescription: X.\n---\n");
+    let fresh = fresh.to_string_lossy();
+    let args = store::Add { source: &fresh, rename: None, pick: None, trust: true, yes: false, force: false };
+    store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
+    let now: jiff::Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
+    let lock = fx.data.join("mazo.lock");
+    let mut lines: Vec<String> = std::fs::read_to_string(&lock).unwrap().lines().map(String::from).collect();
+    let mut name = "";
+    for line in &mut lines {
+        if let Some(n) = line.strip_prefix("name = ") {
+            name = if n.contains("fresh") { "fresh" } else { "stored" };
+        } else if line.starts_with("installed_at") {
+            let days = if name == "fresh" { 1 } else { 100 };
+            let at = now.checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap();
+            *line = format!("installed_at = \"{at}\"");
+        }
+    }
+    std::fs::write(&lock, lines.join("\n") + "\n").unwrap();
+    let before = fx.disk();
+
+    let mut app = fx.app_at(now);
+    press(&mut app, KeyCode::Tab);
+    let screen = text(&mut app, 200, 20);
+    assert_eq!(row(&screen, "stored")[1], "unused", "{screen:#?}");
+    assert_eq!(row(&screen, "fresh")[1], "new", "{screen:#?}");
+    assert_eq!(row(&screen, "idle")[1], "unused", "{screen:#?}");
+
+    select(&mut app, "stored");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.screen(), Screen::Unused);
+    let screen = text(&mut app, 200, 20);
+    assert!(screen.iter().any(|l| l.contains("retire stored: remove it from the store")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l == "y apply · any other key cancels"), "{screen:#?}");
+    press(&mut app, KeyCode::Char('n'));
+    assert_eq!(fx.disk(), before);
+
+    for skill in ["fresh", "idle"] {
+        select(&mut app, skill);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen(), Screen::Card, "{skill}");
+        let screen = text(&mut app, 200, 20);
+        assert!(screen.iter().any(|l| l.starts_with(&format!("{skill}: "))), "{skill}: {screen:#?}");
+        assert!(!screen.iter().any(|l| l.contains(&format!("retire {skill}"))), "{skill}: {screen:#?}");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.screen(), Screen::Unused);
+    }
+    assert_eq!(fx.disk(), before);
 }
 
 #[test]
