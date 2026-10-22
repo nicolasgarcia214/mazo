@@ -351,7 +351,11 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         Some(p) => {
             let store = p.join(PROJECT_STORE);
             let roots: Vec<&Path> = inv.roots.iter().map(PathBuf::as_path).chain([store.as_path()]).collect();
-            Inventory::load_roots(inv.source.as_deref(), &roots)?
+            let mut with = Inventory::load_roots(inv.source.as_deref(), &roots)?;
+            // `load_roots` knows no install dates: the global store's, then the project's.
+            let project_lock = Lock::load(p)?.skills.into_iter().map(|l| (l.name.clone(), l));
+            with.installed = inv.installed.clone().into_iter().chain(project_lock).collect();
+            with
         }
         None => inv.clone(),
     };
@@ -420,6 +424,8 @@ fn install(
     };
 
     let installed_at = now()?;
+    // The data lock guards the project's store and `mazo.lock` too, so two
+    // adds into one project are serialized only when they share a data dir.
     let _lock = ledger::lock(data)?;
     // Copied under a hidden name, which no root lists, then renamed into place.
     let staged = store.join(format!(".add-{name}"));
