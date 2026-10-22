@@ -15,8 +15,11 @@ const DAYS: i64 = 30;
 /// Projects, and skills, listed: the most used first.
 const PROJECTS: usize = 10;
 const SKILLS: usize = 20;
-/// Prompts sampled: the latest, by event timestamp.
+/// Prompts sampled: the latest, by event timestamp, one per transcript.
 const PROMPTS: usize = 10;
+/// Transcripts read for them at most, each whole, so that a vet costs a
+/// bounded number of reads however long the history.
+const READS: usize = 2 * PROMPTS;
 /// A prompt is cut to this many characters.
 const PROMPT_CHARS: usize = 200;
 /// The most bytes of the summary the vet judge is sent: a summary past it
@@ -27,7 +30,8 @@ const CUT: &str = "(cut to fit the size cap)\n";
 /// The summary of the strong, main-actor `events` of the last [`DAYS`] days
 /// before `now`: each project (`cwd`) and skill with its event count, most
 /// first and ties by name, then the latest distinct prompts behind them,
-/// newest first and ties by event id, each on one line. With no such event,
+/// newest first and ties by event id, each on one line: the prompt of a
+/// transcript's latest event, from at most [`READS`] transcripts. With no such event,
 /// it says no history is available.
 pub fn summary(events: &[Event], now: Timestamp) -> String {
     let since = now - SignedDuration::from_hours(24 * DAYS);
@@ -49,10 +53,15 @@ pub fn summary(events: &[Event], now: Timestamp) -> String {
         counts.into_iter().take(max).map(|(k, n)| format!("- {k}: {n}\n")).collect::<String>()
     };
     let mut prompts: Vec<(&Timestamp, String)> = Vec::new();
+    let mut read: Vec<&str> = Vec::new();
     for (ts, e) in &recent {
-        if prompts.len() == PROMPTS {
+        if prompts.len() == PROMPTS || read.len() == READS {
             break;
         }
+        if read.contains(&e.src_file()) {
+            continue;
+        }
+        read.push(e.src_file());
         let Some(text) = adapters::for_agent(e.agent).prompt_at(&e.src) else { continue };
         let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(PROMPT_CHARS).collect();
         if !text.is_empty() && !prompts.iter().any(|(_, t)| *t == text) {
@@ -113,24 +122,33 @@ mod tests {
     #[test]
     fn the_summary_counts_projects_and_skills_and_samples_the_latest_prompts() {
         let dir = tempfile::tempdir().unwrap();
-        let t = dir.path().join("t.jsonl");
-        let msgs = ["Tidy the README.", "Write the\n  release notes.", "Tidy the README.", "Old work."];
-        let lines: String = msgs
-            .iter()
-            .map(|m| format!("{}\n", serde_json::json!({"type": "user", "message": {"role": "user", "content": m}})))
-            .collect();
-        std::fs::write(&t, lines).unwrap();
-        let at = |line: usize| format!("{}:{line}", t.display());
-        let mut sub = event("sub", "unslop", "/sub", "2026-10-13T00:00:00Z", &at(1));
+        // Line `n` of transcript `t` is the user message `msgs[n - 1]`.
+        let at = |t: &str, line: usize| format!("{}:{line}", dir.path().join(t).display());
+        for (t, msgs) in [
+            ("t1", &["Tidy the README.", "Read again: a transcript is read once."][..]),
+            ("t2", &["Write the\n  release notes."]),
+            ("t3", &["Tidy the README."]),
+            ("t4", &["Old work."]),
+        ] {
+            let lines: String = msgs
+                .iter()
+                .map(|m| {
+                    format!("{}\n", serde_json::json!({"type": "user", "message": {"role": "user", "content": m}}))
+                })
+                .collect();
+            std::fs::write(dir.path().join(t), lines).unwrap();
+        }
+        let mut sub = event("sub", "unslop", "/sub", "2026-10-13T00:00:00Z", &at("t1", 1));
         sub.actor = Actor::Subagent;
-        let mut weak = event("weak", "unslop", "/weak", "2026-10-13T00:00:00Z", &at(1));
+        let mut weak = event("weak", "unslop", "/weak", "2026-10-13T00:00:00Z", &at("t1", 1));
         weak.channel = Channel::Read;
         let events = [
-            event("b", "unslop", "/b", "2026-10-12T00:00:00Z", &at(1)),
-            event("a", "grade", "/a", "2026-10-12T00:00:00Z", &at(2)),
-            event("c", "unslop", "/a", "2026-10-11T00:00:00Z", &at(3)),
+            event("b", "unslop", "/b", "2026-10-12T00:00:00Z", &at("t1", 1)),
+            event("a", "grade", "/a", "2026-10-12T00:00:00Z", &at("t2", 1)),
+            event("c", "unslop", "/a", "2026-10-11T00:00:00Z", &at("t3", 1)),
+            event("again", "unslop", "/a", "2026-10-11T00:00:00Z", &at("t1", 2)),
             event("gone", "retro", "/b", "2026-10-10T00:00:00Z", "/nonexistent.jsonl:1"),
-            event("old", "unslop", "/old", "2026-09-01T00:00:00Z", &at(4)),
+            event("old", "unslop", "/old", "2026-09-01T00:00:00Z", &at("t4", 1)),
             sub,
             weak,
         ];
@@ -139,8 +157,8 @@ mod tests {
         assert_eq!(
             got,
             "Skill use in the last 30 days, as event counts.\n\
-             Projects:\n- /a: 2\n- /b: 2\n\
-             Skills:\n- unslop: 2\n- grade: 1\n- retro: 1\n\
+             Projects:\n- /a: 3\n- /b: 2\n\
+             Skills:\n- unslop: 3\n- grade: 1\n- retro: 1\n\
              Latest prompts:\n- 2026-10-12: Write the release notes.\n- 2026-10-12: Tidy the README.\n"
         );
         assert_eq!(summary(&events, now), got, "two builds are the same");

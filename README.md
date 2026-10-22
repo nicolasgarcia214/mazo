@@ -214,13 +214,16 @@ check and default $1 cap (for a judge that reports its cost) as `audit`. The
 judge sees every file of the skill, the name and description of every skill in
 `source` and the store, and a summary of your last 30 days of work built from
 the ledger and the transcripts it points into, without a judge call: the ten
-projects (`cwd`) and twenty skills used most, each with its event count, and up to ten of your latest
-prompts, cut to 200 characters, the whole capped at 8 KiB. With no history the
-summary says so and the vet still runs. The judge answers with a security finding (or
-none), a `quality` (`good`, `weak`, `poor`), a `value` (`worth trying`, `low
-value`, `irrelevant`, `redundant`, naming the skill it overlaps), its
-reasons, what the skill is for, and up to three uses to try. An answer that
-breaks the schema is retried once. mazo prints the verdict, then:
+projects (`cwd`) and twenty skills used most, each with its event count, and
+up to ten of your latest prompts, one per transcript and from at most twenty
+transcripts, the whole capped at 8 KiB. With no history the summary says so
+and the vet still runs. The prompts reach the configured judge as you wrote
+them, whitespace collapsed and cut to 200 characters, not redacted. The judge
+answers with a security finding (or none), a `quality` (`good`, `weak`,
+`poor`), a `value` (`worth trying`, `low value`, `irrelevant`, `redundant`,
+naming the skill it overlaps), its reasons, what the skill is for, and up to
+three uses to try. An answer that breaks the schema is retried once. mazo
+prints the verdict, then:
 
 - A security finding refuses the install (exit 1) unless `--force`; with
   `--force` the install still asks as below. A file mazo did not send in
