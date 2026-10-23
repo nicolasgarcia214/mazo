@@ -17,6 +17,12 @@ Links every skill, from `source` and the store, into every home, and replaces
 everything first and writes nothing if any check fails. `--dry-run` prints the
 actions without taking them.
 
+A link to the same-named skill directory of `source` or the store, whose
+target is gone, is mazo's own, so `sync` removes it. When another root now
+holds a skill of that name, as after you delete your copy and `mazo add` one,
+`sync` and `add` link the name to it. Any other entry in a skill's place, a link elsewhere or a real
+file, stops the sync with the command that clears it.
+
 While it writes, `sync` holds the data lock, and it re-plans under the lock. A
 dry run, a refusal or an empty plan takes no lock.
 

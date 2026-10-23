@@ -158,6 +158,13 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
     let present = |p: &Path| gone.is_none_or(|g| !p.starts_with(g)) && p.exists();
     let mut plan = Plan::default();
     let targets = targets(cfg, inv, homes, &present, &mut plan.conflicts);
+    // A link to `<root>/<its name>` for a root of `inv`, whose target is gone:
+    // mazo made it, so mazo may remove it.
+    let owned_dangling = |path: &Path| {
+        fs::read_link(path).is_ok_and(|text| {
+            path.file_name().is_some_and(|n| inv.roots.iter().any(|r| text == r.join(n))) && !present(&text)
+        })
+    };
     // Two homes can share a directory, directly or through a symlink
     // (PI_CODING_AGENT_DIR pointing at another home): plan each physical one once.
     let mut planned: Vec<PathBuf> = Vec::new();
@@ -177,9 +184,17 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         }
         for (name, src) in &t.entries {
             let path = t.dir.join(name);
-            let state = state(&path, src);
+            let state = match state(&path, src) {
+                State::WrongLink if owned_dangling(&path) => State::Dangling,
+                s => s,
+            };
             match state {
                 State::Missing => plan.actions.push(Action::Link { source: src.clone(), path: path.clone() }),
+                // A copy deleted from one root and installed into another.
+                State::Dangling => {
+                    plan.actions.push(Action::Remove(path.clone()));
+                    plan.actions.push(Action::Link { source: src.clone(), path: path.clone() });
+                }
                 State::WrongLink | State::Obstructed => {
                     plan.conflicts.push((
                         t.home.clone(),
@@ -207,11 +222,9 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
             .collect();
         others.sort();
         for path in others {
-            let owned_dangling = fs::read_link(&path).is_ok_and(|text| {
-                path.file_name().is_some_and(|n| inv.roots.iter().any(|r| text == r.join(n))) && !present(&text)
-            });
-            let state = if owned_dangling { State::Dangling } else { State::Foreign };
-            if owned_dangling {
+            let owned = owned_dangling(&path);
+            let state = if owned { State::Dangling } else { State::Foreign };
+            if owned {
                 plan.actions.push(Action::Remove(path.clone()));
             }
             plan.entries.push(Entry { home: t.home.clone(), path, state, scope: Scope::Global });
@@ -374,6 +387,30 @@ mod tests {
                 &Action::Link { source: tmp.path().join("store/theirs"), path: skills.join("theirs") },
             ]
         );
+    }
+
+    #[test]
+    fn a_dangling_link_into_another_root_is_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (cfg, inv) = setup(tmp.path());
+        let homes: Vec<&Home> = cfg.homes.iter().collect();
+        let skills = tmp.path().join("home/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        // `theirs` was a source skill, deleted there and installed into the store.
+        std::os::unix::fs::symlink(tmp.path().join("source/theirs"), skills.join("theirs")).unwrap();
+        let p = plan(&cfg, &inv, &homes, None);
+        assert!(p.conflicts.is_empty(), "{:?}", p.conflicts);
+        assert_eq!(p.entries.iter().find(|e| e.path == skills.join("theirs")).unwrap().state, State::Dangling);
+        super::apply(&p).unwrap();
+        assert_eq!(std::fs::read_link(skills.join("theirs")).unwrap(), tmp.path().join("store/theirs"));
+
+        // A wrong link whose target exists is still the user's to resolve.
+        std::fs::remove_file(skills.join("mine")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("store/theirs"), skills.join("mine")).unwrap();
+        let p = plan(&cfg, &inv, &homes, None);
+        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains(&skills.join("mine").display().to_string()), "{}", errors[0]);
     }
 
     #[test]
