@@ -21,7 +21,6 @@ pub mod inventory;
 pub mod ledger;
 pub mod lifecycle;
 pub mod links;
-pub mod migrate;
 pub mod pick;
 pub mod policy;
 pub mod readcmd;
