@@ -89,6 +89,24 @@ fn add_copies_the_skill_records_it_and_links_it_into_every_home() {
 }
 
 #[test]
+fn add_replaces_the_links_to_a_source_copy_deleted_before_it() {
+    let (fx, dir) = fixture();
+    let copy = fx.source.join("theirs");
+    fs::create_dir_all(&copy).unwrap();
+    for rel in ["SKILL.md", "agents/openai.yaml"] {
+        common::write(&copy.join(rel), &fs::read_to_string(dir.join(rel)).unwrap());
+    }
+    fx.mazo(&["sync"]).assert_ok();
+    fs::remove_dir_all(&copy).unwrap();
+    let r = add(&fx, &[&s(&dir), "--trust"]);
+    r.assert_ok();
+    for skills in skills_dirs(&fx) {
+        assert_eq!(fs::read_link(skills.join("theirs")).unwrap(), store(&fx).join("theirs"), "{}", skills.display());
+    }
+    fx.mazo(&["status"]).assert_ok();
+}
+
+#[test]
 fn a_tilde_source_expands_to_home_and_records_the_absolute_path() {
     let (fx, dir) = fixture();
     let under_home = fx.home.join("skills/theirs");
