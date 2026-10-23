@@ -21,7 +21,10 @@ pub const USAGE_COLUMNS: [(&str, &str); 15] = [
     ("ctx", "what each agent it is linked into keeps of it in context: an agent letter, then its glyph"),
     ("last", "its last strong load: today or Nd ago"),
     ("grade", "the latest /grade score, then its stale mark"),
-    ("audit", "the latest audit's verdict, else the vet mazo add recorded, else not judged"),
+    (
+        "audit",
+        "! the vet mazo add recorded found a security issue, else ✓ audited, else vet only vetted, else -; the card has the verdict",
+    ),
 ];
 
 /// What the TUI's usage table does on a narrow terminal, said under its columns.
@@ -43,7 +46,7 @@ pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
 
 /// The marks and glyphs in the cells, what each means, and how the HTML
 /// report says it when it draws the mark otherwise.
-pub const MARKS: [(&str, &str, Option<&str>); 7] = [
+pub const MARKS: [(&str, &str, Option<&str>); 10] = [
     ("agents", "C Claude, X Codex, P Pi", None),
     ("●", "name and description in context: Claude on, every Codex skill, Pi by default", None),
     ("◐", "name only in context: Claude name-only", None),
@@ -54,6 +57,9 @@ pub const MARKS: [(&str, &str, Option<&str>); 7] = [
     ),
     ("×", "off: Claude off", None),
     ("stale", "the skill changed since the grade", None),
+    ("✓", "audited", None),
+    ("vet", "vetted by mazo add, not audited", None),
+    ("!", "the vet found a security issue", None),
     ("(project)", "a project skill, counted apart", None),
 ];
 
@@ -78,7 +84,7 @@ pub const FAQ: [(&str, &[&str]); 7] = [
         ],
     ),
     (
-        "Why does a skill say not judged?",
+        "Why does a skill show - under audit?",
         &[
             "No audit has run on it, and mazo add never vetted it: a trusted source or a skill of your own is not vetted.",
             "x audits it.",

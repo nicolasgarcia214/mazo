@@ -83,10 +83,15 @@ impl VetVerdict {
         self.value == Worth::WorthTrying && self.quality != Quality::Poor
     }
 
-    /// `quality Q, value V`: the verdict's line in `mazo add` and its
-    /// cell in the usage table.
+    /// `quality Q, value V`: the verdict's line in `mazo add`.
     pub fn summary(&self) -> String {
         format!("quality {}, value {}", name(self.quality), name(self.value))
+    }
+
+    /// The [`Self::summary`], led by `security: <finding>; ` when the judge
+    /// found one: the verdict in the usage `--json` and on the card.
+    pub fn line(&self) -> String {
+        self.security.as_ref().map_or(self.summary(), |f| format!("security: {f}; {}", self.summary()))
     }
 }
 

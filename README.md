@@ -12,9 +12,9 @@ has a judge of your choice vet it.
 ```console
 $ mazo usage
 skill         sess 7d 30d trend slash tool typed read ref agents last   grade audit
-release-notes    3  2   3 new       3    0     0    0   0 C      1d ago     - not judged
-triage           1  1   1 new       1    0     0    0   0 C      4d ago     - not judged
-tidy-imports     0  0   0           0    0     0    0   0        -          - not judged
+release-notes    3  2   3 new       3    0     0    0   0 C      1d ago     - -
+triage           1  1   1 new       1    0     0    0   0 C      4d ago     - -
+tidy-imports     0  0   0           0    0     0    0   0        -          - -
 coverage: claude since 2026-10-14
 legend: agents C Claude, X Codex, P Pi; stale the skill changed since the grade; (project) a project skill, counted apart
 ```

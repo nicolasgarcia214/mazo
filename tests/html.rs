@@ -200,7 +200,8 @@ fn the_legend_lists_the_helps_marks() {
          ◐ name only in context: Claude name-only; \
          ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; \
          × off: Claude off; \
-         stale the skill changed since the grade; (project) a project skill, counted apart"
+         stale the skill changed since the grade; ✓ audited; vet vetted by mazo add, not audited; \
+         ! the vet found a security issue; (project) a project skill, counted apart"
     );
     assert_eq!(legend, format!("legend: {}", mazo::help::legend(true)));
 }
@@ -356,8 +357,8 @@ fn times_are_local_under_a_fixed_zone() {
     assert!(generated.is_match(&page), "generated to the minute");
 }
 
-/// The usage table's audit column carries each skill's latest audit
-/// verdict, else its vet verdict, else `not judged`, and the card shows its date, session count, rates, top three improvements
+/// The usage table's audit column marks each skill `✓` when audited, else
+/// `vet` when vetted, else `-`; the card shows the vet verdict, and the audit's date, session count, rates, top three improvements
 /// and curated examples, escaped; an older record is not shown.
 #[test]
 fn the_latest_audit_is_in_the_usage_table_and_the_card() {
@@ -377,9 +378,12 @@ fn the_latest_audit_is_in_the_usage_table_and_the_card() {
     let verdict = "Good on &lt;short&gt; texts &amp; &quot;notes&quot;";
     let usage = &page[page.find("<h2>Usage</h2>").unwrap()..page.find("coverage:").unwrap()];
     assert!(usage.contains("<th>audit</th>"), "{usage}");
-    assert!(usage.contains(&format!("<td>audit: {verdict}</td></tr>")), "{usage}");
-    assert!(usage.contains("<td>vet: quality weak, value low value</td></tr>"), "{usage}");
-    assert_eq!(usage.matches("<td>not judged</td></tr>").count(), 8, "{usage}");
+    assert!(!usage.contains(verdict), "the verdict is on the card: {usage}");
+    assert_eq!(usage.matches("<td>✓</td></tr>").count(), 1, "{usage}");
+    assert_eq!(usage.matches("<td>vet</td></tr>").count(), 1, "{usage}");
+    assert_eq!(usage.matches("<td>-</td></tr>").count(), 8, "{usage}");
+    let vet = section(&page, "skill-vetted");
+    assert!(vet.contains("<dt>vet</dt><dd>quality weak, value low value</dd>"), "{vet}");
     assert!(!page.contains("OLD VERDICT"), "only the latest record is shown");
 
     let card = section(&page, "skill-unslop");

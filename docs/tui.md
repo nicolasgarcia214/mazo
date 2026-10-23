@@ -23,7 +23,7 @@ lists the dialog's keys instead.
 
 `H` opens the help over any screen: what each column means, the current
 screen's first, the marks and glyphs, and a FAQ on why counts look low, what
-`not judged` and the agent letters mean, and how grade, retro and audit
+`-` under audit and the agent letters mean, and how grade, retro and audit
 differ, and what the tokens in context cost. `j`/`k` and `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it. In
 the `/` filter and the add source, `H` is a literal `H`. The legend under
 `mazo usage` and `mazo unused` and the HTML report's legend are its marks and

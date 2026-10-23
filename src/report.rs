@@ -10,7 +10,7 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp, ToSpan};
 use serde::Serialize;
 
-use crate::audit::SkillRecord;
+use crate::audit::{SkillRecord, VetVerdict};
 use crate::config::Config;
 use crate::ctx::{Contexts, Ctx};
 use crate::evals::{self, Eval, Evals, Grade};
@@ -423,6 +423,9 @@ pub struct UsageRow {
     pub verdict: Option<String>,
     /// Where `verdict` comes from; null when not judged.
     pub verdict_source: Option<VerdictSource>,
+    /// The audit cell ([`verdict_of`]).
+    #[serde(skip)]
+    pub mark: &'static str,
 }
 
 /// How a usage row's last 30 days compare with the 30 before.
@@ -474,35 +477,29 @@ fn vet_of<'i>(inv: &'i Inventory, skill: &str) -> Option<&'i Locked> {
     inv.installed.get(skill).filter(|_| inv.root(skill) != inv.source.as_deref())
 }
 
-/// `skill`'s audit-column verdict and its source (D18). The audit verdict is the
-/// `result.verdict` of the latest audit, the last `skill` record of `skill`
-/// in `audits.jsonl` ([`crate::audit::latest`]), as `show` prints it; else
-/// the vet verdict of its lockfile entry ([`vet_of`]) as
-/// [`crate::audit::VetVerdict::summary`] words it, led by `security:
-/// <finding>; ` when the judge found one, so a cut cell still shows it; else
-/// none. A project skill has no audit, and its entry is in the project's
-/// lockfile.
-fn verdict_of(input: &Input, skill: &str, scope: Scope) -> Option<(VerdictSource, String)> {
-    let vet = || {
-        let locked = match scope {
-            Scope::Global => vet_of(input.inv, skill),
-            Scope::Project => input.inv.project.as_ref()?.installed.get(skill),
-        };
-        let v = locked?.verdict.as_ref()?;
-        let text = v.security.as_ref().map_or(v.summary(), |f| format!("security: {f}; {}", v.summary()));
-        Some((VerdictSource::Vet, text))
+/// `skill`'s audit-column mark, then its verdict and the verdict's source
+/// (D18). The mark is `!` when the vet of its lockfile entry ([`vet_of`])
+/// found a security issue, else `✓` when an audit judged it, else `vet` when
+/// only the vet did, else `-`. The verdict is the `result.verdict` of the
+/// latest audit, the last `skill` record of `skill` in `audits.jsonl`
+/// ([`crate::audit::latest`]), as `show` prints it; else the vet verdict as
+/// [`crate::audit::VetVerdict::line`] words it; else none. A project skill
+/// has no audit, and its entry is in the project's lockfile.
+fn verdict_of(input: &Input, skill: &str, scope: Scope) -> (&'static str, Option<(VerdictSource, String)>) {
+    let locked = match scope {
+        Scope::Global => vet_of(input.inv, skill),
+        Scope::Project => input.inv.project.as_ref().and_then(|p| p.installed.get(skill)),
     };
-    let audit = || input.audits.get(skill).filter(|_| scope == Scope::Global);
-    audit().map(|a| (VerdictSource::Audit, a.result.verdict.clone())).or_else(vet)
-}
-
-/// The audit cell in full: `audit: <verdict>`, `vet: <verdict>` or
-/// `not judged`. The text table cuts it to [`VERDICT_CHARS`].
-pub fn verdict_text(r: &UsageRow) -> String {
-    match (r.verdict_source, &r.verdict) {
-        (Some(source), Some(v)) => format!("{}: {v}", name(source)),
-        _ => "not judged".into(),
-    }
+    let vet = locked.and_then(|l| l.verdict.as_ref());
+    let audit = input.audits.get(skill).filter(|_| scope == Scope::Global);
+    let mark = match (vet, audit) {
+        (Some(v), _) if v.security.is_some() => "!",
+        (_, Some(_)) => "✓",
+        (Some(_), None) => "vet",
+        (None, None) => "-",
+    };
+    let verdict = audit.map(|a| (VerdictSource::Audit, a.result.verdict.clone()));
+    (mark, verdict.or_else(|| vet.map(|v| (VerdictSource::Vet, v.line()))))
 }
 
 /// The usage table: what `usage --json` emits.
@@ -553,7 +550,8 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
             // Only a source or store skill has grades.
             let global = scope == Scope::Global && input.inv.skills.contains(skill);
             let grade = global.then(|| grade_out(&evals::load(&input.cfg.evals_dir, input.inv, skill))).flatten();
-            let (verdict_source, verdict) = verdict_of(input, skill, scope).unzip();
+            let (mark, verdict) = verdict_of(input, skill, scope);
+            let (verdict_source, verdict) = verdict.unzip();
             UsageRow {
                 skill: skill.to_string(),
                 scope,
@@ -573,6 +571,7 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
                 grade,
                 verdict,
                 verdict_source,
+                mark,
             }
         })
         .collect();
@@ -612,11 +611,7 @@ pub const USAGE_HEADER: [(&str, Align); 15] = [
     ("audit", Align::Left),
 ];
 
-/// The usage table's audit cell is cut to this many characters with `…`:
-/// a vet cell always fits, a long audit verdict is cut.
-const VERDICT_CHARS: usize = 40;
-
-/// `r`'s cells under [`USAGE_HEADER`], the grade mark painted when `tty`.
+/// `r`'s cells under [`USAGE_HEADER`], the grade and audit marks painted when `tty`.
 pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
     vec![
         format!("{}{}", r.skill, r.scope.suffix()),
@@ -633,7 +628,7 @@ pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
         r.ctx.cell(),
         r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)),
         grade_cell(&r.grade, tty),
-        cut(&verdict_text(r), VERDICT_CHARS),
+        render::paint(r.mark, tty),
     ]
 }
 
@@ -976,6 +971,8 @@ pub struct Card<'a> {
     pub examples: Examples,
     /// The latest skill record.
     pub audit: Option<&'a SkillRecord>,
+    /// The verdict `mazo add` recorded when it vetted the skill.
+    pub vet: Option<&'a VetVerdict>,
     pub ctx: Ctx,
 }
 
@@ -1170,6 +1167,7 @@ fn card<'a>(view: &View<'a>, graph: &inventory::Graph, skill: &'a str, args: &Us
         usage: card_usage(view, &f, skill, start),
         examples,
         audit,
+        vet: vet.and_then(|l| l.verdict.as_ref()),
         // `show` takes only a known name, never a project-only one, so a card is a global skill's.
         ctx: view.ctx().of(inv, skill, Scope::Global),
     }
@@ -1329,6 +1327,9 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
                 c.situation, c.asked, c.happened, c.tip, c.session
             ));
         }
+    }
+    if let Some(v) = card.vet {
+        out.push_str(&format!("vet: {}\n", v.line()));
     }
     match card.audit {
         None => out.push_str("audit: none\n"),

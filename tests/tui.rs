@@ -122,26 +122,26 @@ fn usage_row_shows_its_sessions_and_its_grade_mark_in_the_status_colour() {
     assert!(sess > 0);
     assert_eq!(row(&lines, "unslop")[1], sess.to_string());
     let words = row(&lines, "unslop");
-    let quality = words.iter().position(|w| w == "audit:").unwrap();
-    assert_eq!(words[quality - 2..quality], ["7", "stale"], "{lines:#?}");
+    assert_eq!(words[words.len() - 3..], ["7", "stale", "✓"], "{lines:#?}");
     assert_eq!(colour_of(&screen, "unslop", "stale"), mazo::theme::WARN);
     assert_eq!(colour_of(&screen, "unslop", "unslop"), Color::Reset);
 }
 
-/// The quality column shows `unslop`'s audit, a store skill's vet and
-/// `not judged` for the rest, cut as `usage` cuts it.
+/// The audit column marks `unslop`'s audit `✓`, a store skill's vet `vet`
+/// and the rest `-`, muted.
 #[test]
-fn usage_rows_show_the_audit_else_the_vet_else_not_judged() {
+fn usage_rows_mark_the_audit_else_the_vet_else_a_dash() {
     let mut golden = Golden::new();
     let data = tempfile::tempdir().unwrap();
     common::vetted(data.path());
     golden.world.inv = store::inventory(Some(golden.repo.path()), data.path()).unwrap();
     let input = golden.world.input(&golden.events);
-    let lines = text(&mut app(&input), 200, 40);
+    let screen = draw(&mut app(&input), 200, 40);
+    let lines: Vec<String> = screen.iter().map(|(t, _)| t.clone()).collect();
     let tail = |skill: &str| row(&lines, skill).join(" ");
-    assert!(tail("unslop").ends_with(" audit: Good on <short> texts"), "{lines:#?}");
-    assert!(tail("vetted").ends_with(" vet: quality weak, value low value"), "{lines:#?}");
-    assert!(tail("goal-plan").ends_with(" not judged"), "{lines:#?}");
+    assert!(tail("unslop").ends_with(" ✓"), "{lines:#?}");
+    assert!(tail("vetted").ends_with(" vet"), "{lines:#?}");
+    assert!(tail("goal-plan").ends_with(" - -"), "{lines:#?}");
 }
 
 /// AC3: a store skill's grade, read from `evals_dir`, fills its grade cell.
@@ -155,7 +155,7 @@ fn a_store_skills_grade_shows_in_the_grade_column() {
     let input = golden.world.input(&golden.events);
     let screen = draw(&mut app(&input), 200, 40);
     let lines: Vec<String> = screen.iter().map(|(t, _)| t.clone()).collect();
-    assert!(row(&lines, "vetted").join(" ").ends_with(" 8.6 stale vet: quality weak, value low value"), "{lines:#?}");
+    assert!(row(&lines, "vetted").join(" ").ends_with(" 8.6 stale vet"), "{lines:#?}");
     assert_eq!(colour_of(&screen, "vetted", "stale"), mazo::theme::WARN);
 }
 
@@ -725,7 +725,10 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
     let usage = help(&mut app, 200, 80).unwrap();
     let usage: Vec<String> = usage.into_iter().filter(|l| !l.is_empty()).collect();
     assert_eq!(usage[..3], ["Columns", "usage", "skill  the skill's name; (project) marks a project skill"]);
-    assert!(usage.iter().any(|l| l.starts_with("audit  the latest audit's verdict")), "{usage:#?}");
+    assert!(
+        usage.iter().any(|l| l.starts_with("audit  ! the vet mazo add recorded found a security issue")),
+        "{usage:#?}"
+    );
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Char('H'));
@@ -747,7 +750,7 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
         "hidden until A",
         "Probe sessions",
         "Project rows",
-        "Why does a skill say not judged?",
+        "Why does a skill show - under audit?",
         "C is Claude, X is Codex and P is Pi.",
         "grade is a static review of the SKILL.md",
         "retro judges one run in context, right after it ran.",

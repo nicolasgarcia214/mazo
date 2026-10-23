@@ -31,7 +31,7 @@ th, td { padding: 2px 8px; text-align: left; border-bottom: 1px solid var(--line
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 code, .mono { font-family: ui-monospace, monospace; font-size: 13px; }
 .muted { color: var(--muted); }
-.stale { color: var(--warn); }
+.warn { color: var(--warn); }
 .wrap { overflow-x: auto; }
 svg .s { fill: var(--strong); }
 svg .w { fill: var(--weak); }
@@ -65,7 +65,7 @@ fn anchor(skill: &str) -> String {
 fn grade(g: Option<&GradeOut>) -> String {
     let Some(g) = g else { return "-".into() };
     let score = esc(g.grade.eval.score.as_deref().unwrap_or("?"));
-    if g.grade.stale { format!("<span class=\"stale\">{score} {}</span>", g.mark) } else { score }
+    if g.grade.stale { format!("<span class=\"warn\">{score} {}</span>", g.mark) } else { score }
 }
 
 /// The card histogram: one column per day with events, strong below weak.
@@ -138,7 +138,7 @@ fn usage(model: &Report) -> String {
                 esc(&r.ctx.cell()),
                 local(r.last.as_deref(), &model.tz, DAY),
                 grade(r.grade.as_ref()),
-                esc(&report::verdict_text(r)),
+                if r.mark == "!" { "<span class=\"warn\">!</span>" } else { r.mark },
             )
         })
         .collect();
@@ -280,7 +280,7 @@ fn card(c: &Card, tz: &TimeZone) -> String {
          <dl><dt>description</dt><dd>{desc}</dd><dt>path</dt><dd class=\"mono\">{path}</dd>{history}\
          <dt>cites</dt><dd>{cites}</dd><dt>cited by</dt><dd>{cited_by}</dd>\
          <dt>strong</dt><dd>{strong}</dd><dt>last use</dt><dd>{last_use}</dd><dt>projects</dt><dd>{projects}</dd>\
-         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{examples}{audit}</dl></section>",
+         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{examples}{vet}{audit}</dl></section>",
         id = anchor(c.skill),
         name = esc(c.skill),
         hist = histogram(&c.histogram),
@@ -298,6 +298,7 @@ fn card(c: &Card, tz: &TimeZone) -> String {
         retro_note = esc(&c.retro_note()),
         retros = if retros.is_empty() { String::new() } else { table(&["date", "score", "verdict"], &retros) },
         examples = examples(&c.examples, tz),
+        vet = c.vet.map_or(String::new(), |v| format!("<dt>vet</dt><dd>{}</dd>", esc(&v.line()))),
         audit = audit(c.audit, tz),
     )
 }

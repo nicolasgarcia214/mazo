@@ -302,12 +302,12 @@ fn token(t: &str) -> Span<'static> {
 }
 
 /// The spans of `cell` in the column `head`: a grade of 9 or more green and its mark apart,
-/// `today` in the accent, and zero counts, `-` and `not judged` muted. In
-/// any other column each `; `-separated note is styled as a status token.
+/// `today` in the accent, and zero counts and `-` muted. In any other column,
+/// the audit mark among them, each `; `-separated note is styled as a status token.
 fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
     let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
     match (head, cell) {
-        (_, "-" | "0" | "not judged") => vec![muted(cell)],
+        (_, "-" | "0") => vec![muted(cell)],
         (_, "today") => vec![Span::raw("today").fg(theme::ACCENT)],
         ("grade", _) => {
             let (score, mark) = cell.split_once(' ').unwrap_or((cell, ""));
@@ -316,10 +316,6 @@ fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
             let mark = (!mark.is_empty()).then(|| [Span::raw(" "), token(mark)]);
             [score].into_iter().chain(mark.into_iter().flatten()).collect()
         }
-        ("audit", _) => match cell.split_once(": ") {
-            Some((judge, verdict)) => vec![muted(&format!("{judge}: ")), Span::raw(verdict.to_string())],
-            None => vec![Span::raw(cell.to_string())],
-        },
         _ => {
             let mut out = Vec::new();
             for (i, piece) in cell.split("; ").enumerate() {
@@ -369,7 +365,6 @@ const NARROWING: &[Narrow] = &[
     Narrow::Drop("ctx"),
     Narrow::Cut("notes"),
     Narrow::Cut("skill"),
-    Narrow::Cut("audit"),
 ];
 
 /// `cols` narrowed by [`NARROWING`] until they fit in `room` columns, one

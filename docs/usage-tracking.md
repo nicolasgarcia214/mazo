@@ -52,16 +52,19 @@ One row per skill: sessions in the window, sessions over the last 7 and 30
 local days whatever the window, the trend of the last 30 days against the 30
 before (`↑` at +20% or more, `↓` at -20% or less, `→` otherwise, `new` from
 none, blank for none in either), loads per channel, agents, last use, the
-latest grade, and the audit column. That column is the first of
-these that exists, cut to 40 characters with `…`:
+latest grade, and the audit column. That column is a mark, the first of these
+that holds:
 
-1. the latest audit's verdict, labelled `audit:`;
-2. the verdict `mazo add` recorded when it vetted the skill, labelled `vet:` and
-   led by any security finding;
-3. `not judged`.
+1. `!`: the verdict `mazo add` recorded when it vetted the skill has a security
+   finding;
+2. `✓`: an audit judged it;
+3. `vet`: only the vet judged it;
+4. `-`: neither.
 
-`--json` carries the full `verdict` and its `verdict_source` (`audit`, `vet`,
-or null when not judged). `usage` leaves out `probe` sessions unless `--all`
+The card (`mazo show`) prints the vet verdict and the latest audit's.
+`--json` carries the `verdict`, the audit's when there is one, else the vet's
+led by any security finding, and its `verdict_source` (`audit`, `vet`, or null
+when not judged). `usage` leaves out `probe` sessions unless `--all`
 (see [actors](#actors)). Project skills get their own rows; see
 [project skills](project-skills.md#status-and-usage-in-a-project).
 

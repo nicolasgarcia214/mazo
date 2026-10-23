@@ -26,12 +26,13 @@ pub enum Colour {
     Yellow,
 }
 
-/// The colour of a status token: red for `unused` and `ERROR:`, yellow for
+/// The colour of a status token: red for `unused`, `ERROR:` and the audit
+/// column's security mark `!`, yellow for
 /// `held`, `new`, `warning:`, a `named by` note and a grade's `stale` mark;
 /// `None` for any other token.
 pub fn status_colour(token: &str) -> Option<Colour> {
     match token {
-        "unused" | "ERROR:" => Some(Colour::Red),
+        "unused" | "ERROR:" | "!" => Some(Colour::Red),
         "held" | "new" | "warning:" | "stale" => Some(Colour::Yellow),
         t if t.starts_with("named by ") => Some(Colour::Yellow),
         _ => None,

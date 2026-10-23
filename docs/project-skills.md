@@ -54,8 +54,9 @@ Run inside a git repository with a `mazo.lock` at its root, `mazo status` and
   line fails `status` as home drift does. `--json` lists every project link
   under `project`.
 - `usage` counts a project skill's loads through either project link or its
-  `.mazo/skills/<name>` directory. Its audit column is the vet in the project's
-  `mazo.lock`, and it has no grade. A name both global and in the project gets
+  `.mazo/skills/<name>` directory. Its audit column marks the vet in the project's
+  `mazo.lock`, and it has no grade. A card shows only the global skill, so
+  the project vet's verdict is in `usage --json`. A name both global and in the project gets
   one row per scope, counted apart.
 - The `--json` rows of both commands carry `scope`, `global` or `project`.
   Outside a project that field is the only change.

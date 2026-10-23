@@ -22,6 +22,7 @@ const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; \
                       ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; \
                       × off: Claude off; \
                       stale the skill changed since the grade; \
+                      ✓ audited; vet vetted by mazo add, not audited; ! the vet found a security issue; \
                       (project) a project skill, counted apart";
 
 fn args() -> UsageArgs {
@@ -285,7 +286,7 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     assert!(line("goal-smart").ends_with(&format!("{reset} cluster: goal-execute, goal-plan")), "{text}");
     let usage = report::usage(&input, &args(), false, on);
     let unslop = usage.lines().find(|l| l.starts_with("unslop ")).unwrap();
-    assert!(unslop.ends_with(&format!("9.1 {yellow}stale{reset} not judged")), "{usage}");
+    assert!(unslop.ends_with(&format!("9.1 {yellow}stale{reset} -")), "{usage}");
     assert_eq!(usage.lines().skip(1).map(|l| l.matches('\x1b').count()).sum::<usize>(), 2, "only the mark: {usage}");
 
     let off = render::colour(true, Some(std::ffi::OsStr::new("1")));
@@ -428,7 +429,7 @@ fn usage_collapses_and_applies_default_filters() {
     );
     assert!(lines[1].starts_with("unslop "), "highest sess first: {text}");
     assert!(lines[1].contains("  3  3   3 ↑ "), "Z 40 days ago is in the 30 before: {text}");
-    assert!(lines[1].ends_with(" CX     C●X● 1d ago     - not judged"), "no strip: {text}");
+    assert!(lines[1].ends_with(" CX     C●X● 1d ago     - -"), "no strip: {text}");
     let execute = lines.iter().find(|l| l.starts_with("goal-execute ")).unwrap();
     assert!(execute.contains("  0  0   0 ↓ "), "{text}");
     let plan = lines.iter().find(|l| l.starts_with("goal-plan ")).unwrap();
@@ -448,13 +449,12 @@ fn usage_collapses_and_applies_default_filters() {
     assert!(report::usage(&input, &args(), false, true).starts_with("\x1b[1mskill"));
 }
 
-/// The quality column is the latest audit's verdict labelled `audit`, else
-/// the lockfile's vet verdict labelled `vet`, led by any security finding,
-/// else `not judged`; `--json`
-/// carries the verdict and its source apart. The text cell is cut to 40
-/// characters with `…`, between chars.
+/// The audit column marks a vet security finding `!`, else an audit `✓`,
+/// else a vet `vet`, else `-`; `--json` carries the latest audit's verdict,
+/// else the vet's led by any security finding, and its source apart. The
+/// card prints the vet verdict whenever there is one.
 #[test]
-fn usage_quality_is_the_latest_audit_else_the_vet_else_not_judged() {
+fn usage_audit_marks_a_security_finding_else_an_audit_else_a_vet() {
     let repo = report_repo();
     let data = tempfile::tempdir().unwrap();
     common::vetted(data.path());
@@ -478,12 +478,11 @@ fn usage_quality_is_the_latest_audit_else_the_vet_else_not_judged() {
 
     let text = report::usage(&input, &args(), false, false);
     let line = |skill: &str| text.lines().find(|l| l.starts_with(&format!("{skill} "))).unwrap().to_string();
-    let cut: String = format!("audit: {long}").chars().take(39).chain(['…']).collect();
-    assert!(line("unslop").ends_with(&format!(" {cut}")), "{text}");
-    assert!(line("vetted").ends_with(" vet: quality weak, value low value"), "{text}");
-    assert!(line("goal-plan").ends_with(" not judged"), "{text}");
+    assert!(line("unslop").ends_with(" ✓"), "{text}");
+    assert!(line("vetted").ends_with(" vet"), "{text}");
+    assert!(line("goal-plan").ends_with(" -"), "{text}");
 
-    // A security finding leads the vet verdict, so the cut cell shows it.
+    // A security finding leads the vet verdict and marks the cell.
     let lock = data.path().join("mazo.lock");
     let text = std::fs::read_to_string(&lock).unwrap();
     write(&lock, &text.replace("[skill.verdict]\n", "[skill.verdict]\nsecurity = \"Sends files to a remote host.\"\n"));
@@ -491,19 +490,24 @@ fn usage_quality_is_the_latest_audit_else_the_vet_else_not_judged() {
     let finding = "security: Sends files to a remote host.; quality weak, value low value";
     let input = w.input(&[]);
     assert_eq!(row(&report::usage(&input, &args(), true, false), "vetted")["verdict"], finding);
-    let text = report::usage(&input, &args(), false, false);
-    let cut: String = format!("vet: {finding}").chars().take(39).chain(['…']).collect();
-    assert!(text.lines().any(|l| l.starts_with("vetted ") && l.ends_with(&format!(" {cut}"))), "{text}");
+    let text = report::usage(&input, &args(), false, true);
+    assert!(text.lines().any(|l| l.starts_with("vetted ") && l.ends_with(" \x1b[31m!\x1b[0m")), "{text}");
 
-    // An audit wins over the vet.
+    // An audit wins over the vet's verdict, not over its security mark, and the card prints both.
     write(
         &data.path().join("audits.jsonl"),
         &(audits + &skill_record("Fine.", NOW).replace("\"unslop\"", "\"vetted\"")),
     );
     w.audits = mazo::audit::latest(data.path()).unwrap();
-    let json = report::usage(&w.input(&[]), &args(), true, false);
+    let input = w.input(&[]);
+    let json = report::usage(&input, &args(), true, false);
     assert_eq!(row(&json, "vetted")["verdict_source"], "audit");
     assert_eq!(row(&json, "vetted")["verdict"], "Fine.");
+    let text = report::usage(&input, &args(), false, false);
+    assert!(text.lines().any(|l| l.starts_with("vetted ") && l.ends_with(" !")), "{text}");
+    let card = report::show(&input, "vetted", Since::Days(30), 20, false, false).unwrap();
+    assert!(card.contains(&format!("\nvet: {finding}\naudit: ")), "{card}");
+    assert!(card.contains(": Fine.\n"), "{card}");
 }
 
 /// The `--json` usage row of `skill` in `scope`.
@@ -573,9 +577,7 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     for skill in ["unslop (project) ", "vetted (project) ", "unslop "] {
         assert!(text.lines().any(|l| l.starts_with(skill)), "{skill}: {text}");
     }
-    assert!(
-        text.lines().any(|l| l.starts_with("vetted (project) ") && l.ends_with(" vet: quality weak, value low value"))
-    );
+    assert!(text.lines().any(|l| l.starts_with("vetted (project) ") && l.ends_with(" vet")));
 
     // Outside the project every row is global, and the text names no project.
     let rows = serde_json::from_str::<Value>(&outside).unwrap()["rows"].as_array().unwrap().clone();
@@ -840,6 +842,7 @@ fn show_prints_the_card() {
         "usage",
         "examples",
         "audit",
+        "vet",
         "ctx",
     ];
     assert_eq!(keys, BTreeSet::from(all));
