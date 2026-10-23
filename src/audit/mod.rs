@@ -146,12 +146,25 @@ fn exact(micros: u64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// `text` between `<open>` and its closing tag; a closing tag inside is
-/// written `<\/tag>`, so the text cannot end its own frame.
+/// The token every frame's tag name ends in: 64 bits from the OS-seeded
+/// keys of a [`RandomState`](std::collections::hash_map::RandomState), fresh to each process.
+static NONCE: LazyLock<String> = LazyLock::new(|| {
+    use std::hash::BuildHasher;
+    format!("{:016x}", std::collections::hash_map::RandomState::new().hash_one(()))
+});
+
+/// `text` in the frame [`enclose`] makes. The nonce is cut from `text`, so
+/// no text can close its frame or forge another; any other tag in it is text.
 fn frame(open: &str, text: &str) -> String {
+    enclose(open, &text.replace(&*NONCE, "[nonce]"))
+}
+
+/// `body` between `<open>`, its tag name suffixed with [`NONCE`], and the
+/// matching closing tag; `body` is frames, or text cut by [`frame`].
+fn enclose(open: &str, body: &str) -> String {
     let tag = open.split(' ').next().unwrap_or(open);
-    let close = format!("</{tag}>");
-    format!("<{open}>\n{}\n{close}\n", text.trim_end().replace(&close, &format!("<\\/{tag}>")))
+    let (attrs, nonce) = (&open[tag.len()..], &*NONCE);
+    format!("<{tag}-{nonce}{attrs}>\n{}\n</{tag}-{nonce}>\n", body.trim_end())
 }
 
 /// The input of a retry: the first call's, and why its answer was rejected.
@@ -382,11 +395,11 @@ fn judge<T>(
         let reply = c.backend.call(c.data, c.judge.billing, stage, cap, &input, &|| c.cancelled())?;
         *spent += reply.cost.unwrap_or_default();
         cost = reply.cost.map(|r| r + cost.unwrap_or_default());
-        match reply.answer.map(&check) {
+        match reply.answer.map(|a| check(render::inert_value(a))) {
             Ok(Ok(answer)) => return Ok(Ruling::Valid(answer, cost)),
             Ok(Err(e)) => (why, rejected) = (Some(e.clone()), Some(e)),
-            Err(NoAnswer::Retry(e)) => (why, rejected) = (Some(e), None),
-            Err(NoAnswer::Stop(e)) => return Ok(Ruling::Stopped(e)),
+            Err(NoAnswer::Retry(e)) => (why, rejected) = (Some(render::inert(&e)), None),
+            Err(NoAnswer::Stop(e)) => return Ok(Ruling::Stopped(render::inert(&e))),
         }
     }
     Ok(Ruling::Dropped(why.unwrap_or_default()))

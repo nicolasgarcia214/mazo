@@ -54,8 +54,8 @@ pub struct Judge {
 
 impl Judge {
     /// Why the table is invalid: `command` without an `argv`, `http` without
-    /// a `url` or a `model` or with a blank `api_key_env`, or another agent's
-    /// fields.
+    /// a `url` or a `model`, with a blank `api_key_env`, or with one whose key
+    /// would cross the network in cleartext, or another agent's fields.
     fn check(&self) -> std::result::Result<(), &'static str> {
         let (command, http) = (self.agent == JudgeAgent::Command, self.agent == JudgeAgent::Http);
         let blank = |v: &Option<String>| v.as_deref().is_none_or(str::is_empty);
@@ -67,12 +67,28 @@ impl Judge {
             Err("[judge] agent = \"http\" needs a url and a model")
         } else if http && self.api_key_env.as_deref() == Some("") {
             Err("[judge] api_key_env must name a variable")
+        } else if http && self.api_key_env.is_some() && self.url.as_deref().is_some_and(cleartext) {
+            Err("[judge] api_key_env needs an https url, or http to localhost, 127.0.0.0/8 or ::1")
         } else if !http && (self.url.is_some() || self.api_key_env.is_some()) {
             Err("[judge] url and api_key_env are for agent = \"http\" only")
         } else {
             Ok(())
         }
     }
+}
+
+/// Whether `url` is plain `http://` to anything but localhost, 127.0.0.0/8
+/// or ::1. A url this parser refuses counts as cleartext, since the request's
+/// own parser may still accept it.
+fn cleartext(url: &str) -> bool {
+    use url::Host;
+    let loopback = |u: url::Url| match u.host() {
+        Some(Host::Domain(d)) => d == "localhost",
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://")) && !url::Url::parse(url).is_ok_and(loopback)
 }
 
 /// The agent mazo audit calls: one of the homes' agents, any CLI that
@@ -216,6 +232,26 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
             "{}: trusted entry {bad:?} must be owner, owner/repo, host/owner or host/owner/repo",
             path.display()
         )));
+    }
+    // Plain components, `.` aside: no root or `..` to leave the directory a
+    // `links` key or value is joined to.
+    let inside = |p: &str| {
+        let mut components = Path::new(p).components().filter(|c| *c != Component::CurDir).peekable();
+        components.peek().is_some() && components.all(|c| matches!(c, Component::Normal(_)))
+    };
+    // A `loose` entry names its link too, so it is exactly one plain component.
+    let file_name = |l: &String| matches!(Path::new(l).components().collect::<Vec<_>>()[..], [Component::Normal(n)] if n == l.as_str());
+    if let Some(bad) = raw.loose.iter().find(|l| !file_name(l)) {
+        return Err(Error::Usage(format!("{}: loose entry {bad:?} must be a file name in source", path.display())));
+    }
+    for h in &raw.homes {
+        if let Some((k, v)) = h.links.iter().find(|(k, v)| !inside(k) || !inside(v)) {
+            return Err(Error::Usage(format!(
+                "{}: home {:?} link {k:?} = {v:?} must map a path in the home to a path in source",
+                path.display(),
+                h.name
+            )));
+        }
     }
     if raw.context_window == Some(0) {
         return Err(Error::Usage(format!("{}: context_window must be a positive number of tokens", path.display())));
@@ -597,12 +633,43 @@ mod tests {
     }
 
     #[test]
+    fn loose_entries_and_links_stay_inside_source_and_the_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let load = |text: &str| {
+            let path = tmp.path().join("config.toml");
+            fs::write(&path, format!("source = \".\"\n{text}")).unwrap();
+            load(&path).map(|c| c.is_some())
+        };
+        let home =
+            |links: &str| format!("[[home]]\nname = \"pi\"\nagent = \"codex\"\npath = \".\"\nlinks = {{ {links} }}\n");
+        let ok = [
+            "loose = [\"SKILLS_USAGE.md\"]\n".to_string(),
+            home("\"extensions/pi-explicit-skills.ts\" = \"pi-explicit-skills.ts\""),
+            home("\"AGENTS.md\" = \"docs/AGENTS.md\""),
+            home("\"./AGENTS.md\" = \"./docs/AGENTS.md\""),
+        ];
+        for ok in ok {
+            assert!(load(&ok).unwrap(), "{ok:?}");
+        }
+        for bad in ["", ".", "..", "../x.md", "/etc/passwd", "docs/x.md", "./x.md", "x.md/"] {
+            let err = load(&format!("loose = [{bad:?}]\n")).unwrap_err();
+            assert!(matches!(&err, Error::Usage(m) if m.contains(&format!("loose entry {bad:?}"))), "{bad:?}: {err}");
+        }
+        for bad in ["", ".", "../../canary/evil.ts", "/tmp/evil.ts", "a/../../b"] {
+            for links in [format!("{bad:?} = \"x.ts\""), format!("\"x.ts\" = {bad:?}")] {
+                let err = load(&home(&links)).unwrap_err();
+                assert!(matches!(&err, Error::Usage(m) if m.contains("must map a path in the home")), "{links}: {err}");
+            }
+        }
+    }
+
+    #[test]
     fn a_judge_table_round_trips_through_serialize_and_load() {
         let tables = [
             "[judge]\nagent = \"claude\"\nbilling = \"subscription\"\n",
             "[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\nbilling = \"api\"\n",
             "[judge]\nagent = \"command\"\nbilling = \"subscription\"\nargv = [\"llm\", \"-m\", \"x\"]\n",
-            "[judge]\nagent = \"http\"\nmodel = \"m\"\nbilling = \"api\"\nurl = \"http://h/v1\"\napi_key_env = \"K\"\n",
+            "[judge]\nagent = \"http\"\nmodel = \"m\"\nbilling = \"api\"\nurl = \"https://h/v1\"\napi_key_env = \"K\"\n",
         ];
         for table in tables {
             let raw: RawConfig = toml::from_str(&format!("source = \".\"\n{table}")).unwrap();
@@ -649,11 +716,11 @@ mod tests {
             fs::write(&path, format!("source = \".\"\n{table}")).unwrap();
             load(&path).map(|c| c.unwrap().judge.unwrap())
         };
-        let j = load_judge("[judge]\nagent = \"http\"\nurl = \"http://h/v1\"\nmodel = \"m\"\napi_key_env = \"K\"\n")
+        let j = load_judge("[judge]\nagent = \"http\"\nurl = \"https://h/v1\"\nmodel = \"m\"\napi_key_env = \"K\"\n")
             .unwrap();
         assert_eq!(
             (j.agent, j.url.as_deref(), j.model.as_deref(), j.api_key_env.as_deref()),
-            (JudgeAgent::Http, Some("http://h/v1"), Some("m"), Some("K"))
+            (JudgeAgent::Http, Some("https://h/v1"), Some("m"), Some("K"))
         );
         assert_eq!(load_judge("[judge]\nagent = \"http\"\nurl = \"u\"\nmodel = \"m\"\n").unwrap().api_key_env, None);
         let usage = |table: &str| match load_judge(table) {
@@ -671,6 +738,41 @@ mod tests {
         }
         let blank = usage("[judge]\nagent = \"http\"\nurl = \"u\"\nmodel = \"m\"\napi_key_env = \"\"\n");
         assert!(blank.ends_with("[judge] api_key_env must name a variable"), "{blank}");
+        let keyed = |url: &str| {
+            load_judge(&format!("[judge]\nagent = \"http\"\nurl = \"{url}\"\nmodel = \"m\"\napi_key_env = \"K\"\n"))
+        };
+        for url in [
+            "http://10.0.0.5:11434/v1",
+            "HTTP://h/v1",
+            "http://localhost.evil.com/v1",
+            "http://127.0.0.1@h/v1",
+            "http://[::2]/v1",
+            // TOML for `http://evil\@localhost/v1`: the backslash ends the host.
+            "http://evil\\\\@localhost/v1",
+            "http://1.2.3.999/v1",
+            "http://xn--a.evil.com/v1",
+        ] {
+            let cleartext = match keyed(url) {
+                Err(Error::Usage(e)) => e,
+                other => panic!("{url}: {other:?}"),
+            };
+            let want = "[judge] api_key_env needs an https url, or http to localhost, 127.0.0.0/8 or ::1";
+            assert!(cleartext.ends_with(want), "{url}: {cleartext}");
+        }
+        for url in [
+            "https://h/v1",
+            "http://localhost:11434/v1",
+            "http://LOCALHOST",
+            "http://127.8.0.1/v1",
+            "http://u:p@[::1]:8080/v1",
+            "u",
+        ] {
+            assert!(keyed(url).is_ok(), "{url}");
+        }
+        assert!(
+            load_judge("[judge]\nagent = \"http\"\nurl = \"http://10.0.0.5/v1\"\nmodel = \"m\"\n").is_ok(),
+            "no key, no leak"
+        );
         for table in [
             "[judge]\nurl = \"u\"\n",
             "[judge]\nagent = \"codex\"\napi_key_env = \"K\"\n",

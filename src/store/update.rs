@@ -191,8 +191,8 @@ fn refresh(
 
     // Staged under a name of this process's own, so that the judge and the
     // y/N prompt run without the data lock.
-    let staged = Scratch(store.join(format!(".update-{}-{}", l.name, std::process::id())));
-    let content_hash = stage(&src, &files, &skill_md, &staged.0)?;
+    let staged = store.join(format!(".update-{}-{}", l.name, std::process::id()));
+    let (staged, content_hash) = stage(&src, &files, &skill_md, staged)?;
     if content_hash == l.content_hash && remote.r#ref == l.r#ref {
         return Ok(None);
     }

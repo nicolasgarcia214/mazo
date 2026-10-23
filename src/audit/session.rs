@@ -101,9 +101,10 @@ fn records(condensed: &str) -> Vec<(u64, String)> {
     out
 }
 
-/// Lowercased, with every run of whitespace one space.
+/// Inert, as the answer is checked, lowercased, with every run of whitespace
+/// one space.
 fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    crate::render::inert(s).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 /// The field of the first of `texts` that quotes the session, and the text it

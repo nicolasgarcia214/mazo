@@ -264,7 +264,7 @@ impl<'a> View<'a> {
             .map(|h| {
                 let text = match self.input.coverage.get(&h.name) {
                     None => "never scanned".to_string(),
-                    Some(c) => match c.first.as_deref().and_then(|f| f.parse::<Timestamp>().ok()) {
+                    Some(c) => match c.first_at() {
                         None => "no transcripts".to_string(),
                         Some(first) => {
                             let from = start.map_or(first, |s| s.max(first));

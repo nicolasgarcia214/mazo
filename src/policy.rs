@@ -75,7 +75,7 @@ fn python_space(c: char) -> bool {
 }
 
 /// `[a-z0-9]+(-[a-z0-9]+)*`
-fn valid_name(name: &str) -> bool {
+pub fn valid_name(name: &str) -> bool {
     let ok = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
     name.split('-').all(ok)
 }

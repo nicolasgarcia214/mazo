@@ -909,7 +909,7 @@ fn stub(root: &Path) -> PathBuf {
 echo $$ >> {r}/pids
 in=$(cat)
 [ -f {r}/hang ] && trap '' HUP && exec sleep 600
-if printf '%s\n' "$in" | grep -q '^<session-records>$'; then
+if printf '%s\n' "$in" | grep -q '^<session-records-[0-9a-f]*>$'; then
   sid=$(printf '%s\n' "$in" | grep -o '"session":"[^"]*"' | head -n 1 | cut -d '"' -f 4)
   sed "s/SESSION/$sid/g" {r}/skill.json
 else

@@ -118,8 +118,10 @@ After the manual come:
 Writes one self-contained HTML page: the `usage --all` table with each skill's
 audit verdict in full, the grades to run as `/grade <skill>`, and every
 skill's card. The page goes to `report.html` in the data directory with mode
-`0600`, and each run overwrites it. `--out <path>` writes it elsewhere and
-warns inside a git worktree, because the page shows cwds. `--open` opens it.
+`0600`, and each run replaces it, a symlink there included. `--out <path>`
+writes it elsewhere and warns inside a git worktree, because the page shows
+cwds; it renames a new file over `<path>`, so it cannot write to a device such
+as `/dev/stdout`. `--open` opens it.
 
 ## How accurate the counts are
 
@@ -154,7 +156,9 @@ parse (`awk`, globs, heredocs). `mazo scan --report` counts them and prints
 samples.
 
 A transcript line that mentions a skill but is not JSON yields no event. A line
-that mentions none is never parsed, so it cannot hide a load.
+that mentions none is never parsed, so it cannot hide a load. A line longer
+than 64 MiB is skipped unread and counted as malformed once its newline is
+written.
 
 The scan that first reads a malformed line warns with the count per home.
 `scan --json` reports that count as `malformed`, and `scan --report` prints it.

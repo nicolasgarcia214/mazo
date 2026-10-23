@@ -960,7 +960,7 @@ impl App {
         let mut out = Vec::new();
         let ran = match act {
             Act::Retire(skill) => {
-                lifecycle::retire(&d.cfg, &d.inv, &d.dir, &skill, false, false, &mut out).map(|retired| match retired {
+                lifecycle::retire(&d.cfg, &d.dir, &skill, false, false, &mut out).map(|retired| match retired {
                     Retired::Blocked(lines) | Retired::Refused(lines) => {
                         [vec![format!("retire {skill} refused:")], lines].concat()
                     }

@@ -259,7 +259,6 @@ pub enum Retired {
 /// scan's warnings go to `warnings`, kept even when a later step fails.
 pub fn retire(
     cfg: &Config,
-    inv: &Inventory,
     data: &Path,
     name: &str,
     force: bool,
@@ -267,23 +266,80 @@ pub fn retire(
     warnings: &mut Vec<String>,
 ) -> Result<Retired> {
     let project = if project { Some(store::project_root("retire")?) } else { None };
-    let with_project;
-    let inv = match &project {
-        Some(p) => {
-            with_project = store::project_inventory(inv, p)?;
-            &with_project
+    let (inv, root) = located(cfg, data, name, project.as_deref())?;
+    archive(cfg, &root, name)?;
+    warnings.extend(scan::scan(cfg, &inv, data, false)?.warnings());
+    if !force {
+        let ledger = Ledger::load(data)?;
+        let coverage = ledger::load_coverage(data)?;
+        let now = jiff::Timestamp::now();
+        let tz = jiff::tz::TimeZone::system();
+        let input = report::Input {
+            cfg,
+            inv: &inv,
+            events: ledger.events(),
+            coverage: &coverage,
+            audits: &BTreeMap::new(),
+            now,
+            tz,
+        };
+        let blockers = report::retire_blockers(&input, name, RETIRE_DAYS);
+        if !blockers.is_empty() {
+            return Ok(Retired::Blocked(blockers));
         }
-        None => inv,
+    }
+    // Held from the plan on, as `add` holds it, and the inventory read again
+    // under it, so a concurrent `add`, `update` or `retire` cannot stale the plan.
+    let _lock = ledger::lock(data)?;
+    let (mut rest, root) = located(cfg, data, name, project.as_deref())?;
+    let to = archive(cfg, &root, name)?;
+    let from = root.join(name);
+    rest.skills.remove(name);
+    rest.origins.remove(name);
+    let target = store::Target { data, project: project.as_deref() };
+    let (plan, errors) = target.home_sync(cfg, &rest, Some(&from));
+    if !errors.is_empty() {
+        return Ok(Retired::Refused(errors));
+    }
+
+    let mut out = match &to {
+        Some(to) => {
+            let archive = root.join(".archive");
+            std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+            if git(&root, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
+                git(&root, &["mv", "--", name, &format!(".archive/{name}")]).ok_or(format!("git mv {name} failed"))?;
+            } else {
+                std::fs::rename(&from, to).map_err(|e| format!("{}: {e}", from.display()))?;
+            }
+            links::apply_after(vec![format!("archived  {} -> {}", from.display(), to.display())], &plan)?
+        }
+        None => target.remove(&from, name, &plan)?,
     };
-    let root = match &project {
+    // The homes' settings name only global skills.
+    if cfg.policy.claude_name_only && project.is_none() {
+        for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
+            if let Some(v) = policy::settings(h).ok().and_then(|s| s["skillOverrides"].get(name).cloned()) {
+                out.push(format!("{} can drop:\n  \"{name}\": {v}", h.settings().display()));
+            }
+        }
+    }
+    Ok(Retired::Done(out))
+}
+
+/// The inventory `retire` reads, with the project's skills under `project`,
+/// and the root of the skill `name` in it.
+fn located(cfg: &Config, data: &Path, name: &str, project: Option<&Path>) -> Result<(Inventory, PathBuf)> {
+    let mut inv = store::inventory(cfg.source.as_deref(), data)?;
+    let root = match project {
         // The global store may hold a skill of the same name, ahead of it.
         Some(p) => {
+            inv = store::project_inventory(&inv, p)?;
             let store = store::project_dir(p);
             let roots = inv.origins.get(name).into_iter().flatten();
             let Some(root) = roots.into_iter().find(|r| **r == store) else {
                 return Err(Error::Usage(format!("{name} is not a project skill")));
             };
-            root.as_path()
+            root.clone()
         }
         None => {
             let Some(root) = inv.root(name) else {
@@ -294,61 +350,18 @@ pub fn retire(
                 }
                 return Err(Error::Usage(format!("{name} is not a canonical skill{hint}")));
             };
-            root
+            root.to_path_buf()
         }
     };
-    let from = root.join(name);
-    // A source skill is archived; a store skill is removed.
+    Ok((inv, root))
+}
+
+/// Where `retire` moves the skill `name` of `root`: a source skill to the
+/// archive, refused when that entry exists; a store skill, removed, nowhere.
+fn archive(cfg: &Config, root: &Path, name: &str) -> Result<Option<PathBuf>> {
     let to = (cfg.source.as_deref() == Some(root)).then(|| root.join(".archive").join(name));
     if let Some(to) = to.as_ref().filter(|t| t.symlink_metadata().is_ok()) {
         return Err(format!("retire refused: {} already exists", to.display()).into());
     }
-    warnings.extend(scan::scan(cfg, inv, data, false)?.warnings());
-    if !force {
-        let ledger = Ledger::load(data)?;
-        let coverage = ledger::load_coverage(data)?;
-        let now = jiff::Timestamp::now();
-        let tz = jiff::tz::TimeZone::system();
-        let input =
-            report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &BTreeMap::new(), now, tz };
-        let blockers = report::retire_blockers(&input, name, RETIRE_DAYS);
-        if !blockers.is_empty() {
-            return Ok(Retired::Blocked(blockers));
-        }
-    }
-    // Held from the plan on, as `add` holds it, so a concurrent `add` cannot stale the plan.
-    let _lock = ledger::lock(data)?;
-    let mut rest = inv.clone();
-    rest.skills.remove(name);
-    rest.origins.remove(name);
-    let target = store::Target { data, project: project.as_deref() };
-    let (plan, errors) = target.home_sync(cfg, &rest, Some(&from));
-    if !errors.is_empty() {
-        return Ok(Retired::Refused(errors));
-    }
-
-    let mut out = Vec::new();
-
-    if let Some(to) = &to {
-        let archive = root.join(".archive");
-        std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
-        if git(root, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
-            git(root, &["mv", "--", name, &format!(".archive/{name}")]).ok_or(format!("git mv {name} failed"))?;
-        } else {
-            std::fs::rename(&from, to).map_err(|e| format!("{}: {e}", from.display()))?;
-        }
-        out.push(format!("archived  {} -> {}", from.display(), to.display()));
-        out.extend(links::apply(&plan)?);
-    } else {
-        out.extend(target.remove(&from, name, &plan)?);
-    }
-    // The homes' settings name only global skills.
-    if cfg.policy.claude_name_only && project.is_none() {
-        for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
-            if let Some(v) = policy::settings(h).ok().and_then(|s| s["skillOverrides"].get(name).cloned()) {
-                out.push(format!("{} can drop:\n  \"{name}\": {v}", h.settings().display()));
-            }
-        }
-    }
-    Ok(Retired::Done(out))
+    Ok(to)
 }

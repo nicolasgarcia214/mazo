@@ -1,9 +1,7 @@
 //! The self-contained HTML report: one file with inline CSS and
 //! inline SVG, rendered from the typed model of `report::report`.
 
-use std::fs::{self, OpenOptions, Permissions};
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -330,10 +328,7 @@ pub fn write(path: &Path, html: &str) -> crate::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         fs::create_dir_all(dir).map_err(err)?;
     }
-    let mut f = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).map_err(err)?;
-    // `mode` applies only on create; an older file keeps its own until this.
-    f.set_permissions(Permissions::from_mode(0o600)).map_err(err)?;
-    f.write_all(html.as_bytes()).map_err(|e| err(e).into())
+    crate::ledger::write_atomic(path, html.as_bytes(), 0o600)
 }
 
 /// Whether the directory holding `path` is inside a git worktree.

@@ -43,9 +43,10 @@ use project::{project_links, unlink_project};
 use source::{Scratch, Source, local};
 use vet::{contents, gate, no_judge};
 
-/// A file error as the store reports it: the path, then the error.
+/// A file error as the store reports it: the path, then the error. The path
+/// is [`inert`](crate::render::inert), since a skill's author names its files.
 fn err(p: &Path, e: std::io::Error) -> String {
-    format!("{}: {e}", p.display())
+    format!("{}: {e}", crate::render::inert(&p.display().to_string()))
 }
 
 /// `<data dir>/store`, the skill root after the source.
@@ -270,6 +271,18 @@ fn unclaimed(paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
     }
 }
 
+/// Directories, deepest first, each removed when dropped if it is empty: what
+/// staging made of a store, gone again when the add is refused.
+struct Fresh(Vec<PathBuf>);
+
+impl Drop for Fresh {
+    fn drop(&mut self) {
+        for dir in &self.0 {
+            let _ = fs::remove_dir(dir);
+        }
+    }
+}
+
 /// Installs the skill of `from` at the path `child` below its root (`None`
 /// for `from.root` itself), named for its last segment, and adds it to
 /// `inv`. A bad skill or a name taken in any root, or at a
@@ -307,8 +320,14 @@ fn install(
     // Checked before the judge is paid for, and again under the lock.
     unclaimed(claimed())?;
 
+    // Copied under a hidden name of this process's own, which no root lists,
+    // so that the judge and the y/N prompt run without the data lock. Declared
+    // first, the store's new directories are dropped last.
+    let _fresh = Fresh(store.ancestors().take_while(|d| !d.exists()).map(Path::to_path_buf).collect());
+    let (staged, content_hash) =
+        stage(&src, &files, &skill_md, store.join(format!(".add-{name}-{}", std::process::id())))?;
     let vetted = match caller {
-        Some(c) => Some((gate(c, inv, args.consent(), &name, contents(&src, &files, &skill_md)?, None)?, now()?)),
+        Some(c) => Some((gate(c, inv, args.consent(), &name, contents(&staged.0, &files)?, None)?, now()?)),
         None => None,
     };
 
@@ -317,11 +336,7 @@ fn install(
     // adds into one project are serialized only when they share a data dir.
     let _lock = ledger::lock(data)?;
     unclaimed(claimed())?;
-    // Copied under a hidden name, which no root lists, then renamed into place.
-    let staged = store.join(format!(".add-{name}"));
-    let installed = stage(&src, &files, &skill_md, &staged)
-        .and_then(|hash| fs::rename(&staged, &to).map(|()| hash).map_err(|e| err(&to, e).into()));
-    let content_hash = installed.inspect_err(|_| drop(fs::remove_dir_all(&staged)))?;
+    fs::rename(&staged.0, &to).map_err(|e| err(&to, e))?;
 
     // From here until the lockfile is written, `store/<name>` has no lock
     // entry. A crash in that window leaves it there unrecorded: a re-run of

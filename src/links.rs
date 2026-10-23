@@ -79,6 +79,26 @@ struct Target {
     entries: Vec<(String, PathBuf)>,
 }
 
+impl Target {
+    /// Adds the entry `name` linking to `src`, or the conflict when `name`
+    /// already links to another source.
+    fn claim(&mut self, name: String, src: PathBuf) -> Option<String> {
+        match self.entries.iter().find(|(n, _)| *n == name) {
+            Some((_, other)) if *other == src => None,
+            Some((_, other)) => Some(format!(
+                "ERROR: {} is claimed by two sources: {} and {}",
+                self.dir.join(&name).display(),
+                other.display(),
+                src.display()
+            )),
+            None => {
+                self.entries.push((name, src));
+                None
+            }
+        }
+    }
+}
+
 fn targets(
     cfg: &Config,
     inv: &Inventory,
@@ -116,18 +136,7 @@ fn targets(
             let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { continue };
             let name = name.to_string_lossy().into_owned();
             match out.iter_mut().find(|t: &&mut Target| t.home == home.name && t.dir == dir) {
-                Some(t) => match t.entries.iter().find(|(n, _)| *n == name) {
-                    Some((_, other)) => conflicts.push((
-                        home.name.clone(),
-                        format!(
-                            "ERROR: {} is claimed by two sources: {} and {}",
-                            path.display(),
-                            other.display(),
-                            src.display()
-                        ),
-                    )),
-                    None => t.entries.push((name, src)),
-                },
+                Some(t) => conflicts.extend(t.claim(name, src).map(|e| (home.name.clone(), e))),
                 None => {
                     out.push(Target { home: home.name.clone(), dir: dir.to_path_buf(), entries: vec![(name, src)] })
                 }
@@ -166,14 +175,29 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         })
     };
     // Two homes can share a directory, directly or through a symlink
-    // (PI_CODING_AGENT_DIR pointing at another home): plan each physical one once.
-    let mut planned: Vec<PathBuf> = Vec::new();
-    for t in &targets {
+    // (PI_CODING_AGENT_DIR pointing at another home): plan each physical one
+    // once, with the entries of every target there.
+    let mut merged: Vec<(PathBuf, Target)> = Vec::new();
+    for t in targets {
         let physical = physical(&t.dir);
-        if planned.contains(&physical) {
+        match merged.iter_mut().find(|(p, _)| *p == physical) {
+            Some((_, into)) => {
+                for (name, src) in t.entries {
+                    plan.conflicts.extend(into.claim(name, src).map(|e| (t.home.clone(), e)));
+                }
+            }
+            None => merged.push((physical, t)),
+        }
+    }
+    for (physical, t) in &merged {
+        // Every skill there would look like a real file, or a link written into the root.
+        if let Some(root) = inv.roots.iter().find(|r| *r == physical) {
+            plan.conflicts.push((
+                t.home.clone(),
+                format!("ERROR: {} resolves to {}; replace it with a directory", t.dir.display(), root.display()),
+            ));
             continue;
         }
-        planned.push(physical);
         if let Err(bad) = check_dir(&t.dir) {
             plan.conflicts.push((t.home.clone(), format!("ERROR: {} is not a directory", bad.display())));
             continue;
@@ -315,19 +339,30 @@ pub fn planned(plan: &Plan) -> Vec<String> {
 
 /// Performs a conflict-free plan. Returns the lines to print.
 pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
+    apply_after(Vec::new(), plan)
+}
+
+/// [`apply`] after the writes that the lines `out` report. A failed write's
+/// error lists them and the writes before it, which stand.
+pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> crate::Result<Vec<String>> {
     assert!(plan.conflicts.is_empty(), "apply() is only called on a conflict-free plan");
-    let mut out = Vec::new();
     for a in &plan.actions {
-        match a {
-            Action::Mkdir(d) => fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?,
+        let (path, done) = match a {
+            Action::Mkdir(d) => (d, fs::create_dir_all(d).map(|()| None)),
             Action::Link { source, path } => {
-                std::os::unix::fs::symlink(source, path).map_err(|e| format!("{}: {e}", path.display()))?;
-                out.push(format!("linked    {}", path.display()));
+                (path, std::os::unix::fs::symlink(source, path).map(|()| Some(format!("linked    {}", path.display()))))
             }
             Action::Remove(p) => {
-                fs::remove_file(p).map_err(|e| format!("{}: {e}", p.display()))?;
-                out.push(format!("pruned    {} (dangling)", p.display()));
+                (p, fs::remove_file(p).map(|()| Some(format!("pruned    {} (dangling)", p.display()))))
             }
+        };
+        if let Err(e) = done.map(|line| out.extend(line)) {
+            let done = if out.is_empty() {
+                String::new()
+            } else {
+                format!("; done before it:{}", out.iter().map(|l| format!("\n  {l}")).collect::<String>())
+            };
+            return Err(format!("{}: {e}{done}", path.display()).into());
         }
     }
     Ok(out)
@@ -337,7 +372,7 @@ pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
 mod tests {
     use std::path::Path;
 
-    use super::{Action, State, plan};
+    use super::{Action, Plan, State, plan};
     use crate::config::{Config, Home};
     use crate::inventory::Inventory;
     use crate::ledger::Agent;
@@ -423,5 +458,61 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].starts_with("ERROR: ") && errors[0].contains("mine"), "{}", errors[0]);
         assert!(!p.actions.iter().any(|a| matches!(a, Action::Link { path, .. } if path.ends_with("mine"))));
+    }
+
+    #[test]
+    fn a_home_sharing_a_skills_dir_keeps_its_links_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp = std::fs::canonicalize(tmp.path()).unwrap();
+        let (mut cfg, inv) = setup(&tmp);
+        std::fs::write(tmp.join("source/extra.md"), "extra\n").unwrap();
+        let skills = tmp.join("home/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::create_dir_all(tmp.join("pi")).unwrap();
+        std::os::unix::fs::symlink(&skills, tmp.join("pi/skills")).unwrap();
+        let links = [("skills/extra.md".to_string(), "extra.md".to_string())].into();
+        cfg.homes.push(Home { name: "pi".into(), agent: Agent::Pi, path: tmp.join("pi"), links });
+        let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
+        assert!(p.conflicts.is_empty(), "{:?}", p.conflicts);
+        let extra = Action::Link { source: tmp.join("source/extra.md"), path: skills.join("extra.md") };
+        assert!(p.actions.contains(&extra), "{:?}", p.actions);
+
+        // The same name to another source is a conflict, whichever home claims it.
+        cfg.homes[1].links = [("skills/mine".to_string(), "extra.md".to_string())].into();
+        let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
+        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("claimed by two sources"), "{}", errors[0]);
+    }
+
+    #[test]
+    fn a_skills_dir_that_resolves_to_a_root_is_one_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp = std::fs::canonicalize(tmp.path()).unwrap();
+        let (cfg, inv) = setup(&tmp);
+        std::fs::create_dir_all(tmp.join("home")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("source"), tmp.join("home/skills")).unwrap();
+        let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
+        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        let want = format!("ERROR: {} resolves to {}", tmp.join("home/skills").display(), tmp.join("source").display());
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with(&want), "{}", errors[0]);
+        assert!(p.actions.is_empty(), "{:?}", p.actions);
+    }
+
+    #[test]
+    fn a_failed_write_reports_the_writes_before_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (made, gone) = (tmp.path().join("made"), tmp.path().join("no/such/dir/link"));
+        let p = Plan {
+            actions: vec![
+                Action::Link { source: tmp.path().into(), path: made.clone() },
+                Action::Link { source: tmp.path().into(), path: gone.clone() },
+            ],
+            ..Plan::default()
+        };
+        let e = super::apply_after(vec!["archived  a -> b".into()], &p).unwrap_err().to_string();
+        assert!(e.starts_with(&format!("{}: ", gone.display())), "{e}");
+        assert!(e.ends_with(&format!("; done before it:\n  archived  a -> b\n  linked    {}", made.display())), "{e}");
     }
 }

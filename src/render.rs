@@ -108,6 +108,25 @@ pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> Strin
 pub const DAY: &str = "%Y-%m-%d";
 pub const MINUTE: &str = "%Y-%m-%d %H:%M";
 
+/// `text` with every control character but newline and tab, C0, DEL and C1,
+/// replaced by U+FFFD, so text from a skill or a judge cannot drive the
+/// terminal it is printed to.
+pub fn inert(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() && !matches!(c, '\n' | '\t') { '\u{fffd}' } else { c }).collect()
+}
+
+/// `value` with every string in it, keys too, [`inert`]: a judge's answer, or
+/// a lockfile anyone can commit.
+pub fn inert_value(value: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => Value::String(inert(&s)),
+        Value::Array(a) => Value::Array(a.into_iter().map(inert_value).collect()),
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (inert(&k), inert_value(v))).collect()),
+        v => v,
+    }
+}
+
 /// The timestamp `ts` in `tz`, formatted with `format`; `ts` unchanged when it
 /// does not parse.
 pub fn local(ts: &str, tz: &TimeZone, format: &str) -> String {
@@ -124,6 +143,13 @@ mod tests {
         assert_eq!(local("2026-03-01T04:30:00Z", &tz, MINUTE), "2026-02-28 23:30");
         assert_eq!(local("2026-03-01T04:30:00Z", &tz, DAY), "2026-02-28");
         assert_eq!(local("yesterday", &tz, MINUTE), "yesterday");
+    }
+
+    #[test]
+    fn inert_replaces_controls_but_newline_and_tab() {
+        let osc = "\x1b]52;c;ZXZpbA==\x07\x1b[2J\x7f\u{9b}31m\r";
+        assert_eq!(inert(osc), "\u{fffd}]52;c;ZXZpbA==\u{fffd}\u{fffd}[2J\u{fffd}\u{fffd}31m\u{fffd}");
+        assert_eq!(inert("a\tb\nc é 日"), "a\tb\nc é 日");
     }
 
     #[test]

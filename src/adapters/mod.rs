@@ -286,8 +286,11 @@ fn transcript(src: &str) -> Option<Transcript> {
     if line == 0 || lines.len() < line {
         return None;
     }
-    let cursor = Cursor { dev: 0, ino: 0, offset: 0, line: 0 };
-    Some(Transcript { path: PathBuf::from(file), chunk: Chunk { lines, cursor }, line })
+    Some(Transcript {
+        path: PathBuf::from(file),
+        chunk: Chunk { lines, oversized: 0, cursor: Cursor::default() },
+        line,
+    })
 }
 
 /// The line and text of the first record `authored` reads walking back from

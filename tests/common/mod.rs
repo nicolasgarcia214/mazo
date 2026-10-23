@@ -256,7 +256,7 @@ pub fn parse_file(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path, cursor
 pub fn parse_unfiltered(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path) -> Parsed {
     let text = fs::read_to_string(path).unwrap();
     let lines: Vec<(u64, Vec<u8>)> = text.lines().zip(1..).map(|(l, n)| (n, l.as_bytes().to_vec())).collect();
-    let chunk = Chunk { lines, cursor: Cursor { dev: 0, ino: 0, offset: 0, line: 0 } };
+    let chunk = Chunk { lines, oversized: 0, cursor: Cursor::default() };
     let header = tail::first_line(path).unwrap();
     adapter.parse(roots, path, header.as_deref(), &chunk)
 }

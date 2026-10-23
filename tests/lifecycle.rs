@@ -568,6 +568,35 @@ fn retire_stages_a_rename_prunes_the_links_and_never_commits() {
 }
 
 #[test]
+fn a_failed_prune_after_the_archive_still_reports_the_archive() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = synced();
+    fs::set_permissions(&fx.target, fs::Permissions::from_mode(0o555)).unwrap();
+    let r = fx.mazo(&["retire", "unslop"]);
+    fs::set_permissions(&fx.target, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    let archived =
+        format!("archived  {} -> {}", fx.source.join("unslop").display(), fx.source.join(".archive/unslop").display());
+    assert!(r.stderr().contains(&format!("{}: ", fx.target.join("unslop").display())), "{}", r.stderr());
+    assert!(r.stderr().contains(&format!("; done before it:\n  {archived}\n")), "{}", r.stderr());
+    assert!(fx.source.join(".archive/unslop/SKILL.md").is_file());
+}
+
+#[test]
+fn retire_plans_from_the_skills_read_under_the_data_lock() {
+    let mut fx = synced();
+    let held = mazo::ledger::lock(&fx.data.join("mazo")).unwrap();
+    let mut retire = fx.command(&["retire", "unslop", "--force"]).stdout(Stdio::null()).spawn().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(retire.try_wait().unwrap().is_none(), "retire ran while another process held the lock");
+    fx.add_skill("fresh");
+    drop(held);
+    assert!(retire.wait().unwrap().success());
+    assert_retired(&fx, "unslop");
+    assert_eq!(fs::read_link(fx.target.join("fresh")).unwrap(), fx.source.join("fresh"));
+}
+
+#[test]
 fn an_untracked_skill_is_renamed_and_settings_lines_need_claude_name_only() {
     let fx = synced();
     let toml = fx.source.join("mazo.toml");

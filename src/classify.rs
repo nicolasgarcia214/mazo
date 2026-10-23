@@ -4,6 +4,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use jiff::{SignedDuration, Timestamp};
+
 use crate::Result;
 use crate::adapters::{Key, Parent, Raw, Session};
 use crate::config::Home;
@@ -25,14 +27,10 @@ pub struct Roots {
 }
 
 impl Roots {
-    /// The roots stored in `data`; `None` when `roots.json` is missing and
-    /// must be rebuilt with [`Roots::visit`].
+    /// The roots stored in `data`; `None` when `roots.json` is missing or
+    /// corrupt and must be rebuilt with [`Roots::visit`].
     pub fn load(data: &Path) -> Result<Option<Roots>> {
-        let path = data.join(ROOTS);
-        if !path.exists() {
-            return Ok(None);
-        }
-        Ok(Some(Roots { stored: ledger::read_json(&path)?, ..Roots::default() }))
+        Ok(ledger::read_derived(&data.join(ROOTS))?.map(|stored| Roots { stored, ..Roots::default() }))
     }
 
     /// Writes the stored roots to `data`; the caller holds the scan lock.
@@ -135,15 +133,23 @@ pub struct Classifier<'a> {
     pub homes: &'a [Home],
     /// `<data dir>/audit-runs`, where the judge runs.
     pub audit_runs: &'a Path,
+    /// When the scan started: a record dated more than [`SKEW`] after it is corrupt.
+    pub now: Timestamp,
 }
+
+/// How far ahead of the scan's clock a record may be dated, for transcripts
+/// synced from a machine whose clock runs ahead.
+const SKEW: SignedDuration = SignedDuration::from_hours(24);
 
 impl Classifier<'_> {
     /// The event for `raw`, or `None` for a session whose cwd is inside
-    /// `<data dir>/audit-runs/`: the judge's own runs are never usage.
+    /// `<data dir>/audit-runs/` (the judge's own runs are never usage) and for
+    /// a record whose timestamp does not parse or lies past `now` and [`SKEW`].
     pub fn event(&self, roots: &mut Roots, raw: Raw, file: &Path) -> Option<Event> {
         if raw.session.cwd.as_deref().is_some_and(|c| Path::new(c).starts_with(self.audit_runs)) {
             return None;
         }
+        raw.ts.parse::<Timestamp>().ok().filter(|t| t.duration_since(self.now) <= SKEW)?;
         let session = roots.root(self.home, &raw.session.id, raw.session.parent.as_ref());
         let id = match &raw.key {
             Key::Plain(s) => s.clone(),
@@ -262,7 +268,13 @@ mod tests {
         let home =
             Home { name: "claude".into(), agent: Agent::Claude, path: tmp.join("home"), links: Default::default() };
         let homes = [home.clone()];
-        let c = Classifier { inv: &inv, home: &home, homes: &homes, audit_runs: &tmp.join("audit-runs") };
+        let c = Classifier {
+            inv: &inv,
+            home: &home,
+            homes: &homes,
+            audit_runs: &tmp.join("audit-runs"),
+            now: Timestamp::now(),
+        };
         let origin = |skill: &str, dir: &Path| c.path_origin(skill, dir.join(skill).join("SKILL.md").to_str());
         assert_eq!(origin("mine", &source), Origin::Canonical);
         assert_eq!(origin("theirs", &store), Origin::Canonical);

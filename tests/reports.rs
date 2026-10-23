@@ -1080,6 +1080,23 @@ fn show_gives_an_unvetted_source_skill_its_description_alone() {
     assert!(text.starts_with("for:      Removes slop from prose.\n\nunslop: since "), "{text}");
 }
 
+/// A description cannot drive the terminal: its controls print as U+FFFD,
+/// in For, in the card and in `--json`.
+#[test]
+fn show_prints_a_descriptions_terminal_controls_inert() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("evil/SKILL.md"), "---\nname: evil\ndescription: \"Hi\\e]52;c;eA==\\a\\e[2J.\"\n---\n");
+    let w = report_world(dir.path());
+    let input = w.input(&[]);
+    let text = report::show(&input, "evil", Since::Days(30), 20, false, false).unwrap();
+    assert!(!text.contains(['\x1b', '\x07']), "{text:?}");
+    assert!(text.starts_with("for:      Hi\u{fffd}]52;c;eA==\u{fffd}\u{fffd}[2J.\n"), "{text:?}");
+    assert!(text.contains("\ndescription: Hi\u{fffd}]52;c;eA==\u{fffd}\u{fffd}[2J.\n"), "{text:?}");
+    let v: Value =
+        serde_json::from_str(&report::show(&input, "evil", Since::Days(30), 20, true, false).unwrap()).unwrap();
+    assert_eq!(v["description"], "Hi\u{fffd}]52;c;eA==\u{fffd}\u{fffd}[2J.");
+}
+
 /// For and Try come from the latest skill audit when it is newer than the
 /// vet or there is no vet, else from the vet; a source skill with no audit
 /// keeps its description.

@@ -241,7 +241,8 @@ fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
     let h = home(dir.path());
     let homes = [h.clone()];
     let audit_runs = dir.path().join("audit-runs");
-    let classifier = Classifier { inv: &inv, home: &h, homes: &homes, audit_runs: &audit_runs };
+    let classifier =
+        Classifier { inv: &inv, home: &h, homes: &homes, audit_runs: &audit_runs, now: jiff::Timestamp::now() };
     let event = |raw: Raw| classifier.event(&mut Roots::default(), raw, &p).unwrap();
     let mut ledger = Ledger::load(dir.path()).unwrap();
     let stored = ledger.admit(event(first.raws[0].clone())).unwrap();

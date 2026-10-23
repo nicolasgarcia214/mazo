@@ -29,7 +29,7 @@ pub struct HomeReport {
     pub canary: Vec<String>,
     /// Lines this scan read that passed the prefilter, so might hold a load,
     /// but are not JSON: no event came from them, even in a file that yielded
-    /// others.
+    /// others. Lines too long to read count too.
     pub malformed: usize,
 }
 
@@ -89,7 +89,8 @@ pub fn scan_with<'a>(
     adapter_for: &dyn Fn(Agent) -> &'a dyn Adapter,
 ) -> Result<ScanReport> {
     let mut ledger = Ledger::open_locked(data)?;
-    let mut cursors: Cursors = if reparse { Cursors::new() } else { ledger::read_json(&data.join("cursors.json"))? };
+    let mut cursors: Cursors =
+        if reparse { Cursors::new() } else { ledger::read_derived(&data.join("cursors.json"))?.unwrap_or_default() };
     let mut coverage = ledger::load_coverage(data)?;
     let roots = roots(cfg, inv);
     let dirs: Vec<String> =
@@ -98,13 +99,14 @@ pub fn scan_with<'a>(
 
     let mut progress = Progress { tty: std::io::stderr().is_terminal(), start: Instant::now(), shown: false };
     let mut report = ScanReport::default();
+    let now = jiff::Timestamp::now();
     let mut lines: Vec<Event> = Vec::new();
     let files: Vec<Vec<PathBuf>> = cfg.homes.iter().map(|h| adapter_for(h.agent).files(h)).collect();
     let listed: HashSet<String> = files.iter().flatten().map(|p| p.to_string_lossy().into_owned()).collect();
     // Agents record their resolved cwd, so compare against the resolved data dir.
     let audit_runs = std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf()).join("audit-runs");
 
-    // A missing roots.json is rebuilt from every session on disk.
+    // A missing or corrupt roots.json is rebuilt from every session on disk.
     let stored = Roots::load(data)?;
     let rebuild = stored.is_none();
     let mut roots_cache = stored.unwrap_or_default();
@@ -121,11 +123,13 @@ pub fn scan_with<'a>(
 
     for (home, files) in cfg.homes.iter().zip(files) {
         let adapter = adapter_for(home.agent);
-        let classifier = Classifier { inv, home, homes: &cfg.homes, audit_runs: &audit_runs };
+        let classifier = Classifier { inv, home, homes: &cfg.homes, audit_runs: &audit_runs, now };
         let mut hr = HomeReport::default();
-        let first_scan = !coverage.contains_key(&home.name);
-        let need_first = coverage.get(&home.name).is_none_or(|c| c.first.is_none());
-        let mut earliest: Option<String> = None;
+        // The ledger too, so a coverage.json lost or rebuilt does not backfill
+        // again the loads read from transcripts deleted since.
+        let first_scan = !coverage.contains_key(&home.name) && !ledger.events().iter().any(|e| e.home == home.name);
+        let need_first = coverage.get(&home.name).is_none_or(|c| c.first_at().is_none());
+        let mut earliest: Option<jiff::Timestamp> = None;
         let total = files.len();
 
         for (i, path) in files.into_iter().enumerate() {
@@ -152,9 +156,10 @@ pub fn scan_with<'a>(
                 roots_cache.visit(home, &path);
             }
             hr.files += 1;
+            hr.malformed += chunk.oversized;
             if need_first
                 && let Some(ts) = first_timestamp(&path)
-                && earliest.as_ref().is_none_or(|e| ts < *e)
+                && earliest.is_none_or(|e| ts < e)
             {
                 earliest = Some(ts);
             }
@@ -189,8 +194,8 @@ pub fn scan_with<'a>(
         }
 
         let entry = coverage.entry(home.name.clone()).or_default();
-        if entry.first.is_none() {
-            entry.first = earliest;
+        if need_first {
+            entry.first = earliest.map(|t| t.to_string());
         }
         if hr.io_errors.is_empty() {
             entry.last_scan = Some(jiff::Timestamp::now().to_string());
@@ -264,19 +269,16 @@ fn has_canary(chunk: &tail::Chunk) -> bool {
     chunk.lines.iter().any(|(_, l)| CANARY.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
 }
 
-/// The earliest `"timestamp"` among the first lines of a transcript: when its
+/// The earliest `"timestamp"` that parses among the first lines of a transcript: when its
 /// session started, for coverage and the audit. Records are written in time
 /// order except for a Skill result and its meta record, whose timestamps are a
 /// few milliseconds apart.
-pub(crate) fn first_timestamp(path: &Path) -> Option<String> {
-    use std::io::{BufRead, BufReader};
-    let file = std::fs::File::open(path).ok()?;
-    BufReader::new(file)
-        .lines()
+pub(crate) fn first_timestamp(path: &Path) -> Option<jiff::Timestamp> {
+    tail::head(path)
+        .ok()?
         .take(20)
-        .map_while(std::result::Result::ok)
         .filter_map(|line| {
-            serde_json::from_str::<serde_json::Value>(&line).ok()?.get("timestamp")?.as_str().map(str::to_string)
+            serde_json::from_slice::<serde_json::Value>(&line).ok()?.get("timestamp")?.as_str()?.parse().ok()
         })
         .min()
 }

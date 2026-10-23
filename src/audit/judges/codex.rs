@@ -1,6 +1,6 @@
-//! The Codex judge: `codex exec` in a read-only sandbox with a scratch
-//! `CODEX_HOME`, the prompt and input on stdin, the answer in its `-o` file,
-//! and no dollar cost.
+//! The Codex judge: `codex exec` without the tools that read local files,
+//! in a read-only sandbox with a scratch `CODEX_HOME`, the prompt and input
+//! on stdin, the answer in its `-o` file, and no dollar cost.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -31,6 +31,18 @@ impl Subprocess for Codex {
             "exec",
             "--ephemeral",
             "--skip-git-repo-check",
+            // The shell and the image viewer read any file the user can, and
+            // web search carries the input out; the sandbox only stops writes
+            // and the network. `multi_agent` drops the v1 subagents; a model
+            // on v2 keeps its own, which get these same tools.
+            "--disable",
+            "shell_tool",
+            "--disable",
+            "view_image",
+            "--disable",
+            "multi_agent",
+            "-c",
+            "web_search=disabled",
             "--sandbox",
             "read-only",
             "--output-schema",

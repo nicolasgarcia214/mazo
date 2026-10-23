@@ -7,6 +7,7 @@ use std::path::Path;
 
 use jiff::Timestamp;
 
+use super::frame;
 use crate::Result;
 use crate::adapters;
 use crate::inventory::git;
@@ -25,9 +26,7 @@ pub struct Candidate {
 impl Candidate {
     /// When the session started: its transcript's first timestamp, else the load's.
     pub fn started(&self) -> Option<Timestamp> {
-        crate::scan::first_timestamp(Path::new(self.event.src_file()))
-            .and_then(|t| t.parse().ok())
-            .or_else(|| self.event.ts.parse().ok())
+        crate::scan::first_timestamp(Path::new(self.event.src_file())).or_else(|| self.event.ts.parse().ok())
     }
 }
 
@@ -127,15 +126,13 @@ pub fn skill_at(source: &Path, skill: &str, started: Option<Timestamp>) -> Resul
 }
 
 /// The judge's input for one session: the skill as it was when the session
-/// started, then the condensed session. A closing tag inside either part is
-/// written `<\/tag>`, so neither can end its own frame.
+/// started, then the condensed session, each in its frame.
 pub fn input(source: &Path, c: &Candidate) -> Result<(SkillText, String)> {
     let skill = skill_at(source, &c.event.skill, c.started())?;
     let text = format!(
-        "<skill name=\"{}\">\n{}\n</skill>\n\n<session>\n{}\n</session>\n",
-        c.event.skill,
-        skill.text.trim_end().replace("</skill>", "<\\/skill>"),
-        c.condensed.replace("</session>", "<\\/session>")
+        "{}\n{}",
+        frame(&format!("skill name={:?}", c.event.skill), &skill.text),
+        frame("session", &c.condensed)
     );
     Ok((skill, text))
 }

@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -101,6 +102,14 @@ pub struct Coverage {
     pub last_scan: Option<String>,
 }
 
+impl Coverage {
+    /// `first` as a timestamp; one that does not parse counts as none, so a
+    /// scan fills it again.
+    pub fn first_at(&self) -> Option<jiff::Timestamp> {
+        self.first.as_deref()?.parse().ok()
+    }
+}
+
 /// `${XDG_DATA_HOME:-~/.local/share}/mazo`.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|x| !x.is_empty()) {
@@ -189,7 +198,7 @@ impl Ledger {
 
     /// Replaces the ledger file with `lines` (reparse only).
     pub fn replace(&self, lines: &[Event]) -> Result<()> {
-        write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes())
+        write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes(), 0o666)
     }
 }
 
@@ -226,18 +235,29 @@ pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
     f.sync_data().map_err(|e| err(e).into())
 }
 
+/// Rebuilt from the transcripts still on disk when the file does not parse,
+/// so a home whose oldest transcripts are gone reports a later start.
 pub fn load_coverage(dir: &Path) -> Result<BTreeMap<String, Coverage>> {
-    read_json(&dir.join("coverage.json"))
+    Ok(read_derived(&dir.join("coverage.json"))?.unwrap_or_default())
 }
 
 pub fn save_coverage(dir: &Path, coverage: &BTreeMap<String, Coverage>) -> Result<()> {
     write_json(&dir.join("coverage.json"), coverage)
 }
 
-pub(crate) fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Result<T> {
+/// State a scan rebuilds from the transcripts, such as cursors, roots and coverage:
+/// `None` when the file is missing or, with a warning, does not parse.
+pub(crate) fn read_derived<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
+    Ok(read(path)?.and_then(|bytes| {
+        serde_json::from_slice(&bytes).map_err(|e| eprintln!("warning: {}: {e}; rebuilding it", path.display())).ok()
+    }))
+}
+
+/// The bytes of `path`, `None` when it is missing.
+fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()).into()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("{}: {e}", path.display()).into()),
     }
 }
@@ -247,17 +267,23 @@ fn to_lines(events: &[Event]) -> String {
 }
 
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_atomic(path, &serde_json::to_vec(value).expect("state serialises"))
+    write_atomic(path, &serde_json::to_vec(value).expect("state serialises"), 0o666)
 }
 
-/// Write to `<path>.new`, fsync it, then rename over `path`, so a crash
-/// leaves either the old or the new file, never a truncated one.
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+/// Write to a fresh `<path>.new` created with `mode` (less the umask), fsync
+/// it, then rename over `path`, so a crash leaves either the old or the new
+/// file, never a truncated one, and a symlink at either path is replaced,
+/// never followed.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".new");
     let tmp = PathBuf::from(tmp);
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
-    let mut f = File::create(&tmp).map_err(|e| err(&tmp, e))?;
+    match fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(err(&tmp, e).into()),
+        _ => {}
+    }
+    let mut f = OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp).map_err(|e| err(&tmp, e))?;
     f.write_all(bytes).map_err(|e| err(&tmp, e))?;
     f.sync_all().map_err(|e| err(&tmp, e))?;
     fs::rename(&tmp, path).map_err(|e| err(path, e).into())

@@ -1,4 +1,12 @@
-//! The answers a stub judge gives: a valid stage-1 and stage-2 answer.
+//! The answers a stub judge gives: a valid stage-1 and stage-2 answer; and
+//! its input as the tests read it, without the frame nonce.
+
+/// `text` with the nonce cut from every frame tag, as `<skill name="x">`:
+/// each mazo process picks its own.
+pub fn unnonced(text: &str) -> String {
+    let tag = regex::Regex::new(r"(</?[a-z-]+)-[0-9a-f]{16}([ >])").unwrap();
+    tag.replace_all(text, "$1$2").into_owned()
+}
 
 /// A judge answer citing `line` in every finding.
 pub fn answer(line: impl Into<serde_json::Value>) -> serde_json::Value {

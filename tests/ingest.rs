@@ -204,7 +204,7 @@ fn new_events(r: &ScanReport) -> usize {
 }
 
 #[test]
-fn second_scan_and_cursorless_rescan_append_nothing() {
+fn second_scan_and_cursorless_or_corrupt_cursor_rescan_append_nothing() {
     let env = Env::new(&TRANSCRIPTS, &[]);
     env.scan();
     let first = ledger_lines(&env.data);
@@ -214,16 +214,22 @@ fn second_scan_and_cursorless_rescan_append_nothing() {
     fs::remove_file(env.data.join("cursors.json")).unwrap();
     assert_eq!(new_events(&env.scan()), 0);
     assert_eq!(ledger_lines(&env.data), first, "no cursors: +0 lines");
+    fs::write(env.data.join("cursors.json"), "{").unwrap();
+    assert_eq!(new_events(&env.scan()), 0);
+    assert_eq!(ledger_lines(&env.data), first, "corrupt cursors: +0 lines");
+    assert!(!env.cursors().is_empty(), "corrupt cursors are rewritten");
 }
 
 #[test]
 fn appended_record_is_one_event_read_from_the_stored_offset() {
     let env = Env::new(&[("slash.jsonl", "slash.jsonl")], &[]);
+    // Noise after the records puts them before the window a cursor checks.
+    env.append("slash.jsonl", format!("{}\n", "x".repeat(4 << 10)).as_bytes());
     env.scan();
     let path = env.transcript("slash.jsonl");
     let key = path.to_string_lossy().into_owned();
     let before = env.cursors()[&key];
-    assert_eq!((before.offset, before.line), (fs::metadata(&path).unwrap().len(), 2));
+    assert_eq!((before.offset, before.line), (fs::metadata(&path).unwrap().len(), 3));
     let n = ledger_lines(&env.data).len();
 
     // Rewrite the meta record's uuid in place (same inode, same length). A scan
@@ -243,9 +249,9 @@ fn appended_record_is_one_event_read_from_the_stored_offset() {
     assert_eq!(lines.len(), n + 1);
     let added: Event = serde_json::from_str(lines.last().unwrap()).unwrap();
     assert_eq!(added.id, "cc:toolu_appended");
-    assert_eq!(added.src, format!("{key}:3"), "line number continues from the cursor");
+    assert_eq!(added.src, format!("{key}:4"), "line number continues from the cursor");
     let after = env.cursors()[&key];
-    assert_eq!((after.offset, after.line), (fs::metadata(&path).unwrap().len(), 3));
+    assert_eq!((after.offset, after.line), (fs::metadata(&path).unwrap().len(), 4));
 }
 
 #[test]
@@ -585,11 +591,11 @@ fn skill_pair_split_across_scans_ends_equal_to_a_fresh_scan() {
 }
 
 /// The earliest `timestamp` of any record in the fixture transcripts.
-fn earliest() -> String {
+fn earliest() -> jiff::Timestamp {
     TRANSCRIPTS
         .iter()
         .flat_map(|(_, f)| fixture_lines(f))
-        .filter_map(|l| serde_json::from_str::<Value>(&l).unwrap()["timestamp"].as_str().map(str::to_string))
+        .filter_map(|l| serde_json::from_str::<Value>(&l).unwrap()["timestamp"].as_str()?.parse().ok())
         .min()
         .unwrap()
 }
@@ -600,7 +606,7 @@ fn coverage_records_first_and_advances_last_scan_only_without_io_errors() {
     env.scan();
     let c = env.coverage();
     assert_eq!(c.keys().collect::<Vec<_>>(), ["claude", "empty"]);
-    assert_eq!(c["claude"].first.as_deref(), Some(earliest().as_str()));
+    assert_eq!(c["claude"].first_at(), Some(earliest()));
     assert_eq!(c["empty"].first, None);
     assert!(c["claude"].last_scan.is_some() && c["empty"].last_scan.is_some());
 
@@ -619,6 +625,22 @@ fn coverage_records_first_and_advances_last_scan_only_without_io_errors() {
     let e = env.coverage();
     assert!(e["claude"].last_scan > c["claude"].last_scan);
     assert_eq!(e["claude"].first, c["claude"].first, "first never moves");
+}
+
+#[test]
+fn a_coverage_json_rebuilt_or_lost_does_not_backfill_a_transcript_read_before() {
+    // Named for the session of history.jsonl's first line, so the backfill skips it.
+    let env = Env::new(&[("2e112b1e-0233-4375-99fd-cd21d2102ac1.jsonl", "slash.jsonl")], &[]);
+    env.scan();
+    let all = ids(&env.data);
+    assert!(!all.iter().any(|i| i.starts_with("cch:2e112b1e")), "its transcript is read instead");
+    fs::remove_dir_all(env.cfg.homes[0].path.join("projects")).unwrap();
+    common::write(&env.data.join("coverage.json"), "{");
+    env.scan();
+    assert_eq!(ids(&env.data), all, "rebuilt");
+    fs::remove_file(env.data.join("coverage.json")).unwrap();
+    env.scan();
+    assert_eq!(ids(&env.data), all, "lost");
 }
 
 #[test]
@@ -677,6 +699,41 @@ fn coverage_first_is_filled_once_a_home_gets_transcripts() {
     fs::copy(fixture("pair.jsonl"), dir.join("pair.jsonl")).unwrap();
     env.scan();
     assert!(env.coverage()["empty"].first.is_some(), "a home that gains transcripts gets its first timestamp");
+}
+
+#[test]
+fn a_record_dated_unparseably_or_past_the_scan_is_no_event() {
+    for ts in ["", "yesterday", "2099-01-01T00:00:00Z"] {
+        let env = Env::new(&[], &[]);
+        let dated: String = fixture_lines("slash.jsonl")
+            .iter()
+            .map(|l| {
+                let mut v: Value = serde_json::from_str(l).unwrap();
+                v["timestamp"] = ts.into();
+                format!("{v}\n")
+            })
+            .collect();
+        env.put("slash.jsonl", dated.as_bytes());
+        env.scan();
+        assert!(events(&env.data).iter().all(|e| e.channel == Channel::Typed), "{ts:?}");
+    }
+}
+
+#[test]
+fn coverage_first_is_the_earliest_parsed_timestamp_and_is_rebuilt_when_unparsed() {
+    let env = Env::new(&[], &[]);
+    // As strings, "" sorts first and 16:30Z before 18:00+02:00 (16:00Z).
+    let ts = ["", "2026-09-15T16:30:00Z", "2026-09-15T18:00:00+02:00"];
+    env.put("t.jsonl", ts.map(|t| format!("{{\"timestamp\":\"{t}\"}}\n")).concat().as_bytes());
+    let first = Some("2026-09-15T16:00:00Z".parse().unwrap());
+    env.scan();
+    assert_eq!(env.coverage()["claude"].first_at(), first);
+    common::write(&env.data.join("coverage.json"), r#"{"claude":{"first":"","last_scan":null}}"#);
+    env.scan();
+    assert_eq!(env.coverage()["claude"].first_at(), first, "a stored first that does not parse is filled again");
+    common::write(&env.data.join("coverage.json"), "{");
+    env.scan();
+    assert_eq!(env.coverage()["claude"].first_at(), first, "a coverage.json that does not parse is rebuilt");
 }
 
 #[test]
@@ -773,7 +830,7 @@ fn a_walk_ending_at_a_missing_parent_roots_there_and_stores_nothing() {
 }
 
 #[test]
-fn a_deleted_roots_json_is_rebuilt_and_a_stored_root_is_never_rewritten() {
+fn a_deleted_or_corrupt_roots_json_is_rebuilt_and_a_stored_root_is_never_rewritten() {
     for agent in [Agent::Codex, Agent::Pi] {
         let chain = common::Chain::new(agent, [true; 3]);
         chain.scan(false);
@@ -783,6 +840,9 @@ fn a_deleted_roots_json_is_rebuilt_and_a_stored_root_is_never_rewritten() {
         fs::remove_file(chain.roots_json()).unwrap();
         chain.scan(false);
         assert_eq!(chain.roots(), roots, "{agent:?}: rebuilt from the sessions on disk");
+        fs::write(chain.roots_json(), "{").unwrap();
+        chain.scan(false);
+        assert_eq!(chain.roots(), roots, "{agent:?}: a corrupt one is rebuilt too");
 
         let mut edited = roots;
         edited.insert(child, "elsewhere".into());

@@ -98,11 +98,12 @@ impl Inventory {
     }
 }
 
-/// The `description` of the `SKILL.md` frontmatter in `dir`, when it reads.
+/// The `description` of the `SKILL.md` frontmatter in `dir`, when it reads,
+/// made [`inert`](crate::render::inert).
 pub fn description(dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(dir.join("SKILL.md")).ok()?;
     let meta = crate::yaml::frontmatter(&text).ok()?;
-    crate::yaml::get(&meta, "description").and_then(crate::yaml::text).map(str::to_string)
+    crate::yaml::get(&meta, "description").and_then(crate::yaml::text).map(crate::render::inert)
 }
 
 /// Any non-hidden child directory of the root that contains `SKILL.md`.
@@ -110,9 +111,16 @@ pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
     let entries = std::fs::read_dir(source).map_err(|e| format!("{}: {e}", source.display()))?;
     let mut out = BTreeSet::new();
     for e in entries.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if !name.starts_with('.') && e.path().join("SKILL.md").is_file() {
-            out.insert(name);
+        let path = e.path();
+        if e.file_name().as_encoded_bytes().starts_with(b".") || !path.join("SKILL.md").is_file() {
+            continue;
+        }
+        match e.file_name().into_string() {
+            Ok(name) => {
+                out.insert(name);
+            }
+            // Debug escapes the invalid bytes, so none reach the terminal raw.
+            Err(_) => eprintln!("warning: {path:?}: skill directory name is not UTF-8; skipped"),
         }
     }
     Ok(out)
@@ -201,7 +209,19 @@ fn citing_text(dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Inventory, fan_in, mentions, names};
+    use super::{Inventory, canonical_skills, fan_in, mentions, names};
+
+    #[test]
+    fn a_skill_directory_name_that_is_not_utf8_is_skipped() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = |name: &[u8]| tmp.path().join(std::ffi::OsStr::from_bytes(name));
+        for name in [&b"ok"[..], b".hidden\xff", b"bad\xff\x1b"] {
+            std::fs::create_dir(dir(name)).unwrap();
+            std::fs::write(dir(name).join("SKILL.md"), "").unwrap();
+        }
+        assert_eq!(canonical_skills(tmp.path()).unwrap(), ["ok".to_string()].into());
+    }
 
     #[test]
     fn a_name_is_a_whole_word_that_is_not_a_path() {

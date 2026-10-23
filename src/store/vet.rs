@@ -44,19 +44,13 @@ pub(super) fn no_judge() -> String {
     )
 }
 
-/// Every file of `files` under `src` as `(relative path, bytes)`, with
-/// `skill_md` as its `SKILL.md`.
-pub(super) fn contents(src: &Path, files: &[PathBuf], skill_md: &str) -> Result<Vec<(String, Vec<u8>)>> {
-    let files = files.iter().filter(|rel| !src.join(rel).is_dir());
+/// Every file of `files` under `dir` as `(relative path, bytes)`.
+pub(super) fn contents(dir: &Path, files: &[PathBuf]) -> Result<Vec<(String, Vec<u8>)>> {
+    let files = files.iter().filter(|rel| !dir.join(rel).is_dir());
     files
         .map(|rel| {
-            let bytes = if rel == Path::new("SKILL.md") {
-                skill_md.as_bytes().to_vec()
-            } else {
-                let path = src.join(rel);
-                fs::read(&path).map_err(|e| err(&path, e))?
-            };
-            Ok((rel.to_string_lossy().into_owned(), bytes))
+            let path = dir.join(rel);
+            Ok((rel.to_string_lossy().into_owned(), fs::read(&path).map_err(|e| err(&path, e))?))
         })
         .collect()
 }
@@ -97,7 +91,8 @@ pub(super) fn gate(
                 text
             }
             Err(why) => {
-                withheld.push(format!("{label} ({size} bytes, {why})"));
+                // A file name is the skill author's, so it reaches the terminal inert.
+                withheld.push(format!("{} ({size} bytes, {why})", crate::render::inert(label)));
                 format!("(withheld: {size} bytes, {why})")
             }
         }

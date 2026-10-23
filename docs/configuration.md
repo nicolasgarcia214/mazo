@@ -83,7 +83,9 @@ Skills in `source` are always trusted.
 
 `loose` lists files in `source` that `sync` links into each home's skills
 directory beside the skills. A home's `links` maps extra files to link: each
-key is relative to the home, each value relative to `source`.
+key is relative to the home, each value relative to `source`. A `loose` entry
+is a file name, and a `links` key or value is a relative path with no `..`; a
+config that breaks either does not load.
 
 ```toml
 loose = ["SKILLS_USAGE.md", "GOAL_SKILLS_USAGE.md"]
@@ -211,6 +213,8 @@ key on disk, in the records, in `--dry-run` output or in an error message. Witho
 These are usage errors:
 
 - a set `api_key_env` naming an unset or empty variable;
+- a set `api_key_env` with a plain `http://` url to a host other than
+  `localhost`, 127.0.0.0/8 or `::1`, which would send the key in cleartext;
 - `url` or `api_key_env` for any other agent.
 
 ```toml

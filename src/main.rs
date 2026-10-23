@@ -309,7 +309,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Prune { name, yes, force } => {
             lifecycle::prune(cfg.need_source("prune")?, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
-        Cmd::Retire { name, force, project } => cmd_retire(&cfg, &inv, &data, &name, force, project),
+        Cmd::Retire { name, force, project } => cmd_retire(&cfg, &data, &name, force, project),
         Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
         Cmd::Add { source, name, skill, all, trust, yes, force, project } => {
             let (rename, pick) = (name.as_deref(), skill.as_deref());
@@ -561,16 +561,9 @@ fn cmd_sync(
 }
 
 /// `mazo retire`: the warnings and blockers on stderr, what it wrote on stdout.
-fn cmd_retire(
-    cfg: &Config,
-    inv: &Inventory,
-    data: &std::path::Path,
-    name: &str,
-    force: bool,
-    project: bool,
-) -> mazo::Result<ExitCode> {
+fn cmd_retire(cfg: &Config, data: &std::path::Path, name: &str, force: bool, project: bool) -> mazo::Result<ExitCode> {
     let mut warnings = Vec::new();
-    let retired = lifecycle::retire(cfg, inv, data, name, force, project, &mut warnings);
+    let retired = lifecycle::retire(cfg, data, name, force, project, &mut warnings);
     for w in &warnings {
         eprintln!("{w}");
     }

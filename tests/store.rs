@@ -8,6 +8,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use common::judge::unnonced;
 use common::sync::*;
 
 /// A skill directory outside the source, passing every policy rule of the fixture.
@@ -483,6 +484,14 @@ fn several_skills_off_a_terminal_list_their_names_and_install_nothing() {
     assert_eq!(fx.snapshot(), before);
 }
 
+#[test]
+fn a_skill_directory_named_to_drive_the_terminal_is_listed_inert() {
+    let (fx, url) = pack(&["one", "two\u{1b}]0;PWNED\u{7}"]);
+    let r = add_at_terminal(&fx, &[&url, "--trust"], "");
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains("one of: one, two\u{fffd}]0;PWNED\u{fffd}, or --all"), "{}", r.stderr());
+}
+
 /// `mazo add args…` with stdin, stdout and stderr a terminal: each step's
 /// keys are typed once the terminal has shown its text, the first being the
 /// picker's status line. The exit code and everything the terminal showed.
@@ -743,6 +752,22 @@ fn two_installed() -> (Fixture, String, String) {
     add(&fx, &[&one, "--trust"]).assert_ok();
     add(&fx, &[&two, "--trust"]).assert_ok();
     (fx, one, two)
+}
+
+#[test]
+fn add_removes_the_copy_an_interrupted_add_of_the_skill_left() {
+    let fx = git_fixture();
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let gone = child.id();
+    child.wait().unwrap();
+    let left = store(&fx).join(format!(".add-theirs-{gone}"));
+    common::write(&left.join("SKILL.md"), "x");
+    let kept = store(&fx).join(format!(".add-theirs-other-{gone}"));
+    common::write(&kept.join("SKILL.md"), "x");
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    assert!(!exists(&left));
+    assert!(exists(&kept), "another skill's copy is its own add's to remove");
 }
 
 #[test]
@@ -1222,7 +1247,7 @@ fn answer(fx: &Fixture, security: Option<&str>, quality: &str, value: &str) {
 fn calls(fx: &Fixture) -> Vec<String> {
     let dir = fx.root.join("calls");
     let n = fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
-    (1..=n).map(|i| fs::read_to_string(dir.join(i.to_string())).unwrap()).collect()
+    (1..=n).map(|i| unnonced(&fs::read_to_string(dir.join(i.to_string())).unwrap())).collect()
 }
 
 /// Nothing of `name` was installed: no store directory, no lockfile entry, no link.
@@ -1594,6 +1619,26 @@ fn a_file_that_is_not_text_is_withheld_and_refuses_the_install_unless_force() {
     assert!(calls(&fx)[0].contains("<file path=\"tool.bin\">\n(withheld: 3 bytes, not text)\n</file>"));
     let security = lock(&fx)[0]["verdict"]["security"].as_str().unwrap().to_string();
     assert_eq!(security, "SKILL.md runs curl | sh.; not sent to the judge in full: tool.bin (3 bytes, not text)");
+}
+
+#[test]
+fn a_source_changed_while_vetted_installs_the_copy_the_judge_saw() {
+    let (fx, dir) = judged();
+    let notes = dir.join("references/notes.md");
+    // The judge rewrites a file of the source before it answers.
+    let stub = format!(
+        "#!/bin/sh\ncat > /dev/null\necho changed > '{}'\ncat '{}/answer'\n",
+        notes.display(),
+        fx.root.display()
+    );
+    common::write(&fx.root.join("bin/judge"), &stub);
+    answer(&fx, None, "good", "worth trying");
+    add(&fx, &[&s(&dir), "--yes"]).assert_ok();
+    assert_eq!(fs::read_to_string(&notes).unwrap(), "changed\n");
+    let to = store(&fx).join("theirs");
+    assert_eq!(fs::read_to_string(to.join("references/notes.md")).unwrap(), "notes\n");
+    assert_eq!(lock(&fx)[0]["content_hash"].as_str(), Some(mazo::store::content_hash(&to).unwrap().as_str()));
+    assert_no_leftovers(&fx);
 }
 
 #[test]
@@ -2067,6 +2112,26 @@ fn update_project_installs_a_changed_project_skill_and_rewrites_the_project_lock
     let changed: Vec<PathBuf> =
         fx.snapshot().into_iter().filter(|(k, v)| global.get(k) != Some(v)).map(|(k, _)| k).collect();
     assert!(changed.iter().all(|c| c.starts_with(fx.data.join("mazo")) && !c.starts_with(store(&fx))), "{changed:?}");
+}
+
+#[test]
+fn a_project_lock_entry_whose_name_is_a_path_is_refused_before_anything_is_touched() {
+    let fx = git_fixture();
+    let p = project(&fx);
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add_project(&fx, &p, &[&url, "--trust"]).assert_ok();
+    let lock = p.join("mazo.lock");
+    let text = fs::read_to_string(&lock).unwrap().replace("name = \"theirs\"", "name = \"../../../victim\"");
+    fs::write(&lock, text).unwrap();
+    // `.old-<name>` would be `p/victim`, and `<name>` the directory beside the project.
+    fs::create_dir_all(p.join(".mazo/skills/.old-..")).unwrap();
+    common::write(&p.join("victim/keep"), "keep\n");
+    common::write(&fx.root.join("victim/keep"), "keep\n");
+    let r = in_project(&fx, &p, &["update"]);
+    assert!(exists(&p.join("victim/keep")), "{}", r.stderr());
+    assert!(exists(&fx.root.join("victim/keep")), "{}", r.stderr());
+    assert_eq!(r.code(), 1, "{}", r.stderr());
+    assert!(r.stderr().contains("invalid skill name \"../../../victim\""), "{}", r.stderr());
 }
 
 #[test]

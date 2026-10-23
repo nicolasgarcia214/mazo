@@ -22,7 +22,8 @@ projects. It sends at most `--limit` sessions (default 20), or every one with
 `--all`.
 
 - Claude and Pi run with tools off.
-- Codex runs in a read-only sandbox with a scratch `CODEX_HOME`.
+- Codex runs without its shell, image viewer or web search, in a read-only
+  sandbox with a scratch `CODEX_HOME`. Its subagents stay, with the same tools.
 - A command judge gets the prompt, the answer schema and the input on stdin,
   and its stdout must be the answer as JSON.
 - An http judge gets the same text as one user message, and its reply's

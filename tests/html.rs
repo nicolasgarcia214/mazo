@@ -283,6 +283,25 @@ fn report_writes_the_data_dir_file_with_mode_0600() {
     assert!(!stderr(&out).contains("git worktree"));
 }
 
+/// A symlink at `--out` is replaced by the report, not followed: its target
+/// keeps its text and mode.
+#[test]
+fn out_replaces_a_symlink_instead_of_writing_through_it() {
+    let b = Bin::new();
+    let target = b.root.join("target.txt");
+    write(&target, "keep me\n");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+    let link = b.root.join("report.html");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let out = b.mazo(&["report", "--out", link.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!((fs::read_to_string(&target).unwrap().as_str(), mode(&target)), ("keep me\n", 0o644));
+    assert!(fs::symlink_metadata(&link).unwrap().is_file());
+    assert_eq!(mode(&link), 0o600);
+    assert!(fs::read_to_string(&link).unwrap().starts_with("<!doctype html>"));
+}
+
 /// AC5: `--out` inside a git worktree warns, outside it does not, and
 /// `--open` runs the platform opener on the file.
 #[test]

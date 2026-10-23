@@ -6,7 +6,7 @@ use std::io::{BufRead, IsTerminal};
 use std::path::Path;
 use std::sync::mpsc;
 
-use super::{Add, Out};
+use super::{Add, Out, err};
 use crate::inventory::description;
 use crate::{Error, Result};
 
@@ -97,7 +97,8 @@ pub(super) fn confirm_calls(n: usize, consent: Consent, out: Out) -> Result<()> 
 /// picker or when stdin and stdout are a terminal. Off both, several skills
 /// and neither flag is a usage error listing them.
 pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option<String>>> {
-    let usage = |e: String| Error::Usage(format!("add {}: {e}", args.source));
+    // Inert: the skill paths it lists are directories the source's author named.
+    let usage = |e: String| Error::Usage(crate::render::inert(&format!("add {}: {e}", args.source)));
     if root.join("SKILL.md").is_file() {
         return match args.pick {
             Some(p) if p != own => Err(usage(format!("no skill named {p}; the only skill here is {own}"))),
@@ -151,7 +152,7 @@ pub(super) fn name(path: &str) -> &str {
 /// and does not descend into a skill.
 fn skill_dirs(root: &Path) -> std::result::Result<Vec<String>, String> {
     fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> std::result::Result<(), String> {
-        let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let entries = std::fs::read_dir(dir).map_err(|e| err(dir, e))?;
         for e in entries.flatten() {
             let child = e.file_name().to_string_lossy().into_owned();
             if child.starts_with('.') || child == "node_modules" {

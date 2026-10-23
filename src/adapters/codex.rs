@@ -440,18 +440,33 @@ fn skip_expr(s: &[u8], mut i: usize) -> usize {
 }
 
 /// Skips a `{…}` group starting at `s[i] == '{'`; returns the index after `}`.
+/// Templates and `${…}` inside it go on a stack, not the call stack, so no
+/// nesting depth can overflow it.
 fn skip_braces(s: &[u8], mut i: usize) -> usize {
-    let mut depth = 0usize;
+    let mut open = Vec::new(); // each unclosed `{` or `` ` ``, innermost last
     while i < s.len() {
-        match s[i] {
-            b'{' => depth += 1,
-            b'}' if depth <= 1 => return i + 1,
-            b'}' => depth -= 1,
-            _ => {}
+        match (open.last() == Some(&b'`'), s[i]) {
+            (true, b'`') | (false, b'}') => {
+                open.pop();
+                i += 1;
+            }
+            (true, b'\\') => i += 2,
+            (true, b'$') if s.get(i + 1) == Some(&b'{') => {
+                open.push(b'{');
+                i += 2;
+            }
+            (true, _) => i += 1,
+            (false, c @ (b'{' | b'`')) => {
+                open.push(c);
+                i += 1;
+            }
+            (false, _) => i = skip_token(s, i),
         }
-        i = skip_token(s, i);
+        if open.is_empty() {
+            return i;
+        }
     }
-    i
+    i.min(s.len())
 }
 
 fn skip_ws(s: &[u8], mut i: usize) -> usize {
@@ -477,6 +492,16 @@ mod tests {
 
     fn calls(src: &str) -> Vec<Option<(String, Option<String>)>> {
         exec_calls(src).into_iter().map(|c| c.ok().map(|c| (c.cmd, c.workdir))).collect()
+    }
+
+    #[test]
+    fn deep_template_nesting_does_not_overflow_the_stack() {
+        // Each `${` once cost a recursion, so 120k levels aborted `mazo scan`.
+        let deep = "`${".repeat(120_000);
+        assert_eq!(calls(&format!("// SKILL.md\n{deep}")), vec![]);
+        assert_eq!(calls(&format!("tools.exec_command({{cmd: {deep}")), vec![None]);
+        assert_eq!(calls("tools.exec_command({cmd: `a${`b${'}'}`}`, workdir: '/w'})"), vec![None]);
+        assert_eq!(calls("f(`${`${'`'}`}`); tools.exec_command({cmd: 'x'})"), vec![Some(("x".into(), None))]);
     }
 
     #[test]
