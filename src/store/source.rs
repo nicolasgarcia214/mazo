@@ -39,6 +39,7 @@ impl Source {
     /// segment ending in `.git`, except in a GitHub browser URL
     /// ([`github_browser_url`]). Any other git source holding `?`, `#` or `\`
     /// is refused: git could fetch from another host than the one trust checks.
+    /// So is git's `<transport>::<address>` form, which runs a remote helper.
     pub(super) fn parse(arg: &str) -> std::result::Result<Source, String> {
         if arg.starts_with('-') {
             return Err("a source must not start with -".into());
@@ -56,6 +57,14 @@ impl Source {
         }
         if arg.contains(['?', '#', '\\']) {
             return Err(format!("a git source must not contain ?, # or \\: {arg:?}"));
+        }
+        // Git reads `<transport>::` as a remote helper, `ext::` running a command.
+        let helper = arg.split_once("::").is_some_and(|(transport, _)| {
+            transport.starts_with(|c: char| c.is_ascii_alphabetic())
+                && transport.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
+        });
+        if helper {
+            return Err(format!("a git source must not name a remote helper, <transport>::: {arg:?}"));
         }
         let bad = || format!("not a local path, a git URL or owner/repo[/path]: {arg:?}");
         let (base, segments): (String, Vec<&str>) = if let Some((scheme, rest)) = arg.split_once("://") {
@@ -233,7 +242,7 @@ impl Remote {
     fn git(&self, dir: Option<&Path>, args: &[&dyn AsRef<OsStr>], cancel: &dyn Fn() -> bool) -> Result<Vec<u8>> {
         let verb = args[0].as_ref().to_string_lossy();
         let mut git = std::process::Command::new("git");
-        git.args(args).env("GIT_TERMINAL_PROMPT", "0");
+        git.args(args).env("GIT_TERMINAL_PROMPT", "0").env("GIT_ALLOW_PROTOCOL", PROTOCOLS);
         if let Some(dir) = dir {
             git.current_dir(dir);
         }
@@ -261,6 +270,9 @@ impl Remote {
 pub(super) fn is_commit(r#ref: &str) -> bool {
     r#ref.len() == 40 && r#ref.bytes().all(|b| b.is_ascii_hexdigit())
 }
+
+/// The transports git may fetch over, as `GIT_ALLOW_PROTOCOL` lists them.
+const PROTOCOLS: &str = "https:ssh:git:file";
 
 /// How long a clone or ls-remote may run before it is killed.
 const CLONE_LIMIT: Duration = Duration::from_secs(10 * 60);
@@ -488,6 +500,11 @@ mod tests {
             "https://evil.example?@github.com/anthropics/x",
             "https://evil.example\\@github.com/anthropics/x",
             "git@evil.example#@github.com:anthropics/x.git",
+            // Remote helpers: `ext::` runs its command.
+            "ext::sh -c true",
+            "ext::sh -c true/x",
+            "fd::3/x",
+            "Ext+1.a-b::x/y",
         ] {
             assert!(Source::parse(arg).is_err(), "{arg}");
         }
