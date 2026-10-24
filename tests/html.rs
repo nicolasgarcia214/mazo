@@ -203,7 +203,7 @@ fn the_legend_lists_the_helps_marks() {
          stale the skill changed since the grade; ✓ audited; vet vetted by mazo add, not audited; \
          ! the vet found a security issue; (project) a project skill, counted apart"
     );
-    assert_eq!(legend, format!("legend: {}", mazo::help::legend(true)));
+    assert_eq!(legend, format!("legend: {}", mazo::help::legend(true, |_, _| true)));
 }
 
 /// AC4: each missing or stale grade names `/grade <skill>`; a current grade

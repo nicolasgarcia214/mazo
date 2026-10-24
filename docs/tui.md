@@ -25,9 +25,9 @@ lists the dialog's keys instead.
 screen's first, the marks and glyphs, and a FAQ on why counts look low, what
 `-` under audit and the agent letters mean, and how grade, retro and audit
 differ, and what the tokens in context cost. `j`/`k` and `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it. In
-the `/` filter and the add source, `H` is a literal `H`. The legend under
-`mazo usage` and `mazo unused` and the HTML report's legend are its marks and
-glyphs.
+the `/` filter and the add source, `H` is a literal `H`. The HTML report's
+legend is its marks and glyphs; the legend under `mazo usage` and `mazo
+unused` keeps only those its table shows, and a table with none has no legend.
 
 ## Keys
 

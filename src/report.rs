@@ -80,9 +80,16 @@ pub const SHOW_SINCE: Since = Since::Days(30);
 /// `show`'s default `--limit`, which the report's and the TUI's cards list too.
 pub const SHOW_LIMIT: usize = 20;
 
-/// The last line of `usage` and `unused`: the help's marks.
-fn legend() -> String {
-    format!("legend: {}\n", help::legend(false))
+/// The last line of `usage` and `unused`: the help's marks that `cells`
+/// under `header` show, or none when they show no mark.
+fn legend(header: &[(&str, Align)], cells: &[Vec<String>]) -> String {
+    let shown = |column: &str, mark: &str| {
+        header.iter().position(|(name, _)| *name == column).is_some_and(|i| {
+            cells.iter().any(|row| if mark == column { !row[i].is_empty() } else { row[i].contains(mark) })
+        })
+    };
+    let line = help::legend(false, shown);
+    if line.is_empty() { line } else { format!("legend: {line}\n") }
 }
 
 /// Days in the `30d` per-day counts.
@@ -640,7 +647,7 @@ pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
         return json_line(&usage);
     }
     let cells: Vec<Vec<String>> = usage.rows.iter().map(|r| usage_cells(input, r, tty)).collect();
-    render::table(&USAGE_HEADER, &cells, tty) + &view.coverage_line("coverage", None) + &legend()
+    render::table(&USAGE_HEADER, &cells, tty) + &view.coverage_line("coverage", None) + &legend(&USAGE_HEADER, &cells)
 }
 
 /// Skills that cite `skill`.
@@ -777,7 +784,9 @@ pub fn unused(input: &Input, since: Since, json: bool, tty: bool) -> String {
         return json_line(&unused);
     }
     let cells: Vec<Vec<String>> = unused.skills.iter().map(|r| unused_cells(r, tty)).collect();
-    render::table(&UNUSED_HEADER, &cells, tty) + &view.coverage_line("window", view.start(since)) + &legend()
+    render::table(&UNUSED_HEADER, &cells, tty)
+        + &view.coverage_line("window", view.start(since))
+        + &legend(&UNUSED_HEADER, &cells)
 }
 
 #[derive(Serialize)]
@@ -1422,5 +1431,39 @@ mod tests {
             ["↑", "↓", "→", "new"]
         );
         assert_eq!(Trend::glyph(None), "");
+    }
+
+    #[test]
+    fn the_legend_explains_only_the_marks_the_table_shows() {
+        let row = |skill: &str, agents: &str, ctx: &str, grade: &str, audit: &str| {
+            let mut cells = vec!["0".to_string(); USAGE_HEADER.len()];
+            for (column, cell) in
+                [("skill", skill), ("agents", agents), ("ctx", ctx), ("grade", grade), ("audit", audit)]
+            {
+                cells[USAGE_HEADER.iter().position(|(name, _)| *name == column).unwrap()] = cell.into();
+            }
+            cells
+        };
+        let cells = [row("a", "C", "C◐X●", "7 \x1b[33mstale\x1b[0m", "✓"), row("b", "", "", "-", "-")];
+        assert_eq!(
+            legend(&USAGE_HEADER, &cells),
+            "legend: agents C Claude, X Codex, P Pi; \
+             ● name and description in context: Claude on, every Codex skill, Pi by default; \
+             ◐ name only in context: Claude name-only; \
+             stale the skill changed since the grade; ✓ audited\n"
+        );
+        let bare = [row("b (project)", "", "", "-", "vet")];
+        assert_eq!(
+            legend(&USAGE_HEADER, &bare),
+            "legend: vet vetted by mazo add, not audited; (project) a project skill, counted apart\n"
+        );
+    }
+
+    #[test]
+    fn an_empty_or_markless_table_has_no_legend() {
+        assert_eq!(legend(&USAGE_HEADER, &[]), "");
+        assert_eq!(legend(&UNUSED_HEADER, &[]), "");
+        let unused = [vec!["a".to_string(), "unused".into(), "cluster: b; weak-only".into()]];
+        assert_eq!(legend(&UNUSED_HEADER, &unused), "", "unused has none of the marked columns");
     }
 }
