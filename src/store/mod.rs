@@ -20,17 +20,14 @@ mod vet;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::sync::atomic::Ordering;
-use std::sync::mpsc;
 
-use crate::audit::{self, Caller, Pane};
+use crate::audit::{self, Caller};
 use crate::config::{self, Config, Home};
 use crate::inventory::Inventory;
-use crate::{Error, Result, outln};
+use crate::{Error, Result};
 use crate::{ledger, links};
 
-pub use ask::Question;
+pub use ask::{Io, Terminal};
 pub use bundled::{install as install_bundled, missing as missing_bundled};
 pub use lock::{Lock, Locked, content_hash};
 pub use project::{Project, project_dir, project_hint, project_inventory, project_root};
@@ -84,18 +81,14 @@ pub struct Add<'a> {
     pub force: bool,
     /// Install into the project at the current directory's git root.
     pub project: bool,
-    /// The TUI's job pane: what the add reports, and its judge's progress,
-    /// go there instead of to stdout and stderr.
-    pub pane: Option<&'a Pane>,
-    /// The TUI's dialogs, which take the picker and the y/N questions in
-    /// place of the terminal.
-    pub asks: Option<&'a mpsc::Sender<Question>>,
+    /// Where the add reports and asks.
+    pub io: &'a dyn Io,
 }
 
 impl Add<'_> {
     /// What the vet gate may assume for this add.
     fn consent(&self) -> Consent<'_> {
-        Consent { update: false, yes: self.yes, force: self.force, asks: self.asks }
+        Consent { update: false, yes: self.yes, force: self.force, io: self.io }
     }
 }
 
@@ -118,6 +111,17 @@ fn resolve(cfg: &Config, arg: &str, trust: bool) -> Result<(Source, bool)> {
 /// The refusal `mazo add <arg>` gives before reading the source, if any.
 pub fn precheck(cfg: &Config, arg: &str) -> Result<()> {
     resolve(cfg, arg, false).map(drop)
+}
+
+/// How an add or update ended, its failures reported as they happened: the
+/// worst of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Outcome {
+    Done,
+    /// A skill failed or was refused.
+    Failed,
+    /// A skill was refused as a usage error, or for want of a `[judge]`.
+    Usage,
 }
 
 /// What `add` reads skills from: the source resolved, and cloned when it is a repository.
@@ -143,13 +147,13 @@ struct Fetched<'a> {
 /// with `--all` once its judge calls are agreed to ([`confirm_calls`]). A
 /// source of several skills installs the one `--skill` names, every one with
 /// `--all`, else the ones picked at a terminal ([`skills_in`]); none picked
-/// installs nothing. A refused skill leaves the rest to install; the exit
-/// code is the highest of the refusals', 0 when there were none. With
+/// installs nothing. A refused skill leaves the rest to install; the
+/// outcome is the worst of the refusals'. With
 /// `--project`, outside a git repository is a usage error before anything
 /// else, and the vet sees the project's skills too.
-pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<ExitCode> {
+pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Outcome> {
     let project = if args.project { Some(project_root("add")?) } else { None };
-    let (arg, out) = (args.source, Out(args.pane));
+    let (arg, out) = (args.source, args.io);
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let (mut source, trusted) = resolve(cfg, arg, args.trust)?;
     // The judge is set up, and its login checked, before anything is cloned.
@@ -158,7 +162,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         _ => None,
     };
     let caller =
-        backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: args.pane });
+        backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: out.pane() });
     if let Some(c) = &caller {
         // `--all` shows its call count first, so it asks once the source is read.
         if !args.all {
@@ -190,16 +194,15 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
     if children.is_empty() {
         out.line("nothing selected; nothing was installed");
     }
-    // The TUI shows the count for any untrusted add, since its picker can select several.
-    if caller.is_some() && !children.is_empty() && (args.all || args.asks.is_some()) {
-        confirm_calls(children.len(), args.consent(), out)?;
+    if caller.is_some() && !children.is_empty() && (args.all || out.confirms_calls()) {
+        confirm_calls(children.len(), args.consent())?;
     }
     let mut inv = match &project {
         Some(p) => project_inventory(inv, p)?,
         None => inv.clone(),
     };
     let target = Target { data, project: project.as_deref() };
-    let mut code = 0;
+    let mut outcome = Outcome::Done;
     for child in children {
         // A cancelled job starts nothing more.
         if out.cancelled() {
@@ -207,10 +210,10 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Exi
         }
         if let Err(e) = install(cfg, &mut inv, target, args, caller.as_ref(), &from, child) {
             out.error(&format!("ERROR: {e}"));
-            code = code.max(e.exit_code());
+            outcome = outcome.max(if let Error::Usage(_) = e { Outcome::Usage } else { Outcome::Failed });
         }
     }
-    Ok(ExitCode::from(code))
+    Ok(outcome)
 }
 
 /// The store a command acts on: the data directory's, or a project's.
@@ -299,7 +302,7 @@ fn install(
     from: &Fetched,
     child: Option<String>,
 ) -> Result<()> {
-    let (arg, rename, out) = (args.source, args.rename, Out(args.pane));
+    let (arg, rename, out) = (args.source, args.rename, args.io);
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let (src, subpath) = match &child {
         Some(c) => (from.root.join(c), from.subpath.join(c)),
@@ -407,32 +410,6 @@ fn install(
         out.line(&line);
     }
     Ok(())
-}
-
-/// Where an update reports: the TUI's job pane, else stdout, or stderr for
-/// an error.
-#[derive(Clone, Copy)]
-struct Out<'a>(Option<&'a Pane>);
-
-impl Out<'_> {
-    fn line(self, line: &str) {
-        match self.0 {
-            Some(pane) => _ = pane.lines.send(line.into()),
-            None => outln!("{line}"),
-        }
-    }
-
-    fn error(self, line: &str) {
-        match self.0 {
-            Some(pane) => _ = pane.lines.send(line.into()),
-            None => eprintln!("{line}"),
-        }
-    }
-
-    /// Whether the pane asked the job to stop.
-    fn cancelled(self) -> bool {
-        self.0.is_some_and(|p| p.cancel.load(Ordering::Relaxed))
-    }
 }
 
 #[cfg(test)]

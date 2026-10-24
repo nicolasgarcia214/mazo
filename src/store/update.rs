@@ -1,23 +1,20 @@
 //! `mazo update`: each skill re-cloned, re-vetted on its diff when its
 //! source is untrusted, and swapped in under the data lock.
 
-use std::cell::OnceCell;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::sync::mpsc;
-
-use super::ask::{Consent, Question};
+use super::ask::{Consent, Io};
 use super::bundled;
 use super::lock::{checked, now, resolved, stage};
 use super::source::{Remote, Scratch};
 use super::vet::{gate, no_judge};
-use super::{Lock, Locked, Out, Target, content_hash, err, project_hint, project_inventory, project_root};
-use crate::audit::{self, Backend, Caller, Pane, Vet};
+use super::{Lock, Locked, Outcome, Target, content_hash, err, project_hint, project_inventory, project_root};
+use crate::audit::{self, Backend, Caller, Vet};
 use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
 use crate::{Error, Result};
 use crate::{ledger, links};
+use std::cell::OnceCell;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// `mazo update`'s arguments.
 pub struct Update<'a> {
@@ -27,14 +24,10 @@ pub struct Update<'a> {
     pub yes: bool,
     /// Apply an update with a security finding.
     pub force: bool,
-    /// The TUI's job pane: what the update reports, and its judge's
-    /// progress, go there instead of to stdout and stderr.
-    pub pane: Option<&'a Pane>,
     /// Update the project skills at the current directory's git root.
     pub project: bool,
-    /// The TUI's dialogs, which take each re-vet's y/N in place of the
-    /// terminal.
-    pub asks: Option<&'a mpsc::Sender<Question>>,
+    /// Where the update reports and asks.
+    pub io: &'a dyn Io,
 }
 
 /// `mazo update [names…] [--yes] [--force]`: re-clones each git-sourced
@@ -44,14 +37,14 @@ pub struct Update<'a> {
 /// by the judge on the diff from the installed copy ([`gate`]), and refused
 /// (exit 2, with [`no_judge`] once) when no judge is configured; a local-path one is
 /// not updatable. A skill that fails or is refused is left as it was and the
-/// rest still run; the exit code is the highest of the failures', 2 for no
-/// judge and 1 for the rest. A name that is not a store skill is a usage error.
+/// rest still run; the outcome is the worst of the failures', a usage one
+/// for no judge. A name that is not a store skill is a usage error.
 /// With `--project` it updates the project's skills and lockfile instead, the
 /// judge seeing the project's skills too; their links, relative to the
 /// project store, need no change. A bundled skill [`bundled::behind`] the
 /// running version moves to its tag, unvetted, once the remote has that tag.
-pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<ExitCode> {
-    let (names, out) = (args.names, Out(args.pane));
+pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Result<Outcome> {
+    let (names, out) = (args.names, args.io);
     let project = if args.project { Some(project_root("update")?) } else { None };
     let target = Target { data, project: project.as_deref() };
     let with_project;
@@ -69,16 +62,10 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             None => format!("update: not a store skill: {n}{}", project_hint(n)),
         }));
     }
-    let consent = Consent { update: true, yes: args.yes, force: args.force, asks: args.asks };
-    let revet = cfg.judge.as_ref().map(|judge| Revet {
-        data,
-        judge,
-        homes: &cfg.homes,
-        consent,
-        pane: args.pane,
-        backend: OnceCell::new(),
-    });
-    let (mut updated, mut unjudged, mut code) = (false, false, 0);
+    let consent = Consent { update: true, yes: args.yes, force: args.force, io: out };
+    let revet =
+        cfg.judge.as_ref().map(|judge| Revet { data, judge, homes: &cfg.homes, consent, backend: OnceCell::new() });
+    let (mut updated, mut unjudged, mut outcome) = (false, false, Outcome::Done);
     // Whether the remote has the running version's tag, asked once.
     let tagged = OnceCell::new();
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
@@ -94,7 +81,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             }
             Err(e) => {
                 out.error(&format!("ERROR: update {}: {e}", l.name));
-                code = code.max(1);
+                outcome = outcome.max(Outcome::Failed);
                 continue;
             }
         };
@@ -103,7 +90,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
                 Ok((tagged, _)) => *tagged,
                 Err(e) => {
                     out.error(&format!("ERROR: update {}: {e}", l.name));
-                    code = code.max(1);
+                    outcome = outcome.max(Outcome::Failed);
                     continue;
                 }
             };
@@ -118,7 +105,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
                      which the config lacks; add it to trusted to update it without vetting",
                     l.name, l.origin
                 ));
-                (unjudged, code) = (true, 2);
+                (unjudged, outcome) = (true, Outcome::Usage);
                 continue;
             }
             Some(r) => Some(r),
@@ -133,7 +120,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             Ok(None) => out.line(&format!("{}: up to date", l.name)),
             Err(e) => {
                 out.error(&format!("ERROR: update {}: {e}", l.name));
-                code = code.max(1);
+                outcome = outcome.max(Outcome::Failed);
             }
         }
     }
@@ -148,13 +135,13 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             }
         }
         if !errors.is_empty() {
-            code = code.max(1);
+            outcome = outcome.max(Outcome::Failed);
         }
     }
     if unjudged {
         out.error(&no_judge());
     }
-    Ok(ExitCode::from(code))
+    Ok(outcome)
 }
 
 /// Clones `remote` into `<data>/.clone-<pid>` and, when the skill at its
@@ -174,7 +161,7 @@ fn refresh(
     l: &Locked,
     remote: &Remote,
     vet: Option<&Revet>,
-    out: Out,
+    out: &dyn Io,
 ) -> Result<Option<String>> {
     let (data, store, lock_dir) = (target.data, target.store(), target.lock_dir());
     let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
@@ -268,7 +255,6 @@ struct Revet<'a> {
     judge: &'a Judge,
     homes: &'a [Home],
     consent: Consent<'a>,
-    pane: Option<&'a Pane>,
     backend: OnceCell<Box<dyn Backend>>,
 }
 
@@ -283,7 +269,7 @@ impl Revet<'_> {
     }
 
     fn with<'s>(&'s self, backend: &'s dyn Backend) -> Caller<'s> {
-        Caller { data: self.data, judge: self.judge, backend, pane: self.pane }
+        Caller { data: self.data, judge: self.judge, backend, pane: self.consent.io.pane() }
     }
 
     /// The vet gate on an update of the store skill `name` to the copy

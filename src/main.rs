@@ -317,17 +317,24 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Add { source, name, skill, all, trust, yes, force, project } => {
             let (rename, pick) = (name.as_deref(), skill.as_deref());
             let args =
-                store::Add { source: &source, rename, pick, all, trust, yes, force, project, pane: None, asks: None };
-            store::add(&cfg, &inv, &data, &args)
+                store::Add { source: &source, rename, pick, all, trust, yes, force, project, io: &store::Terminal };
+            store::add(&cfg, &inv, &data, &args).map(exit)
         }
-        Cmd::Update { names, yes, force, project } => store::update(
-            &cfg,
-            &inv,
-            &data,
-            &store::Update { names: &names, yes, force, pane: None, project, asks: None },
-        ),
+        Cmd::Update { names, yes, force, project } => {
+            let args = store::Update { names: &names, yes, force, project, io: &store::Terminal };
+            store::update(&cfg, &inv, &data, &args).map(exit)
+        }
         Cmd::Init { .. } => unreachable!("handled before the config loads"),
     }
+}
+
+/// The exit code of an add or update that ran: 1 for a failure, 2 for a usage refusal.
+fn exit(outcome: store::Outcome) -> ExitCode {
+    ExitCode::from(match outcome {
+        store::Outcome::Done => 0,
+        store::Outcome::Failed => 1,
+        store::Outcome::Usage => 2,
+    })
 }
 
 /// Scans, then runs `f` on the data directory and the report input loaded from it.
