@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use unicode_width::UnicodeWidthStr;
 
 /// Column alignment.
 #[derive(Clone, Copy)]
@@ -57,23 +58,21 @@ pub fn paint_prefix(line: &str, on: bool) -> String {
     }
 }
 
-/// Visible columns of `s`: chars, less `ESC [ … m` colour sequences.
+/// Visible columns of `s`: its display width, less `ESC [ … m` colour
+/// sequences.
 fn width(s: &str) -> usize {
     let mut n = 0;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            chars.by_ref().find(|&c| c == 'm');
-        } else {
-            n += 1;
-        }
+    let mut rest = s;
+    while let Some(i) = rest.find('\x1b') {
+        n += rest[..i].width();
+        rest = rest[i..].split_once('m').map_or("", |(_, r)| r);
     }
-    n
+    n + rest.width()
 }
 
 /// An aligned plain-text table, one space between columns, the header bold
-/// when `tty`. Widths count visible chars, so painted cells keep their
-/// alignment. Trailing spaces are trimmed
+/// when `tty`. Widths count display columns, so painted and wide cells keep
+/// their alignment. Trailing spaces are trimmed
 /// from every line.
 pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> String {
     let mut widths: Vec<usize> = header.iter().map(|(h, _)| width(h)).collect();
@@ -154,9 +153,10 @@ mod tests {
     }
 
     #[test]
-    fn table_aligns_by_chars() {
-        let t = table(&[("a", Align::Left), ("n", Align::Right)], &[vec!["xyz".into(), "5".into()]], false);
-        assert_eq!(t, "a   n\nxyz 5\n");
+    fn table_aligns_by_display_width() {
+        let rows = [vec!["xyz".into(), "5".into()], vec!["日本".into(), "6".into()]];
+        let t = table(&[("a", Align::Left), ("n", Align::Right)], &rows, false);
+        assert_eq!(t, "a    n\nxyz  5\n日本 6\n");
     }
 
     #[test]

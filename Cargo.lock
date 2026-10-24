@@ -810,6 +810,7 @@ dependencies = [
  "sha1_smol",
  "tempfile",
  "toml",
+ "unicode-width",
  "ureq",
  "url",
 ]
