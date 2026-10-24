@@ -693,6 +693,57 @@ fn a_failed_clone_exits_1_with_gits_error_and_writes_nothing() {
     assert!(!exists(&fx.data.join("mazo/mazo.lock")));
 }
 
+/// A git shim in the fixture's `bin/` that logs each call's
+/// `GIT_ALLOW_PROTOCOL` and arguments, then runs git; [`remote_calls`] reads the log.
+fn logging_git(fx: &Fixture) -> PathBuf {
+    let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|d| d.join("git")).find(|p| p.is_file());
+    let (shim, log) = (fx.root.join("bin/git"), fx.root.join("git.log"));
+    common::write(
+        &shim,
+        &format!(
+            "#!/bin/sh\necho \"$GIT_ALLOW_PROTOCOL $*\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            git.unwrap().display()
+        ),
+    );
+    fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    log
+}
+
+/// The `(GIT_ALLOW_PROTOCOL, arguments)` of each logged call that `Remote::git`
+/// makes: a clone, fetch, ls-remote or init, not the local lookups around them.
+fn remote_calls(log: &Path) -> Vec<(String, String)> {
+    let log = fs::read_to_string(log).unwrap_or_default();
+    let calls = log.lines().map(|l| l.split_once(' ').unwrap()).map(|(p, a)| (p.to_string(), a.to_string()));
+    let remote = ["clone", "fetch", "ls-remote", "init"];
+    calls.filter(|(_, args)| args.split(' ').next().is_some_and(|verb| remote.contains(&verb))).collect()
+}
+
+#[test]
+fn every_git_call_allows_only_https_ssh_git_and_file() {
+    let fx = git_fixture();
+    let log = logging_git(&fx);
+    let url = bare_repo(&fx, "theirs", &[(".", "theirs")]);
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    let calls = remote_calls(&log);
+    assert!(calls.iter().any(|(_, args)| args.starts_with("clone ")), "{calls:?}");
+    assert!(calls.iter().all(|(allowed, _)| allowed == "https:ssh:git:file"), "{calls:?}");
+}
+
+#[test]
+fn a_remote_helper_source_is_refused_before_any_git_call() {
+    let fx = git_fixture();
+    let log = logging_git(&fx);
+    let before = fx.snapshot();
+    for source in ["ext::sh -c true", "ext::sh -c true/x", "fd::3/x"] {
+        let r = add(&fx, &[source, "--trust"]);
+        assert_eq!(r.code(), 2, "{}", r.stderr());
+        assert!(r.stderr().contains("must not name a remote helper"), "{}", r.stderr());
+    }
+    assert_eq!(remote_calls(&log), []);
+    assert_eq!(fx.snapshot(), before);
+}
+
 #[test]
 fn a_subpath_symlinked_out_of_the_clone_is_refused() {
     let fx = git_fixture();
