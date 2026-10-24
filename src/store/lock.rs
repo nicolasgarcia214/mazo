@@ -158,7 +158,8 @@ pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: PathB
         // Typed on the handle that is read, not on the path [`tree`] listed:
         // an entry swapped for a symlink since is refused, not followed.
         let mut file = unfollowed(src, rel).map_err(|e| err(&from, e))?;
-        let ft = file.metadata().map_err(|e| err(&from, e))?.file_type();
+        let meta = file.metadata().map_err(|e| err(&from, e))?;
+        let ft = meta.file_type();
         if ft.is_dir() {
             fs::create_dir(&dest).map_err(|e| err(&dest, e))
         } else if !ft.is_file() {
@@ -167,7 +168,9 @@ pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: PathB
             fs::write(&dest, skill_md).map_err(|e| err(&dest, e))
         } else {
             let mut to = fs::File::create_new(&dest).map_err(|e| err(&dest, e))?;
-            std::io::copy(&mut file, &mut to).map(drop).map_err(|e| err(&dest, e))
+            std::io::copy(&mut file, &mut to).map_err(|e| err(&dest, e))?;
+            // As `fs::copy` does, so that a script stays executable.
+            to.set_permissions(meta.permissions()).map_err(|e| err(&dest, e))
         }
     })?;
     let hash = content_hash(dir)?;
@@ -349,6 +352,21 @@ mod tests {
             assert!(e.to_string().starts_with(&src.join(link).display().to_string()), "{e}");
             assert!(!staged.exists(), "a refused copy is removed");
         }
+    }
+
+    #[test]
+    fn stage_keeps_a_files_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("SKILL.md"), "a").unwrap();
+        std::fs::write(src.join("run.sh"), "b").unwrap();
+        std::fs::set_permissions(src.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let files = ["SKILL.md", "run.sh"].map(std::path::PathBuf::from);
+        let (staged, _) = stage(&src, &files, "a", tmp.path().join("staged")).unwrap();
+        let mode = std::fs::metadata(staged.0.join("run.sh")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
     }
 
     #[test]
