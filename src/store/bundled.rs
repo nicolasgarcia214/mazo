@@ -8,7 +8,7 @@ use super::source::{Remote, Source, is_commit};
 use super::{Add, Locked, add, inventory};
 use crate::config::Config;
 use crate::inventory::Inventory;
-use crate::{Error, Result};
+use crate::{Error, Result, outln};
 
 /// The skills `mazo init` installs, and whose absence the TUI's top bar names.
 const BUNDLED: [&str; 2] = ["grade", "retro"];
@@ -50,7 +50,7 @@ pub(super) fn listed(remote: &Remote, cancel: &dyn Fn() -> bool) -> Result<(bool
 pub fn install(cfg: &Config, inv: &Inventory, data: &Path) -> Result<ExitCode> {
     let missing = missing(inv);
     for name in BUNDLED.iter().filter(|n| !missing.contains(n)) {
-        println!("{name}: already installed; skipped");
+        outln!("{name}: already installed; skipped");
     }
     if missing.is_empty() {
         return Ok(ExitCode::SUCCESS);
