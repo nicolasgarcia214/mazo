@@ -170,6 +170,9 @@ impl Classifier<'_> {
                 self.inv.worktree.as_deref().is_some_and(|w| c.starts_with(w))
                     || self.homes.iter().any(|h| c.starts_with(h.skills_dir()))
             });
+        // Transcript fields are anyone's text: stored inert, so no report,
+        // card or TUI can print a control character from one.
+        let inert = |s: Option<String>| s.as_deref().map(crate::render::inert);
         Some(Event {
             v: 1,
             id,
@@ -179,13 +182,13 @@ impl Classifier<'_> {
             agent_version: raw.session.version.clone(),
             session,
             actor: actor(self.home.agent, &raw.session.actor),
-            skill: raw.skill,
+            skill: crate::render::inert(&raw.skill),
             origin,
             channel: raw.channel,
-            path: raw.path,
-            cwd,
+            path: inert(raw.path),
+            cwd: inert(cwd),
             authoring,
-            src: format!("{}:{}", file.display(), raw.line),
+            src: crate::render::inert(&format!("{}:{}", file.display(), raw.line)),
         })
     }
 
