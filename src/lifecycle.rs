@@ -8,7 +8,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use crate::config::Config;
 use crate::inventory::{Inventory, git};
-use crate::ledger::{self, Agent, Ledger};
+use crate::ledger::{self, Agent};
 use crate::{Error, Result};
 use crate::{links, policy, report, scan, store, yaml};
 
@@ -268,16 +268,16 @@ pub fn retire(
     let project = if project { Some(store::project_root("retire")?) } else { None };
     let (inv, root) = located(cfg, data, name, project.as_deref())?;
     archive(cfg, &root, name)?;
-    warnings.extend(scan::scan(cfg, &inv, data, false)?.warnings());
+    let scanned = scan::scan(cfg, &inv, data, false)?;
+    warnings.extend(scanned.warnings());
     if !force {
-        let ledger = Ledger::load(data)?;
         let coverage = ledger::load_coverage(data)?;
         let now = jiff::Timestamp::now();
         let tz = jiff::tz::TimeZone::system();
         let input = report::Input {
             cfg,
             inv: &inv,
-            events: ledger.events(),
+            events: &scanned.events,
             coverage: &coverage,
             audits: &BTreeMap::new(),
             now,

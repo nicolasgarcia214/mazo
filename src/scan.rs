@@ -36,6 +36,8 @@ pub struct HomeReport {
 #[derive(Debug, Default)]
 pub struct ScanReport {
     pub homes: BTreeMap<String, HomeReport>,
+    /// The ledger as this scan left it, so a caller need not read it again.
+    pub events: Vec<Event>,
 }
 
 impl ScanReport {
@@ -213,6 +215,7 @@ pub fn scan_with<'a>(
     cursors.retain(|k, _| listed.contains(k));
     ledger::write_json(&data.join("cursors.json"), &cursors)?;
     ledger::save_coverage(data, &coverage)?;
+    report.events = if reparse { fresh } else { ledger }.into_events();
     Ok(report)
 }
 

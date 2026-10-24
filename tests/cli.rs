@@ -74,3 +74,21 @@ fn evals_dir_prints_the_grade_and_retro_directories() {
     assert_eq!(card["grades"][0]["stale"], false);
     assert_eq!(card["content_hash"], card["grades"][0]["content_hash"]);
 }
+
+/// A read command parses the ledger once, so an unreadable line warns once,
+/// and its scan drops the line, so the next command does not warn.
+#[test]
+fn an_unreadable_ledger_line_warns_once_and_the_scan_drops_it() {
+    let (temp, mazo) = fixture();
+    let ledger = fs::canonicalize(temp.path()).unwrap().join("home/data/mazo/events.jsonl");
+    let kept =
+        serde_json::to_string(&common::event("e1", "idle", mazo::ledger::Channel::Tool, "s", "2026-10-01T00:00:00Z"))
+            .unwrap();
+    common::write(&ledger, &format!("{kept}\nnot json\n"));
+    let warning = "unreadable ledger line skipped";
+    let first = stderr(&mazo.output(&["usage"]));
+    assert_eq!(first.matches(warning).count(), 1, "{first}");
+    assert_eq!(fs::read_to_string(&ledger).unwrap(), format!("{kept}\n"));
+    let second = stderr(&mazo.output(&["unused"]));
+    assert!(!second.contains(warning), "{second}");
+}

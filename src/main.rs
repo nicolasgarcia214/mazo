@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 
 use mazo::config::{self, Config, Home};
 use mazo::inventory::{Inventory, Scope};
-use mazo::ledger::{self, Agent, Channel, Ledger};
+use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::lifecycle::{self, Retired};
 use mazo::report::{self, Since, UsageArgs};
 use mazo::{Error, audit, evals, html, links, policy, render, scan, store, tui};
@@ -334,13 +334,13 @@ fn scanned<T>(
     f: impl FnOnce(&std::path::Path, &report::Input) -> mazo::Result<T>,
 ) -> mazo::Result<T> {
     let data = ledger::data_dir()?;
-    scan::scan(cfg, inv, &data, false)?.warn();
-    let ledger = Ledger::load(&data)?;
+    let r = scan::scan(cfg, inv, &data, false)?;
+    r.warn();
     let coverage = ledger::load_coverage(&data)?;
     let audits = audit::latest(&data)?;
     let now = jiff::Timestamp::now();
     let tz = jiff::tz::TimeZone::system();
-    f(&data, &report::Input { cfg, inv, events: ledger.events(), coverage: &coverage, audits: &audits, now, tz })
+    f(&data, &report::Input { cfg, inv, events: &r.events, coverage: &coverage, audits: &audits, now, tz })
 }
 
 /// Usage reports scan first, then render, then print freshness warnings.
@@ -405,7 +405,7 @@ fn cmd_report(
 
 fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bool) -> mazo::Result<ExitCode> {
     let data = ledger::data_dir()?;
-    let was = if reparse { Some(home_counts(&Ledger::load(&data)?)) } else { None };
+    let was = if reparse { Some(home_counts(Ledger::load(&data)?.events())) } else { None };
     let r = scan::scan(cfg, inv, &data, reparse)?;
     if json {
         r.warn();
@@ -415,7 +415,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     }
     if let Some(was) = was {
         // `+N` is meaningless after a rewrite.
-        let now = home_counts(&Ledger::load(&data)?);
+        let now = home_counts(&r.events);
         for name in r.homes.keys() {
             let count = |c: &BTreeMap<String, usize>| c.get(name).copied().unwrap_or(0);
             println!("{name} {} events (was {})", count(&now), count(&was));
@@ -426,10 +426,9 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     }
     r.warn();
     if detail {
-        let ledger = Ledger::load(&data)?;
         for (name, h) in &r.homes {
             let mut counts = BTreeMap::<Channel, usize>::new();
-            for e in ledger.events().iter().filter(|e| &e.home == name) {
+            for e in r.events.iter().filter(|e| &e.home == name) {
                 *counts.entry(e.channel).or_default() += 1;
             }
             let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{}={n}", ledger::name(c))).collect();
@@ -451,9 +450,9 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
 }
 
 /// Ledger events per home.
-fn home_counts(ledger: &Ledger) -> BTreeMap<String, usize> {
+fn home_counts(events: &[Event]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
-    for e in ledger.events() {
+    for e in events {
         *counts.entry(e.home.clone()).or_default() += 1;
     }
     counts
