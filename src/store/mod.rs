@@ -27,7 +27,7 @@ use std::sync::mpsc;
 use crate::audit::{self, Caller, Pane};
 use crate::config::{self, Config, Home};
 use crate::inventory::Inventory;
-use crate::{Error, Result};
+use crate::{Error, Result, outln};
 use crate::{ledger, links};
 
 pub use ask::Question;
@@ -418,7 +418,7 @@ impl Out<'_> {
     fn line(self, line: &str) {
         match self.0 {
             Some(pane) => _ = pane.lines.send(line.into()),
-            None => println!("{line}"),
+            None => outln!("{line}"),
         }
     }
 

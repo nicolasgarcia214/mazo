@@ -111,5 +111,6 @@ fn a_reader_that_closes_stdout_early_ends_the_command_with_0_and_no_panic() {
     assert!(line.starts_with("skill"), "{line}");
     let out = child.wait_with_output().unwrap();
     assert!(!stderr(&out).contains("panicked"), "{}", stderr(&out));
+    assert!(out.stderr.is_empty(), "{}", stderr(&out));
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }

@@ -74,3 +74,29 @@ impl From<&str> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Writes `args` to stdout. A reader that closed it early, as `head` does,
+/// ends mazo quietly with 0; any other write error ends it with 1.
+pub fn stdout(args: std::fmt::Arguments) {
+    use std::io::Write;
+    match std::io::stdout().write_fmt(args) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(e) => {
+            eprintln!("ERROR: writing to stdout: {e}");
+            std::process::exit(1)
+        }
+    }
+}
+
+/// `print!` through [`stdout`].
+#[macro_export]
+macro_rules! out {
+    ($($arg:tt)*) => { $crate::stdout(format_args!($($arg)*)) };
+}
+
+/// `println!` through [`stdout`].
+#[macro_export]
+macro_rules! outln {
+    ($($arg:tt)*) => { $crate::stdout(format_args!("{}\n", format_args!($($arg)*))) };
+}

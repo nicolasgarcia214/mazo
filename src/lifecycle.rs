@@ -9,7 +9,7 @@ use std::process::{Command, ExitCode, Stdio};
 use crate::config::Config;
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent};
-use crate::{Error, Result};
+use crate::{Error, Result, outln};
 use crate::{links, policy, report, scan, store, yaml};
 
 /// `mazo new <name> --description <text>`: writes
@@ -50,11 +50,11 @@ pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Resu
         let parent = path.parent().unwrap_or(&dir);
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
-        println!("wrote {}", path.display());
+        outln!("wrote {}", path.display());
     }
     if cfg.policy.claude_name_only {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
-            println!("{}: add to skillOverrides: \"{name}\": \"name-only\"", h.settings().display());
+            outln!("{}: add to skillOverrides: \"{name}\": \"name-only\"", h.settings().display());
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -94,7 +94,7 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
         return Err(Error::Usage("prune deletes permanently; pass --yes when stdin is not a terminal".into()));
     }
     if names.is_empty() {
-        println!("nothing to prune in {}", archive.display());
+        outln!("nothing to prune in {}", archive.display());
         return Ok(ExitCode::SUCCESS);
     }
     if !force {
@@ -107,7 +107,7 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
         }
     }
     for n in &names {
-        println!("delete {}", archive.join(n).display());
+        outln!("delete {}", archive.join(n).display());
     }
     if !yes {
         eprint!("delete {} archived skill(s) permanently? [y/N] ", names.len());

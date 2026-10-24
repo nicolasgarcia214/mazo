@@ -9,7 +9,7 @@ use mazo::inventory::{Inventory, Scope};
 use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::lifecycle::{self, Retired};
 use mazo::report::{self, Since, UsageArgs};
-use mazo::{Error, audit, evals, html, links, policy, render, scan, store, tui};
+use mazo::{Error, audit, evals, html, links, out, outln, policy, render, scan, store, tui};
 
 #[derive(Parser)]
 #[command(
@@ -234,15 +234,6 @@ struct AuditArgs {
 }
 
 fn main() -> ExitCode {
-    // `print!` panics when a reader such as `head` closes stdout early; end quietly with 0, not 101.
-    let panic = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let why = info.payload().downcast_ref::<String>().map_or("", String::as_str);
-        if why.starts_with("failed printing to stdout") && why.ends_with(&format!("(os error {})", libc::EPIPE)) {
-            std::process::exit(0);
-        }
-        panic(info);
-    }));
     // Bare `mazo` on a terminal opens the TUI; off one, clap prints the help and exits 2.
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let cmd = if std::env::args_os().len() == 1 && tty { None } else { Some(Cli::parse().cmd) };
@@ -264,8 +255,8 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             let ask = stdin.is_terminal().then_some(&mut stdin as &mut dyn std::io::BufRead);
             config::init(&path, source.as_deref(), ask)?
         };
-        println!("wrote {}", path.display());
-        println!("{}", config::init_note(judge));
+        outln!("wrote {}", path.display());
+        outln!("{}", config::init_note(judge));
         if *no_skills {
             return Ok(ExitCode::SUCCESS);
         }
@@ -305,7 +296,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Evals { cmd: EvalsCmd::Dir { skill } } => {
             report::check_skill(&inv, &skill)?;
             let [grades, retros] = evals::dirs(&cfg.evals_dir, &skill);
-            println!("grades\t{}\nretros\t{}", grades.display(), retros.display());
+            outln!("grades\t{}\nretros\t{}", grades.display(), retros.display());
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
@@ -359,7 +350,7 @@ fn with_scanned(
     render: impl FnOnce(&report::Input) -> mazo::Result<String>,
 ) -> mazo::Result<ExitCode> {
     scanned(cfg, inv, |_, input| {
-        print!("{}", render(input)?);
+        out!("{}", render(input)?);
         for w in policy::freshness(cfg, input.coverage, input.now) {
             eprintln!("{w}");
         }
@@ -379,7 +370,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
     };
     scanned(cfg, inv, |data, input| {
         let (out, ok) = audit::command(&planned, &run, input, data, tty, None)?;
-        print!("{out}");
+        out!("{out}");
         Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) })
     })
 }
@@ -419,7 +410,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
     if json {
         r.warn();
         // Through a `Value`, so the keys print sorted.
-        println!("{}", serde_json::to_value(&r.homes).map_err(|e| e.to_string())?);
+        outln!("{}", serde_json::to_value(&r.homes).map_err(|e| e.to_string())?);
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(was) = was {
@@ -427,11 +418,11 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
         let now = home_counts(&r.events);
         for name in r.homes.keys() {
             let count = |c: &BTreeMap<String, usize>| c.get(name).copied().unwrap_or(0);
-            println!("{name} {} events (was {})", count(&now), count(&was));
+            outln!("{name} {} events (was {})", count(&now), count(&was));
         }
     } else {
         let summary: Vec<String> = r.homes.iter().map(|(n, h)| format!("{n} +{}", h.new_events.len())).collect();
-        println!("scan: {}", summary.join(" · "));
+        outln!("scan: {}", summary.join(" · "));
     }
     r.warn();
     if detail {
@@ -441,16 +432,16 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
                 *counts.entry(e.channel).or_default() += 1;
             }
             let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{}={n}", ledger::name(c))).collect();
-            println!("{name}: {} files; ledger {}", h.files, counts.join(" "));
-            println!("  unparsed skill commands in this scan: {}", h.unparsed);
-            println!("  lines that are not JSON in this scan: {}", h.malformed);
+            outln!("{name}: {} files; ledger {}", h.files, counts.join(" "));
+            outln!("  unparsed skill commands in this scan: {}", h.unparsed);
+            outln!("  lines that are not JSON in this scan: {}", h.malformed);
             for s in &h.unparsed_samples {
-                println!("    {s}");
+                outln!("    {s}");
             }
             if !h.canary.is_empty() {
-                println!("  canary: {} files with a skill marker and no event", h.canary.len());
+                outln!("  canary: {} files with a skill marker and no event", h.canary.len());
                 for f in h.canary.iter().take(5) {
-                    println!("    {f}");
+                    outln!("    {f}");
                 }
             }
         }
@@ -500,26 +491,26 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, c
         if let Some(project) = &project {
             v["project"] = project.iter().map(row).collect();
         }
-        println!("{v}");
+        outln!("{v}");
     } else {
         for h in &homes {
             let (errors, info): (Vec<&links::Entry>, Vec<&links::Entry>) =
                 drift.iter().filter(|e| e.scope == Scope::Global && e.home == h.name).partition(|e| e.state.is_error());
             if errors.is_empty() && !home_errors().any(|(home, _)| *home == h.name) {
-                println!("{}: in sync ({} skills)", h.name, inv.skills.len());
+                outln!("{}: in sync ({} skills)", h.name, inv.skills.len());
             }
             for e in errors.into_iter().chain(info) {
-                println!("{}: {} {}", e.home, name(e), e.state.finding());
+                outln!("{}: {} {}", e.home, name(e), e.state.finding());
             }
         }
         for skill in inv.project.iter().flat_map(|p| &p.skills) {
             let suffix = Scope::Project.suffix();
             let mut bad = drift.iter().filter(|e| e.scope == Scope::Project && name(e) == *skill).peekable();
             if bad.peek().is_none() {
-                println!("project: {skill}{suffix} in sync");
+                outln!("project: {skill}{suffix} in sync");
             }
             for e in bad {
-                println!("{}: {skill}{suffix} {}", e.home, e.state.finding());
+                outln!("{}: {skill}{suffix} {}", e.home, e.state.finding());
             }
         }
         for e in skill_errors.iter().chain(home_errors().map(|(_, e)| e)).chain(&warnings) {
@@ -559,11 +550,11 @@ fn cmd_sync(
         }
     };
     if plan.actions.is_empty() {
-        println!("in sync: {} homes, {} skills", homes.len(), inv.skills.len());
+        outln!("in sync: {} homes, {} skills", homes.len(), inv.skills.len());
         return Ok(ExitCode::SUCCESS);
     }
     for line in if dry_run { links::planned(&plan) } else { links::apply(&plan)? } {
-        println!("{line}");
+        outln!("{line}");
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -590,7 +581,7 @@ fn cmd_retire(cfg: &Config, data: &std::path::Path, name: &str, force: bool, pro
         }
         Retired::Done(lines) => {
             for l in &lines {
-                println!("{l}");
+                outln!("{l}");
             }
             Ok(ExitCode::SUCCESS)
         }
