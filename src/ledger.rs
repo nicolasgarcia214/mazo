@@ -289,9 +289,10 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 }
 
 /// Write to a fresh `<path>.new` created with `mode` (less the umask), fsync
-/// it, then rename over `path`, so a crash leaves either the old or the new
-/// file, never a truncated one, and a symlink at either path is replaced,
-/// never followed.
+/// it, rename it over `path`, then fsync the parent directory. A crash leaves
+/// either the old or the new file, never a truncated one; once this returns
+/// `Ok` the new file survives power loss. A symlink at either path is
+/// replaced, never followed.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".new");
@@ -304,7 +305,9 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut f = OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp).map_err(|e| err(&tmp, e))?;
     f.write_all(bytes).map_err(|e| err(&tmp, e))?;
     f.sync_all().map_err(|e| err(&tmp, e))?;
-    fs::rename(&tmp, path).map_err(|e| err(path, e).into())
+    fs::rename(&tmp, path).map_err(|e| err(path, e))?;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    fs::File::open(parent).and_then(|d| d.sync_all()).map_err(|e| err(parent, e).into())
 }
 
 /// Each non-blank line of the JSONL file at `path`, numbered from 1, parsed as
@@ -374,6 +377,17 @@ mod tests {
         let l = Ledger::load(dir.path()).unwrap();
         assert_eq!(l.events().len(), 1);
         assert_eq!(l.events()[0].path.as_deref(), Some("/p"));
+    }
+
+    #[test]
+    fn write_atomic_replaces_a_file_in_a_fresh_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fresh").join("state.json");
+        fs::create_dir(path.parent().unwrap()).unwrap();
+        write_atomic(&path, b"old", 0o600).unwrap();
+        write_atomic(&path, b"new", 0o600).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert!(!path.with_extension("json.new").exists());
     }
 
     #[test]
