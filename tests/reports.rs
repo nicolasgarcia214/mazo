@@ -15,15 +15,9 @@ use mazo::report::{self, Since, UsageArgs};
 use mazo::{evals, render};
 use serde_json::Value;
 
-/// The last line of `usage` and `unused`: the help's marks and glyphs.
+/// The last line of the fixture's `usage`: only the marks its table shows.
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; \
-                      ● name and description in context: Claude on, every Codex skill, Pi by default; \
-                      ◐ name only in context: Claude name-only; \
-                      ○ explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation; \
-                      × off: Claude off; \
-                      stale the skill changed since the grade; \
-                      ✓ audited; vet vetted by mazo add, not audited; ! the vet found a security issue; \
-                      (project) a project skill, counted apart";
+                      ● name and description in context: Claude on, every Codex skill, Pi by default";
 
 fn args() -> UsageArgs {
     UsageArgs { since: Since::Days(30), agent: None, channel: None, all: false, authoring: false }
@@ -153,7 +147,7 @@ fn unused_reports_clusters_held_new_and_weak_only() {
     assert!(!unused_lines.iter().any(|l| l.starts_with("writing-for-agents")), "{text}");
     assert!(text.contains("writing-for-agents held   held by unslop"), "{text}");
     let window = format!("window: claude since {} · codex since {}", &CLAUDE_FIRST[..10], &ago(60)[..10]);
-    assert!(text.ends_with(&format!("{window}\n{LEGEND}\n")), "{text}");
+    assert!(text.ends_with(&format!("{window}\n")), "unused shows no mark, so no legend: {text}");
 }
 
 #[test]

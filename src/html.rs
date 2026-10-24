@@ -157,7 +157,7 @@ fn coverage(model: &Report) -> String {
     format!(
         "<p class=\"muted\">coverage: {}</p><p class=\"muted\">legend: {}</p>",
         parts.join(" · "),
-        esc(&help::legend(true))
+        esc(&help::legend(true, |_, _| true))
     )
 }
 
