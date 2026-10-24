@@ -155,16 +155,44 @@ pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: PathB
     fs::create_dir_all(dir).map_err(|e| err(dir, e))?;
     files.iter().try_for_each(|rel| {
         let (from, dest) = (src.join(rel), dir.join(rel));
-        if from.is_dir() {
+        // Typed on the handle that is read, not on the path [`tree`] listed:
+        // an entry swapped for a symlink since is refused, not followed.
+        let mut file = unfollowed(src, rel).map_err(|e| err(&from, e))?;
+        let ft = file.metadata().map_err(|e| err(&from, e))?.file_type();
+        if ft.is_dir() {
             fs::create_dir(&dest).map_err(|e| err(&dest, e))
+        } else if !ft.is_file() {
+            Err(format!("{} is not a regular file or directory", crate::render::inert(&from.display().to_string())))
         } else if rel == Path::new("SKILL.md") {
             fs::write(&dest, skill_md).map_err(|e| err(&dest, e))
         } else {
-            fs::copy(&from, &dest).map(drop).map_err(|e| err(&dest, e))
+            let mut to = fs::File::create_new(&dest).map_err(|e| err(&dest, e))?;
+            std::io::copy(&mut file, &mut to).map(drop).map_err(|e| err(&dest, e))
         }
     })?;
     let hash = content_hash(dir)?;
     Ok((staged, hash))
+}
+
+/// `rel` under `root` opened read-only, one component at a time, none of
+/// them followed if a symlink. Non-blocking, so that a FIFO opens to be
+/// refused rather than wait for a writer.
+fn unfollowed(root: &Path, rel: &Path) -> std::io::Result<fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    let mut file = fs::File::open(root)?;
+    let mut parts = rel.components().peekable();
+    while let Some(part) = parts.next() {
+        let name = std::ffi::CString::new(part.as_os_str().as_bytes())?;
+        let dir = if parts.peek().is_some() { libc::O_DIRECTORY } else { 0 };
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC | dir;
+        let fd = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        file = unsafe { fs::File::from_raw_fd(fd) };
+    }
+    Ok(file)
 }
 
 /// Removes the copies [`stage`] left beside `staged` for the same skill by a
@@ -261,7 +289,7 @@ pub fn content_hash(dir: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{checked, content_hash, parse, renamed};
+    use super::{checked, content_hash, parse, renamed, stage};
 
     #[test]
     fn every_string_a_lockfile_holds_is_inert() {
@@ -297,6 +325,30 @@ mod tests {
         std::os::unix::fs::symlink(dir, dir.join("SKILL.md")).unwrap();
         let e = checked(dir, "x", false).unwrap_err();
         assert_eq!(e, format!("{} is not a regular file or directory", dir.join("SKILL.md").display()));
+    }
+
+    #[test]
+    fn stage_refuses_an_entry_swapped_for_a_symlink_after_the_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (src, outside) = (tmp.path().join("src"), tmp.path().join("outside"));
+        std::fs::create_dir_all(src.join("refs")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(src.join("SKILL.md"), "a").unwrap();
+        std::fs::write(outside.join("x.md"), "secret").unwrap();
+        // Listed as regular, then each replaced: the file itself, and a directory above one.
+        for (files, link, target) in [
+            (vec!["SKILL.md", "x.md"], "x.md", outside.join("x.md")),
+            (vec!["SKILL.md", "refs", "refs/x.md"], "refs", outside.clone()),
+        ] {
+            let _ = std::fs::remove_file(src.join(link));
+            let _ = std::fs::remove_dir(src.join(link));
+            std::os::unix::fs::symlink(&target, src.join(link)).unwrap();
+            let files: Vec<_> = files.into_iter().map(std::path::PathBuf::from).collect();
+            let staged = tmp.path().join("staged");
+            let Err(e) = stage(&src, &files, "a", staged.clone()) else { panic!("{link} was followed") };
+            assert!(e.to_string().starts_with(&src.join(link).display().to_string()), "{e}");
+            assert!(!staged.exists(), "a refused copy is removed");
+        }
     }
 
     #[test]
