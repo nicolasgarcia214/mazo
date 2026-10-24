@@ -704,6 +704,29 @@ fn coverage_first_is_filled_once_a_home_gets_transcripts() {
 }
 
 #[test]
+fn coverage_first_moves_back_to_an_older_load_read_after_the_first_scan() {
+    let env = Env::new(&[("pair.jsonl", "pair.jsonl")], &[]);
+    env.scan();
+    let before = env.coverage()["claude"].first_at().unwrap();
+    let old = "2026-09-01T00:00:00Z";
+    let dated: String = fixture_lines("slash.jsonl")
+        .iter()
+        .map(|l| {
+            let mut v: Value = serde_json::from_str(l).unwrap();
+            v["timestamp"] = old.into();
+            format!("{v}\n")
+        })
+        .collect();
+    env.put("slash.jsonl", dated.as_bytes());
+    let r = env.scan();
+    assert!(r.homes["claude"].new_events.iter().any(|e| e.ts.parse::<jiff::Timestamp>().unwrap() < before));
+    assert_eq!(env.coverage()["claude"].first_at(), Some(old.parse().unwrap()));
+    env.put("slash.jsonl", &fs::read(fixture("slash.jsonl")).unwrap());
+    env.scan();
+    assert_eq!(env.coverage()["claude"].first_at(), Some(old.parse().unwrap()), "never moves later");
+}
+
+#[test]
 fn a_record_dated_unparseably_or_past_the_scan_is_no_event() {
     for ts in ["", "yesterday", "2099-01-01T00:00:00Z"] {
         let env = Env::new(&[], &[]);

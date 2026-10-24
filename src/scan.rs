@@ -192,6 +192,9 @@ pub fn scan_with<'a>(
             cursors.insert(key, chunk.cursor);
         }
 
+        // A load read from a transcript older than the recorded start, added
+        // since the home's first scan, moves the start back to it.
+        let loaded = hr.new_events.iter().filter_map(|e| e.ts.parse::<jiff::Timestamp>().ok()).min();
         if home.agent == Agent::Claude && first_scan {
             let raws = adapters::claude::backfill(home, &inv.known);
             let target = if reparse { &mut fresh } else { &mut ledger };
@@ -199,9 +202,8 @@ pub fn scan_with<'a>(
         }
 
         let entry = coverage.entry(home.name.clone()).or_default();
-        if need_first {
-            entry.first = earliest.map(|t| t.to_string());
-        }
+        // The earliest of what is recorded and what this scan read: never later.
+        entry.first = [entry.first_at(), earliest, loaded].into_iter().flatten().min().map(|t| t.to_string());
         if hr.io_errors.is_empty() {
             entry.last_scan = Some(jiff::Timestamp::now().to_string());
         }
