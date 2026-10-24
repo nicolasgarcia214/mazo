@@ -205,7 +205,7 @@ fn dry_run_on_a_clean_tree_prints_in_sync() {
     assert_eq!(clean.stdout(), format!("in sync: 4 homes, {} skills\n", fx.skills.len()));
     assert_eq!(clean.stderr(), "");
     let pi = fx.mazo(&["sync", "--dry-run", "--agent", "pi"]);
-    assert_eq!(pi.stdout(), format!("in sync: 1 homes, {} skills\n", fx.skills.len()));
+    assert_eq!(pi.stdout(), format!("in sync: 1 home, {} skills\n", fx.skills.len()));
 }
 
 // Regression tests for the code-review findings.

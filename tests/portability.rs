@@ -314,6 +314,8 @@ fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
     ];
     for (stubs, codex_login, want) in cases {
         let f = Fresh::new();
+        // A home, for `status` to check.
+        fs::create_dir(f.home.join(".claude")).unwrap();
         for (name, out) in stubs {
             stub(&f, name, out);
         }
@@ -377,7 +379,34 @@ fn a_fresh_home_runs_init_then_sync() {
     assert_ok(&f.init(&[], &["--source", source.to_str().unwrap()]));
     assert_ok(&f.mazo(&[], &["sync"]));
     assert_eq!(fs::read_link(f.home.join(".claude/skills/plain")).unwrap(), source.join("plain"));
+    let again = f.mazo(&[], &["sync"]);
+    assert_ok(&again);
+    assert_eq!(stdout(&again), "in sync: 1 home, 1 skill\n");
     assert_ok(&f.mazo(&[], &["status"]));
+}
+
+#[test]
+fn init_with_no_agent_home_says_so_and_status_and_sync_then_exit_1() {
+    let f = Fresh::new();
+    let o = f.init(&[], &[]);
+    assert_ok(&o);
+    let path = f.home.join(".config/mazo/config.toml");
+    let warning = format!(
+        "warning: found no agent home at ~/.claude, ~/.codex, ~/.pi/agent; \
+         add a [[home]] table with name, agent and path to {}\n",
+        path.display()
+    );
+    assert_eq!(stderr(&o), warning);
+    for cmd in ["status", "sync"] {
+        let o = f.mazo(&[], &[cmd]);
+        assert_eq!(o.status.code(), Some(1), "{cmd}");
+        assert_eq!(stdout(&o), "", "{cmd}");
+        let want = format!(
+            "ERROR: {0} names no home; add a [[home]] table with name, agent and path to {0}\n",
+            path.display()
+        );
+        assert_eq!(stderr(&o), want, "{cmd}");
+    }
 }
 
 #[test]

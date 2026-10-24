@@ -280,6 +280,12 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     };
     let no_color = std::env::var_os("NO_COLOR");
     let tty = render::colour(std::io::stdout().is_terminal(), no_color.as_deref());
+    if matches!(cmd, Cmd::Status { .. } | Cmd::Sync { .. }) && cfg.homes.is_empty() {
+        let colour = render::colour(std::io::stderr().is_terminal(), no_color.as_deref());
+        let e = format!("ERROR: {} names no home; {}", path.display(), config::add_home(&path));
+        eprintln!("{}", render::paint_prefix(&e, colour));
+        return Ok(ExitCode::from(1));
+    }
     match cmd {
         Cmd::Scan { reparse, report, json } => cmd_scan(&cfg, &inv, reparse, report, json),
         Cmd::Usage { since, agent, channel, all, authoring, json } => {
@@ -459,6 +465,11 @@ fn home_counts(events: &[Event]) -> BTreeMap<String, usize> {
     counts
 }
 
+/// `n noun`, with an `s` unless `n` is 1.
+fn count(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
 fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
 }
@@ -551,7 +562,7 @@ fn cmd_sync(
         }
     };
     if plan.actions.is_empty() {
-        outln!("in sync: {} homes, {} skills", homes.len(), inv.skills.len());
+        outln!("in sync: {}, {}", count(homes.len(), "home"), count(inv.skills.len(), "skill"));
         return Ok(ExitCode::SUCCESS);
     }
     for line in if dry_run { links::planned(&plan) } else { links::apply(&plan)? } {
