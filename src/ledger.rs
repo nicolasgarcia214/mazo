@@ -124,19 +124,25 @@ pub struct Ledger {
     /// Last line per id, in first-appearance order of the id.
     events: Vec<Event>,
     index: HashMap<String, usize>,
+    /// Whether a line of the file did not parse, so the next write rewrites it.
+    unreadable: bool,
     _lock: Option<File>,
 }
 
 impl Ledger {
     /// Read-only load: no lock, keeps the last line for each id.
     pub fn load(dir: &Path) -> Result<Ledger> {
-        let mut ledger = Ledger { dir: dir.to_path_buf(), events: Vec::new(), index: HashMap::new(), _lock: None };
+        let mut ledger = Ledger::empty(dir);
         let path = dir.join("events.jsonl");
         for (n, event) in jsonl::<Event>(&path)? {
-            // A torn line (crash mid-append) is skipped; the next scan re-derives it.
+            // A torn line (crash mid-append) is skipped, and the next scan drops
+            // it from the file; `scan --reparse` re-derives its event.
             match event {
                 Some(event) => ledger.keep(event),
-                None => eprintln!("warning: {}:{n}: unreadable ledger line skipped", path.display()),
+                None => {
+                    ledger.unreadable = true;
+                    eprintln!("warning: {}:{n}: unreadable ledger line skipped", path.display());
+                }
             }
         }
         Ok(ledger)
@@ -152,7 +158,11 @@ impl Ledger {
 
     /// An empty in-memory ledger for the same directory (reparse builds into it).
     pub fn empty_like(other: &Ledger) -> Ledger {
-        Ledger { dir: other.dir.clone(), events: Vec::new(), index: HashMap::new(), _lock: None }
+        Ledger::empty(&other.dir)
+    }
+
+    fn empty(dir: &Path) -> Ledger {
+        Ledger { dir: dir.to_path_buf(), events: Vec::new(), index: HashMap::new(), unreadable: false, _lock: None }
     }
 
     fn keep(&mut self, event: Event) {
@@ -167,6 +177,10 @@ impl Ledger {
 
     pub fn events(&self) -> &[Event] {
         &self.events
+    }
+
+    pub fn into_events(self) -> Vec<Event> {
+        self.events
     }
 
     pub fn get(&self, id: &str) -> Option<&Event> {
@@ -188,15 +202,19 @@ impl Ledger {
         Some(line)
     }
 
-    /// Appends lines admitted by [`Ledger::admit`].
+    /// Appends lines admitted by [`Ledger::admit`], or rewrites the file
+    /// without its unreadable lines when it has any.
     pub fn append(&self, lines: &[Event]) -> Result<()> {
+        if self.unreadable {
+            return self.replace(&self.events);
+        }
         if lines.is_empty() {
             return Ok(());
         }
         append_lines(&self.dir.join("events.jsonl"), to_lines(lines))
     }
 
-    /// Replaces the ledger file with `lines` (reparse only).
+    /// Replaces the ledger file with `lines`.
     pub fn replace(&self, lines: &[Event]) -> Result<()> {
         write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes(), 0o666)
     }
