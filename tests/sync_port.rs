@@ -1,5 +1,5 @@
-//! The 18 cases of `dotfiles/skills/tests/test_install.py`, ported to drive
-//! `mazo sync`. Line numbers cite test_install.py.
+//! `mazo sync`'s linking and policy cases: discovery, frontmatter and profile
+//! checks, conflicts, pruning and failing before any write.
 
 mod common;
 
@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use common::sync::*;
 
-/// :65
 #[test]
 fn pi_discovers_all_skills_and_is_idempotent() {
     let mut fx = Fixture::new();
@@ -41,7 +40,6 @@ fn pi_discovers_all_skills_and_is_idempotent() {
     assert_eq!(fs::read(&settings).unwrap(), before);
 }
 
-/// :90
 #[test]
 fn frontmatter_must_omit_model_invocation_key() {
     let fx = Fixture::new();
@@ -59,7 +57,6 @@ fn frontmatter_must_omit_model_invocation_key() {
     }
 }
 
-/// :102
 #[test]
 fn claude_profiles_must_list_explicit_skills_as_name_only() {
     let fx = Fixture::new();
@@ -97,7 +94,6 @@ fn claude_profiles_must_list_explicit_skills_as_name_only() {
     fx.mazo(&["sync", "--agent", "pi"]).assert_ok();
 }
 
-/// :130
 #[test]
 fn installing_through_a_directory_alias_still_links_canonical_source() {
     let mut fx = Fixture::new();
@@ -112,7 +108,6 @@ fn installing_through_a_directory_alias_still_links_canonical_source() {
     }
 }
 
-/// :141
 #[test]
 fn pi_policy_requires_codex_false_and_unique_keys() {
     let fx = Fixture::new();
@@ -137,7 +132,6 @@ fn pi_policy_requires_codex_false_and_unique_keys() {
     fx.assert_rejected_before_writes();
 }
 
-/// :159
 #[test]
 fn invalid_skill_metadata_fails_before_writes() {
     let fx = Fixture::new();
@@ -156,7 +150,6 @@ fn invalid_skill_metadata_fails_before_writes() {
     }
 }
 
-/// :171
 #[test]
 fn conflicts_preserve_foreign_entries_and_prevent_partial_install() {
     let fx = Fixture::new();
@@ -201,7 +194,6 @@ fn conflicts_preserve_foreign_entries_and_prevent_partial_install() {
     }
 }
 
-/// :206
 #[test]
 fn prunes_only_managed_dangling_links() {
     let fx = Fixture::new();
@@ -228,7 +220,6 @@ fn prunes_only_managed_dangling_links() {
     assert!(fx.target.join("user-skill").is_dir());
 }
 
-/// :228
 #[test]
 fn missing_pi_extension_fails_before_writes() {
     let fx = Fixture::new();
@@ -236,7 +227,6 @@ fn missing_pi_extension_fails_before_writes() {
     fx.assert_rejected_before_writes();
 }
 
-/// :232
 #[test]
 fn target_obstruction_is_preserved() {
     let fx = Fixture::new();
@@ -247,7 +237,6 @@ fn target_obstruction_is_preserved() {
     assert_eq!(fs::read_to_string(&fx.agent).unwrap(), "keep");
 }
 
-/// :239
 #[test]
 fn every_mode_preflights_new_skill_policy_before_any_write() {
     let mut fx = Fixture::new();
@@ -264,7 +253,6 @@ fn every_mode_preflights_new_skill_policy_before_any_write() {
     }
 }
 
-/// :249
 #[test]
 fn all_harnesses_share_the_same_files_and_preserve_foreign_entries() {
     let fx = Fixture::new();
@@ -291,7 +279,6 @@ fn all_harnesses_share_the_same_files_and_preserve_foreign_entries() {
     assert_eq!(inodes(&fx), before);
 }
 
-/// :268
 #[test]
 fn conflict_in_any_harness_aborts_all_destinations() {
     let mut fx = Fixture::new();
@@ -321,7 +308,6 @@ fn conflict_in_any_harness_aborts_all_destinations() {
     }
 }
 
-/// :286
 #[test]
 fn invalid_cli_arguments_make_no_directories() {
     let fx = Fixture::new();
@@ -340,7 +326,6 @@ fn assert_pi_synced(fx: &Fixture, value: &str) {
     assert_eq!(names(&fx.target), fx.skills, "{value:?}");
 }
 
-/// :294
 #[test]
 fn agent_directory_expands_tilde_and_local_file_urls() {
     let mut fx = Fixture::new();
@@ -360,7 +345,6 @@ fn agent_directory_expands_tilde_and_local_file_urls() {
     }
 }
 
-/// :309
 #[test]
 fn invalid_file_urls_are_rejected_before_writes() {
     let mut fx = Fixture::new();
@@ -382,7 +366,6 @@ fn invalid_file_urls_are_rejected_before_writes() {
     }
 }
 
-/// :324
 #[test]
 fn agent_directory_normalizes_before_following_symlinks() {
     let mut fx = Fixture::new();
@@ -404,7 +387,6 @@ fn agent_directory_normalizes_before_following_symlinks() {
     }
 }
 
-/// :341
 #[test]
 fn option_like_paths_and_url_empty_segments_use_exact_fresh_targets() {
     let mut fx = Fixture::new();

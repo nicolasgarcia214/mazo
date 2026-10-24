@@ -241,7 +241,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
             .flatten()
             .map(|e| e.path())
             .filter(|p| !t.entries.iter().any(|(n, _)| p.file_name().is_some_and(|f| f == n.as_str())))
-            // install.sh pruned `"$dir"/*`, which skips hidden names.
+            // Hidden names are never pruned.
             .filter(|p| p.file_name().is_some_and(|f| !f.to_string_lossy().starts_with('.')))
             .collect();
         others.sort();

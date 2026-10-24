@@ -45,7 +45,7 @@ links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 "#;
 
 /// `PI_SKILLS`: sorted non-hidden child directories of [`real_skills`] with a
-/// `SKILL.md` (test_install.py:12-16 read its own parent).
+/// `SKILL.md`.
 pub fn pi_skills() -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(real_skills())
         .expect("the skills directory under test is readable")
@@ -162,7 +162,7 @@ impl Fixture {
     }
 
     /// `mazo sync --agent pi` must fail with an `ERROR:` before creating the
-    /// Pi directory (test_install.py:59-63).
+    /// Pi directory.
     pub fn assert_rejected_before_writes(&self) {
         let r = self.mazo(&["sync", "--agent", "pi"]);
         assert_ne!(r.code(), 0, "{}", r.stdout());

@@ -1,5 +1,5 @@
 //! The config with its `[policy]` table: discovery, `mazo init`, and path expansion,
-//! including the Pi directory normalisation that `install.sh` did in Node.
+//! including the Pi directory normalisation.
 
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder};
@@ -260,8 +260,8 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
         judge.check().map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
     }
     let base = path.parent().unwrap_or(Path::new("/"));
-    // `source` is relative to the config file and resolved physically, as
-    // install.sh's `pwd -P` did (test_install.py:130).
+    // `source` is relative to the config file and resolved physically, through
+    // symlinks, so a directory alias still links the canonical source.
     let source = match &raw.source {
         Some(s) => {
             let joined = base.join(s);

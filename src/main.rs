@@ -107,7 +107,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Link every canonical skill into every agent home (replaces install.sh).
+    /// Link every canonical skill into every agent home.
     Sync {
         /// Only the homes of this agent.
         #[arg(long, value_enum)]

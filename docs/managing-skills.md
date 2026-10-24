@@ -12,8 +12,7 @@ Writes nothing.
 
 ## `mazo sync`
 
-Links every skill, from `source` and the store, into every home, and replaces
-`skills/install.sh` for linking. It checks
+Links every skill, from `source` and the store, into every home. It checks
 everything first and writes nothing if any check fails. `--dry-run` prints the
 actions without taking them.
 
