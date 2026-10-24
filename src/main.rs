@@ -435,6 +435,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
             outln!("{name}: {} files; ledger {}", h.files, counts.join(" "));
             outln!("  unparsed skill commands in this scan: {}", h.unparsed);
             outln!("  lines that are not JSON in this scan: {}", h.malformed);
+            outln!("  skill loads with a bad timestamp in this scan: {}", h.bad_timestamps);
             for s in &h.unparsed_samples {
                 outln!("    {s}");
             }

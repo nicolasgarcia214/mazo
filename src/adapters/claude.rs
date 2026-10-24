@@ -91,7 +91,8 @@ impl<'a> Record<'a> {
             cwd: s("cwd"),
             version: s("version"),
         };
-        Some(Record { v, line, ts: s("timestamp")?, session })
+        // A missing timestamp reaches classify, which counts the load it drops.
+        Some(Record { v, line, ts: s("timestamp").unwrap_or_default(), session })
     }
 
     fn raw(&self, key: String, skill: String, channel: Channel, path: Option<String>, name_origin: bool) -> Raw {

@@ -11,7 +11,7 @@ use serde::de::IgnoredAny;
 
 use crate::Result;
 use crate::adapters::{self, Adapter, Raw, SkillRoots};
-use crate::classify::{Classifier, Roots};
+use crate::classify::{Classifier, Dropped, Roots};
 use crate::config::Config;
 use crate::inventory::Inventory;
 use crate::ledger::{self, Agent, Channel, Event, Ledger};
@@ -31,6 +31,9 @@ pub struct HomeReport {
     /// but are not JSON: no event came from them, even in a file that yielded
     /// others. Lines too long to read count too.
     pub malformed: usize,
+    /// Loads this scan read whose timestamp does not parse or lies more than a
+    /// day past the scan's clock: no event came from them.
+    pub bad_timestamps: usize,
 }
 
 #[derive(Debug, Default)]
@@ -231,7 +234,14 @@ fn admit(
     lines: &mut Vec<Event>,
 ) {
     for raw in raws {
-        let Some(event) = classifier.event(cache, raw, path) else { continue };
+        let event = match classifier.event(cache, raw, path) {
+            Ok(event) => event,
+            Err(Dropped::Timestamp) => {
+                hr.bad_timestamps += 1;
+                continue;
+            }
+            Err(Dropped::AuditRun) => continue,
+        };
         if let Some(line) = target.admit(event) {
             hr.new_events.push(line.clone());
             lines.push(line);

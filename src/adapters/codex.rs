@@ -29,7 +29,8 @@ impl Adapter for Codex {
             if rec["type"] != "response_item" {
                 continue;
             }
-            let Some(ts) = rec["timestamp"].as_str() else { continue };
+            // A missing timestamp reaches classify, which counts the load it drops.
+            let ts = rec["timestamp"].as_str().unwrap_or_default();
             let payload = &rec["payload"];
             let found = match payload["type"].as_str() {
                 Some("message") if payload["role"] == "user" => slash_blocks(payload),

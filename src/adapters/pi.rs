@@ -30,7 +30,9 @@ impl Adapter for Pi {
             if v["type"] != "message" {
                 continue;
             }
-            let (Some(id), Some(ts)) = (v["id"].as_str(), v["timestamp"].as_str()) else { continue };
+            let Some(id) = v["id"].as_str() else { continue };
+            // A missing timestamp reaches classify, which counts the load it drops.
+            let ts = v["timestamp"].as_str().unwrap_or_default();
             let entry = Entry { roots, session: &session, id, ts, line: *line };
             let msg = &v["message"];
             match msg["role"].as_str() {
