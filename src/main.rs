@@ -234,6 +234,15 @@ struct AuditArgs {
 }
 
 fn main() -> ExitCode {
+    // `print!` panics when a reader such as `head` closes stdout early; end quietly with 0, not 101.
+    let panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let why = info.payload().downcast_ref::<String>().map_or("", String::as_str);
+        if why.starts_with("failed printing to stdout") && why.ends_with(&format!("(os error {})", libc::EPIPE)) {
+            std::process::exit(0);
+        }
+        panic(info);
+    }));
     // Bare `mazo` on a terminal opens the TUI; off one, clap prints the help and exits 2.
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let cmd = if std::env::args_os().len() == 1 && tty { None } else { Some(Cli::parse().cmd) };

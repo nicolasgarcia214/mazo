@@ -92,3 +92,24 @@ fn an_unreadable_ledger_line_warns_once_and_the_scan_drops_it() {
     let second = stderr(&mazo.output(&["unused"]));
     assert!(!second.contains(warning), "{second}");
 }
+
+#[test]
+fn a_reader_that_closes_stdout_early_ends_the_command_with_0_and_no_panic() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let (temp, mazo) = fixture();
+    let source = fs::canonicalize(temp.path()).unwrap().join("skills");
+    // About 130 KiB of rows, past a 64 KiB pipe buffer, so the write after the close fails.
+    for i in 0..1000 {
+        let name = format!("idle-{i:04}-{}", "x".repeat(50));
+        common::write(&source.join(&name).join("SKILL.md"), &format!("---\nname: {name}\ndescription: Idle.\n---\n"));
+    }
+    let mut child = mazo.command(&[], &["usage"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    assert!(line.starts_with("skill"), "{line}");
+    let out = child.wait_with_output().unwrap();
+    assert!(!stderr(&out).contains("panicked"), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
