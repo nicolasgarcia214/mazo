@@ -814,6 +814,37 @@ fn show_writes_no_example_text() {
     assert!(xdg.join("mazo/events.jsonl").is_file() && files > 3);
 }
 
+/// A transcript names skills, paths and cwds anyone can write: a control
+/// character in one reaches no terminal.
+#[test]
+fn transcript_controls_reach_no_text_report() {
+    let env = Env::new(&[], &[]);
+    let ts = common::ago(1);
+    let meta = |uuid: &str, cwd: &str, dir: &str| {
+        let text = format!("Base directory for this skill: {dir}\n\nbody");
+        serde_json::json!({
+            "type": "user", "uuid": uuid, "timestamp": ts, "sessionId": "c0de0000-0000-4000-8000-000000000002",
+            "cwd": cwd, "version": "2.1.292", "isSidechain": false, "entrypoint": "cli", "isMeta": true,
+            "message": {"role": "user", "content": [{"type": "text", "text": text}]}
+        })
+        .to_string()
+    };
+    let unslop = env.cfg.homes[0].skills_dir().join("unslop");
+    let lines = [
+        meta("u1", "/home/u/proj", "/evil/\x1b[31mred"),
+        meta("u2", "/home/u/\x1b]0;pwned\x07proj", unslop.to_str().unwrap()),
+    ];
+    env.put("controls.jsonl", format!("{}\n", lines.join("\n")).as_bytes());
+    let xdg = env.tmp.path().join("xdg");
+    for args in [&["usage", "--all"][..], &["show", "unslop"]] {
+        let out = env.cli(&xdg).args(args).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert!(stdout.contains('\u{fffd}'), "{args:?} shows no transcript field: {stdout}");
+        assert!(!stdout.contains('\x1b') && !stdout.contains('\x07'), "{args:?}: {stdout:?}");
+    }
+}
+
 /// The session of every event read from a chain's child transcript.
 fn child_sessions(chain: &common::Chain, events: &[Event]) -> Vec<String> {
     chain.child(events).into_iter().map(|(_, session)| session).collect()
