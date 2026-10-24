@@ -4,7 +4,6 @@
 
 use std::io::{BufRead, IsTerminal};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 
 use super::{Add, err};
 use crate::audit::Pane;
@@ -13,43 +12,27 @@ use crate::{Error, Result, outln};
 
 /// Where an add or update reports and asks: the [`Terminal`], or the TUI's job.
 pub trait Io {
-    /// The TUI's job pane, which takes what is reported and the judge's
-    /// progress; stdout and stderr without one.
+    /// The pane that takes the judge's progress; stderr without one.
     fn pane(&self) -> Option<&Pane>;
-
+    fn line(&self, line: &str);
+    fn error(&self, line: &str);
+    /// Whether the caller asked the job to stop.
+    fn cancelled(&self) -> bool;
     /// Whether a y/N can be answered at all.
     fn can_ask(&self) -> bool;
-
+    /// Whether any untrusted add, not only `--all`, has its judge calls
+    /// agreed to first.
+    fn confirms_calls(&self) -> bool;
     /// `lines`, already reported, then `prompt` ending in `[Y/n]` or `[y/N]`:
     /// Enter takes `default`.
     fn yes_no(&self, lines: Vec<String>, prompt: String, default: bool) -> Result<bool>;
-
     /// The skills picked from each one's path and description, or `None`
     /// when there is no picker to show.
     fn pick(&self, items: Vec<(String, String)>) -> Result<Option<Vec<String>>>;
-
-    fn line(&self, line: &str) {
-        match self.pane() {
-            Some(pane) => _ = pane.lines.send(line.into()),
-            None => outln!("{line}"),
-        }
-    }
-
-    fn error(&self, line: &str) {
-        match self.pane() {
-            Some(pane) => _ = pane.lines.send(line.into()),
-            None => eprintln!("{line}"),
-        }
-    }
-
-    /// Whether the pane asked the job to stop.
-    fn cancelled(&self) -> bool {
-        self.pane().is_some_and(|p| p.cancel.load(Ordering::Relaxed))
-    }
 }
 
-/// The CLI's [`Io`]: stdout and stderr, y/N on stdin while it is a terminal,
-/// and the picker while stdin and stdout are.
+/// The CLI's [`Io`]: stdout and stderr, never cancelled, y/N on stdin while
+/// it is a terminal, and the picker while stdin and stdout are.
 pub struct Terminal;
 
 impl Io for Terminal {
@@ -57,8 +40,24 @@ impl Io for Terminal {
         None
     }
 
+    fn line(&self, line: &str) {
+        outln!("{line}");
+    }
+
+    fn error(&self, line: &str) {
+        eprintln!("{line}");
+    }
+
+    fn cancelled(&self) -> bool {
+        false
+    }
+
     fn can_ask(&self) -> bool {
         std::io::stdin().is_terminal()
+    }
+
+    fn confirms_calls(&self) -> bool {
+        false
     }
 
     fn yes_no(&self, _: Vec<String>, prompt: String, default: bool) -> Result<bool> {
@@ -72,10 +71,8 @@ impl Io for Terminal {
     }
 
     fn pick(&self, items: Vec<(String, String)>) -> Result<Option<Vec<String>>> {
-        if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
-            return Ok(None);
-        }
-        Ok(Some(crate::pick::pick(items).map_err(|e| format!("skill picker: {e}"))?))
+        let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+        Ok(tty.then(|| crate::pick::pick(items)).transpose().map_err(|e| format!("skill picker: {e}"))?)
     }
 }
 

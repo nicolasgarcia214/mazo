@@ -199,7 +199,24 @@ impl store::Io for Dialogs<'_> {
         Some(self.pane)
     }
 
+    fn line(&self, line: &str) {
+        _ = self.pane.lines.send(line.into());
+    }
+
+    fn error(&self, line: &str) {
+        self.line(line);
+    }
+
+    fn cancelled(&self) -> bool {
+        self.pane.cancel.load(Ordering::Relaxed)
+    }
+
     fn can_ask(&self) -> bool {
+        true
+    }
+
+    /// The picker can select several without `--all`.
+    fn confirms_calls(&self) -> bool {
         true
     }
 

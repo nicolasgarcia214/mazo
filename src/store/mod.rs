@@ -18,13 +18,14 @@ mod source;
 mod update;
 mod vet;
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use crate::audit::{self, Caller};
 use crate::config::{self, Config, Home};
 use crate::inventory::Inventory;
 use crate::{Error, Result};
 use crate::{ledger, links};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 pub use ask::{Io, Terminal};
 pub use bundled::{install as install_bundled, missing as missing_bundled};
@@ -123,15 +124,6 @@ pub enum Outcome {
     Usage,
 }
 
-impl From<&Error> for Outcome {
-    fn from(e: &Error) -> Self {
-        match e {
-            Error::Usage(_) => Outcome::Usage,
-            Error::Failed(_) => Outcome::Failed,
-        }
-    }
-}
-
 /// What `add` reads skills from: the source resolved, and cloned when it is a repository.
 struct Fetched<'a> {
     /// The source at its subpath.
@@ -202,8 +194,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
     if children.is_empty() {
         out.line("nothing selected; nothing was installed");
     }
-    // The TUI shows the count for any untrusted add, since its picker can select several.
-    if caller.is_some() && !children.is_empty() && (args.all || out.pane().is_some()) {
+    if caller.is_some() && !children.is_empty() && (args.all || out.confirms_calls()) {
         confirm_calls(children.len(), args.consent())?;
     }
     let mut inv = match &project {
@@ -219,7 +210,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
         }
         if let Err(e) = install(cfg, &mut inv, target, args, caller.as_ref(), &from, child) {
             out.error(&format!("ERROR: {e}"));
-            outcome = outcome.max(Outcome::from(&e));
+            outcome = outcome.max(if let Error::Usage(_) = e { Outcome::Usage } else { Outcome::Failed });
         }
     }
     Ok(outcome)
