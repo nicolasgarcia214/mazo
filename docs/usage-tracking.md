@@ -51,8 +51,23 @@ for what a scan can miss.
 One row per skill: sessions in the window, sessions over the last 7 and 30
 local days whatever the window, the trend of the last 30 days against the 30
 before (`↑` at +20% or more, `↓` at -20% or less, `→` otherwise, `new` from
-none, blank for none in either), loads per channel, agents, last use, the
-latest grade, and the audit column. That column is a mark, the first of these
+none, blank for none in either), loads per channel, agents, ctx, last use, the
+latest grade, and the audit column. The ctx column gives, for each agent the
+skill is linked into, its letter and then a glyph for what that agent keeps
+of the skill in context:
+
+- `●`: its name and description: Claude on, every Codex skill, Pi by default;
+- `◐`: its name only: Claude `name-only`;
+- `○`: nothing until you invoke it: Claude `user-invocable-only` or
+  `disable-model-invocation`, Pi `disable-model-invocation`;
+- `×`: nothing: Claude `off`.
+
+Claude's state comes from `skillOverrides` in `settings.json` and
+`settings.local.json`, where the local file wins, and the costliest state
+across an agent's homes counts. Codex lists every skill, even under
+`allow_implicit_invocation: false`.
+
+The audit column is a mark, the first of these
 that holds:
 
 1. `!`: the verdict `mazo add` recorded when it vetted the skill has a security

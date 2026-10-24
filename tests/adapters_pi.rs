@@ -106,7 +106,7 @@ fn read_tool_calls_resolve_against_the_header_cwd() {
     let p = parse(&fixture("read.jsonl"));
     let key = |i: u32| format!("pi:5f2d97ca@2026-09-11T03:25:57.990Z:{i}:0");
     let read = |i, skill| ev(&key(i), skill, Channel::Read, &format!("{SOURCE}/{skill}/SKILL.md"), 2);
-    // Items 0-1 are thinking/text, 2 `install.sh`, 3 the loose `skills/SKILLS_USAGE.md`,
+    // Items 0-1 are thinking/text, 2 `publish.sh`, 3 the loose `skills/SKILLS_USAGE.md`,
     // 8 a bash call, 9 a doc outside every skill root.
     assert_eq!(
         events(&p),

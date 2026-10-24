@@ -1,5 +1,5 @@
-//! mazo's own permanent sync and status tests, beyond the port
-//! of test_install.py.
+//! The sync and status tests beyond the linking and policy cases of
+//! `tests/sync_port.rs`.
 
 mod common;
 
@@ -252,7 +252,7 @@ fn hidden_dangling_links_are_not_pruned() {
     let hidden = fx.home.join(".claude/skills/.gone");
     std::os::unix::fs::symlink(fx.source.join(".gone"), &hidden).unwrap();
     fx.mazo(&["sync"]).assert_ok();
-    assert!(hidden.is_symlink(), "install.sh's `*` glob never pruned hidden names");
+    assert!(hidden.is_symlink(), "sync never prunes hidden names");
 }
 
 #[test]
