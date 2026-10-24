@@ -281,10 +281,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let no_color = std::env::var_os("NO_COLOR");
     let tty = render::colour(std::io::stdout().is_terminal(), no_color.as_deref());
     if matches!(cmd, Cmd::Status { .. } | Cmd::Sync { .. }) && cfg.homes.is_empty() {
-        let colour = render::colour(std::io::stderr().is_terminal(), no_color.as_deref());
-        let e = format!("ERROR: {} names no home; {}", path.display(), config::add_home(&path));
-        eprintln!("{}", render::paint_prefix(&e, colour));
-        return Ok(ExitCode::from(1));
+        return Err(Error::Failed(format!("{} names no home; {}", path.display(), config::add_home(&path))));
     }
     match cmd {
         Cmd::Scan { reparse, report, json } => cmd_scan(&cfg, &inv, reparse, report, json),
