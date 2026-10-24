@@ -834,8 +834,7 @@ impl Actions {
             yes: false,
             force: false,
             project: false,
-            pane: None,
-            asks: None,
+            io: &store::Terminal,
         };
         store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
         fx
@@ -1082,8 +1081,7 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
         yes: false,
         force: false,
         project: false,
-        pane: None,
-        asks: None,
+        io: &store::Terminal,
     };
     store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
     let now: jiff::Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
@@ -1335,8 +1333,7 @@ impl Actions {
             yes: false,
             force: false,
             project: false,
-            pane: None,
-            asks: None,
+            io: &store::Terminal,
         };
         store::add(&self.cfg, &self.inv(), &self.data, &args).unwrap();
         if !trusted {

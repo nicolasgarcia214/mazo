@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
@@ -40,7 +39,7 @@ use crate::links::{self, Plan};
 use crate::pick::{Picker, Step};
 use crate::render::{self, Align, Colour};
 use crate::report::{self, Bucket, Input, SHOW_LIMIT, Since, Unused, Usage, UsageArgs};
-use crate::store::{self, Question};
+use crate::store::{self, Outcome};
 use crate::theme;
 
 /// The windows `w` cycles through.
@@ -180,6 +179,41 @@ enum Ask {
     /// The help overlay, its lines scrolled to this first one: `j`/`k` and
     /// `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it.
     Help(usize),
+}
+
+/// A question an add or update job puts to the main loop, which answers it
+/// in a dialog. A dialog closed without a reply is No, or nothing picked.
+enum Question {
+    Pick(Vec<(String, String)>, mpsc::Sender<Vec<String>>),
+    YesNo { lines: Vec<String>, prompt: String, default: bool, reply: mpsc::Sender<bool> },
+}
+
+/// A job's [`store::Io`]: its pane, and the dialogs its questions open.
+struct Dialogs<'a> {
+    pane: &'a audit::Pane,
+    asks: mpsc::Sender<Question>,
+}
+
+impl store::Io for Dialogs<'_> {
+    fn pane(&self) -> Option<&audit::Pane> {
+        Some(self.pane)
+    }
+
+    fn can_ask(&self) -> bool {
+        true
+    }
+
+    fn yes_no(&self, lines: Vec<String>, prompt: String, default: bool) -> crate::Result<bool> {
+        let (reply, answer) = mpsc::channel();
+        _ = self.asks.send(Question::YesNo { lines, prompt, default, reply });
+        Ok(answer.recv().unwrap_or(false))
+    }
+
+    fn pick(&self, items: Vec<(String, String)>) -> crate::Result<Option<Vec<String>>> {
+        let (reply, picked) = mpsc::channel();
+        _ = self.asks.send(Question::Pick(items, reply));
+        Ok(Some(picked.recv().unwrap_or_default()))
+    }
 }
 
 /// A background add, audit or update and what its pane shows.
@@ -801,11 +835,10 @@ impl App {
                 yes: false,
                 force: false,
                 project: false,
-                pane: Some(pane),
-                asks: Some(&tx),
+                io: &Dialogs { pane, asks: tx },
             };
             match store::add(&data.cfg, &data.inv, &data.dir, &args) {
-                Ok(code) => (String::new(), code == ExitCode::SUCCESS),
+                Ok(outcome) => (String::new(), outcome == Outcome::Done),
                 Err(e) => (format!("ERROR: {e}"), false),
             }
         });
@@ -855,11 +888,10 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.start("update", target, Some(rx), move |data, pane| {
             let names = Vec::from_iter(skill);
-            let asks = Some(&tx);
-            let args =
-                store::Update { names: &names, yes: false, force: false, pane: Some(pane), project: false, asks };
+            let io = &Dialogs { pane, asks: tx };
+            let args = store::Update { names: &names, yes: false, force: false, project: false, io };
             match store::update(&data.cfg, &data.inv, &data.dir, &args) {
-                Ok(code) => (String::new(), code == ExitCode::SUCCESS),
+                Ok(outcome) => (String::new(), outcome == Outcome::Done),
                 Err(e) => (format!("ERROR: {e}"), false),
             }
         });

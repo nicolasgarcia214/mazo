@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use super::source::{Remote, Source, is_commit};
-use super::{Add, Locked, add, inventory};
+use super::{Add, Locked, Outcome, Terminal, add, inventory};
 use crate::config::Config;
 use crate::inventory::Inventory;
 use crate::{Error, Result, outln};
@@ -86,13 +86,12 @@ pub fn install(cfg: &Config, inv: &Inventory, data: &Path) -> Result<ExitCode> {
             yes: true,
             force: false,
             project: false,
-            pane: None,
-            asks: None,
+            io: &Terminal,
         };
         // Re-read, so that each add plans its links with the one before.
         let added = inventory(cfg.source.as_deref(), data).and_then(|inv| add(cfg, &inv, data, &args));
         match added {
-            Ok(code) => ok &= code == ExitCode::SUCCESS,
+            Ok(outcome) => ok &= outcome == Outcome::Done,
             Err(e) => {
                 eprintln!("ERROR: {e}");
                 ok = false;

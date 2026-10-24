@@ -1,22 +1,82 @@
-//! What the store asks: the TUI's [`Question`]s, the y/N of [`Consent`],
-//! the judge-call count of [`confirm_calls`], and the skill picker of
-//! [`skills_in`].
+//! What the store asks, and where: the [`Io`] it reports and asks through,
+//! the y/N of [`Consent`], the judge-call count of [`confirm_calls`], and the
+//! skill picker of [`skills_in`].
 
 use std::io::{BufRead, IsTerminal};
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::atomic::Ordering;
 
-use super::{Add, Out, err};
+use super::{Add, err};
+use crate::audit::Pane;
 use crate::inventory::description;
-use crate::{Error, Result};
+use crate::{Error, Result, outln};
 
-/// A question the TUI's add job puts to the main loop, which answers it in a
-/// dialog. A dialog closed without a reply is No, or nothing picked.
-pub enum Question {
-    /// The skills picked from each one's path and description.
-    Pick(Vec<(String, String)>, mpsc::Sender<Vec<String>>),
-    /// `lines`, then `prompt` ending in `[Y/n]` or `[y/N]`: Enter takes `default`.
-    YesNo { lines: Vec<String>, prompt: String, default: bool, reply: mpsc::Sender<bool> },
+/// Where an add or update reports and asks: the [`Terminal`], or the TUI's job.
+pub trait Io {
+    /// The TUI's job pane, which takes what is reported and the judge's
+    /// progress; stdout and stderr without one.
+    fn pane(&self) -> Option<&Pane>;
+
+    /// Whether a y/N can be answered at all.
+    fn can_ask(&self) -> bool;
+
+    /// `lines`, already reported, then `prompt` ending in `[Y/n]` or `[y/N]`:
+    /// Enter takes `default`.
+    fn yes_no(&self, lines: Vec<String>, prompt: String, default: bool) -> Result<bool>;
+
+    /// The skills picked from each one's path and description, or `None`
+    /// when there is no picker to show.
+    fn pick(&self, items: Vec<(String, String)>) -> Result<Option<Vec<String>>>;
+
+    fn line(&self, line: &str) {
+        match self.pane() {
+            Some(pane) => _ = pane.lines.send(line.into()),
+            None => outln!("{line}"),
+        }
+    }
+
+    fn error(&self, line: &str) {
+        match self.pane() {
+            Some(pane) => _ = pane.lines.send(line.into()),
+            None => eprintln!("{line}"),
+        }
+    }
+
+    /// Whether the pane asked the job to stop.
+    fn cancelled(&self) -> bool {
+        self.pane().is_some_and(|p| p.cancel.load(Ordering::Relaxed))
+    }
+}
+
+/// The CLI's [`Io`]: stdout and stderr, y/N on stdin while it is a terminal,
+/// and the picker while stdin and stdout are.
+pub struct Terminal;
+
+impl Io for Terminal {
+    fn pane(&self) -> Option<&Pane> {
+        None
+    }
+
+    fn can_ask(&self) -> bool {
+        std::io::stdin().is_terminal()
+    }
+
+    fn yes_no(&self, _: Vec<String>, prompt: String, default: bool) -> Result<bool> {
+        eprint!("{prompt} ");
+        let mut answer = String::new();
+        std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
+        Ok(match answer.trim() {
+            "" => default,
+            a => matches!(a, "y" | "Y" | "yes"),
+        })
+    }
+
+    fn pick(&self, items: Vec<(String, String)>) -> Result<Option<Vec<String>>> {
+        if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+            return Ok(None);
+        }
+        Ok(Some(crate::pick::pick(items).map_err(|e| format!("skill picker: {e}"))?))
+    }
 }
 
 /// What the vet gate guards, an add or an update, which words its prompt and
@@ -28,8 +88,7 @@ pub(super) struct Consent<'a> {
     pub(super) yes: bool,
     /// `--force`.
     pub(super) force: bool,
-    /// The TUI's dialogs; the terminal when `None`.
-    pub(super) asks: Option<&'a mpsc::Sender<Question>>,
+    pub(super) io: &'a dyn Io,
 }
 
 impl Consent<'_> {
@@ -47,7 +106,7 @@ impl Consent<'_> {
 
     /// Refused before the judge is paid for an answer nobody can accept.
     pub(super) fn answerable(self) -> std::result::Result<(), String> {
-        if self.yes || self.asks.is_some() || std::io::stdin().is_terminal() {
+        if self.yes || self.io.can_ask() {
             return Ok(());
         }
         Err(format!(
@@ -57,32 +116,19 @@ impl Consent<'_> {
         ))
     }
 
-    /// `prompt` asked y/N, Enter taking `default`: on stdin, after `lines`
-    /// were printed, or in a TUI dialog showing `lines` first.
+    /// `prompt` asked y/N after `lines`, Enter taking `default`.
     pub(super) fn ask(self, lines: Vec<String>, prompt: &str, default: bool) -> Result<bool> {
-        let prompt = format!("{prompt} {}", if default { "[Y/n]" } else { "[y/N]" });
-        if let Some(asks) = self.asks {
-            let (reply, answer) = mpsc::channel();
-            _ = asks.send(Question::YesNo { lines, prompt, default, reply });
-            return Ok(answer.recv().unwrap_or(false));
-        }
-        eprint!("{prompt} ");
-        let mut answer = String::new();
-        std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
-        Ok(match answer.trim() {
-            "" => default,
-            a => matches!(a, "y" | "Y" | "yes"),
-        })
+        self.io.yes_no(lines, format!("{prompt} {}", if default { "[Y/n]" } else { "[y/N]" }), default)
     }
 }
 
 /// `add --all`, or any add from the TUI, of an untrusted source: the `n`
 /// judge calls, one per skill, shown and agreed to y/N before the first;
 /// `--yes` agrees, and without a terminal it is required.
-pub(super) fn confirm_calls(n: usize, consent: Consent, out: Out) -> Result<()> {
+pub(super) fn confirm_calls(n: usize, consent: Consent) -> Result<()> {
     let s = if n == 1 { "" } else { "s" };
     let count = format!("vetting {n} skill{s} makes {n} judge call{s}");
-    out.line(&count);
+    consent.io.line(&count);
     consent.answerable().map_err(Error::Usage)?;
     if !consent.yes && !consent.ask(vec![count], &format!("make {n} judge call{s}?"), false)? {
         return Err("add declined; nothing was installed".into());
@@ -93,9 +139,9 @@ pub(super) fn confirm_calls(n: usize, consent: Consent, out: Out) -> Result<()> 
 /// The skills under `root` to install, each by its path below it: `root`
 /// itself (`None`), named `own`, when it holds a `SKILL.md`; else its one
 /// skill ([`skill_dirs`]), the one `--skill` names by path or by a name no
-/// other skill shares, every one with `--all`, or those picked in the TUI's
-/// picker or when stdin and stdout are a terminal. Off both, several skills
-/// and neither flag is a usage error listing them.
+/// other skill shares, every one with `--all`, or those picked in the
+/// [`Io`]'s picker. Without one, several skills and neither flag is a usage
+/// error listing them.
 pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option<String>>> {
     // Inert: the skill paths it lists are directories the source's author named.
     let usage = |e: String| Error::Usage(crate::render::inert(&format!("add {}: {e}", args.source)));
@@ -107,7 +153,6 @@ pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option
     }
     let found = skill_dirs(root).map_err(usage)?;
     let list = found.join(", ");
-    let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let paths: Vec<String> = match args.pick {
         Some(p) if found.iter().any(|f| f == p) => vec![p.to_string()],
         Some(p) => match found.iter().filter(|f| name(f) == p).collect::<Vec<_>>()[..] {
@@ -120,20 +165,14 @@ pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option
         },
         None if found.is_empty() => return Err(usage("no SKILL.md here or in any directory below".into())),
         None if args.all || found.len() == 1 => found,
-        None if tty || args.asks.is_some() => {
+        None => {
             // One line each: a folded description keeps its words, not its breaks.
             let line = |d: String| d.split_whitespace().collect::<Vec<_>>().join(" ");
             let items = found.iter().map(|f| (f.clone(), description(&root.join(f)).map(line).unwrap_or_default()));
-            match args.asks {
-                Some(asks) => {
-                    let (reply, picked) = mpsc::channel();
-                    _ = asks.send(Question::Pick(items.collect(), reply));
-                    picked.recv().unwrap_or_default()
-                }
-                None => crate::pick::pick(items.collect()).map_err(|e| format!("skill picker: {e}"))?,
-            }
+            args.io
+                .pick(items.collect())?
+                .ok_or_else(|| usage(format!("several skills here; pass --skill with one of: {list}, or --all")))?
         }
-        None => return Err(usage(format!("several skills here; pass --skill with one of: {list}, or --all"))),
     };
     if args.rename.is_some() && paths.len() > 1 {
         return Err(usage("--as names one skill; pick one with --skill".into()));

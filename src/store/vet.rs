@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::ask::Consent;
-use super::{Out, err};
+use super::err;
 use crate::Result;
 use crate::audit::{self, Caller, Vet};
 use crate::inventory::Inventory;
@@ -118,7 +118,7 @@ pub(super) fn gate(
         vet.verdict.security = Some(found.map_or_else(|| withheld.clone(), |f| format!("{f}; {withheld}")));
     }
     let text: Vec<String> = vet.text(name).lines().map(String::from).collect();
-    text.iter().for_each(|l| Out(c.pane).line(l));
+    text.iter().for_each(|l| consent.io.line(l));
     if vet.verdict.security.is_some() && !consent.force {
         return Err(format!("{verb} refused: the judge found a security issue; pass --force to {act} it anyway").into());
     }
