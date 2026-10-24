@@ -310,7 +310,8 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
 /// `mazo init`: a config at `path` naming `source`, if given, absolutely, a
 /// home for each agent directory under `~` that exists, every rule off, and
 /// the [`detect_judge`] judge, else the one [`choose_judge`] reads from `ask`.
-/// Refuses to overwrite, before detecting or asking.
+/// Refuses to overwrite, before detecting or asking, and warns on stderr
+/// when it finds no home.
 pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -> Result<Option<InitJudge>> {
     let exists = || format!("{} exists; not overwriting it", path.display());
     if path.symlink_metadata().is_ok() {
@@ -324,17 +325,17 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
         None => None,
     };
     let home = PathBuf::from(home_dir()?);
-    let homes =
-        [("claude", Agent::Claude, ".claude"), ("codex", Agent::Codex, ".codex"), ("pi", Agent::Pi, ".pi/agent")]
-            .into_iter()
-            .filter(|(_, _, rel)| home.join(rel).exists())
-            .map(|(name, agent, rel)| RawHome {
-                name: name.into(),
-                agent,
-                path: format!("~/{rel}"),
-                links: BTreeMap::new(),
-            })
-            .collect();
+    let homes: Vec<RawHome> = AGENT_HOMES
+        .into_iter()
+        .filter(|(_, _, rel)| home.join(rel).exists())
+        .map(|(name, agent, rel)| RawHome {
+            name: name.into(),
+            agent,
+            path: format!("~/{rel}"),
+            links: BTreeMap::new(),
+        })
+        .collect();
+    let no_homes = homes.is_empty();
     let judge = match (detect_judge()?, ask) {
         (Some(agent), _) => Some(InitJudge::Detected(agent)),
         (None, Some(input)) => choose_judge(input, &mut std::io::stderr())?.map(InitJudge::Chosen),
@@ -349,7 +350,20 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
         _ => format!("{}: {e}", path.display()),
     })?;
     file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    if no_homes {
+        let dirs: Vec<String> = AGENT_HOMES.iter().map(|(_, _, rel)| format!("~/{rel}")).collect();
+        eprintln!("warning: found no agent home at {}; {}", dirs.join(", "), add_home(path));
+    }
     Ok(judge)
+}
+
+/// The agent homes `init` looks for: name, agent, and path under `~`.
+const AGENT_HOMES: [(&str, Agent, &str); 3] =
+    [("claude", Agent::Claude, ".claude"), ("codex", Agent::Codex, ".codex"), ("pi", Agent::Pi, ".pi/agent")];
+
+/// How to give the config at `path` a home.
+pub fn add_home(path: &Path) -> String {
+    format!("add a [[home]] table with name, agent and path to {}", path.display())
 }
 
 /// The judge `init` wrote: one it found logged in, or one the user chose.

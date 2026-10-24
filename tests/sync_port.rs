@@ -35,7 +35,7 @@ fn pi_discovers_all_skills_and_is_idempotent() {
     let inodes: Vec<u64> = expected.iter().map(|n| ino(&fx.target.join(n))).collect();
     let second = fx.mazo(&["sync", "--agent", "pi"]);
     second.assert_ok();
-    assert_eq!(second.stdout(), format!("in sync: 1 homes, {} skills\n", fx.skills.len() + 1));
+    assert_eq!(second.stdout(), format!("in sync: 1 home, {} skills\n", fx.skills.len() + 1));
     assert_eq!(inodes, expected.iter().map(|n| ino(&fx.target.join(n))).collect::<Vec<_>>());
     assert_eq!(fs::read(&settings).unwrap(), before);
 }
