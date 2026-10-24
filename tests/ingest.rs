@@ -516,8 +516,10 @@ fn scan_json_keeps_every_home_field() {
     assert!(out.status.success());
     let homes: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(homes.keys().collect::<Vec<_>>(), ["claude", "empty"]);
+    let keys =
+        ["new_events", "files", "io_errors", "unparsed", "unparsed_samples", "canary", "malformed", "bad_timestamps"];
     for (name, h) in &homes {
-        for key in ["new_events", "files", "io_errors", "unparsed", "unparsed_samples", "canary", "malformed"] {
+        for key in keys {
             assert!(h.get(key).is_some(), "{name} has no {key}: {h}");
         }
     }
@@ -746,43 +748,90 @@ fn a_skill_result_for_a_known_but_removed_skill_stays_canonical() {
     assert_eq!(tool.origin, mazo::ledger::Origin::Canonical);
 }
 
+/// One strong load per agent: its fixture, the cwd it records and where it
+/// goes under the home's transcripts directory.
+const ONE_LOAD_EACH: [(Agent, &str, &str, &str); 3] = [
+    (Agent::Claude, "claude/pair.jsonl", "/home/nicolas/projects/argus", "projects/p/pair.jsonl"),
+    (Agent::Codex, "codex/name_block.jsonl", "/home/nicolas/projects/demo", "2026/07/27/rollout.jsonl"),
+    (Agent::Pi, "pi/slash.jsonl", "/home/nicolas/dotfiles", "p/session.jsonl"),
+];
+
+/// Scans [`ONE_LOAD_EACH`] into a fresh data dir, each transcript passed
+/// through `edit(text, recorded cwd, data dir)`; the report of each home, in
+/// that order.
+fn scan_one_load_each(edit: impl Fn(&str, &str, &Path) -> String) -> Vec<scan::HomeReport> {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = fs::canonicalize(tmp.path()).unwrap().join("data/mazo");
+    let mut homes = Vec::new();
+    for (agent, fixture, cwd, dest) in ONE_LOAD_EACH {
+        let home = common::home(&ledger::name(agent), agent, &tmp.path().join(ledger::name(agent)));
+        let text = fs::read_to_string(common::fixture(fixture)).unwrap();
+        common::write(&home.transcripts().join(dest), &edit(&text, cwd, &data));
+        homes.push(home);
+    }
+    let cfg = Config {
+        source: Some(tmp.path().join("skills")),
+        loose: vec![],
+        trusted: vec![],
+        evals_dir: Default::default(),
+        context_window: mazo::config::CONTEXT_WINDOW,
+        homes,
+        policy: Default::default(),
+        judge: None,
+    };
+    let mut report = scan::scan(&cfg, &Inventory::default(), &data, false).unwrap();
+    cfg.homes.iter().map(|h| report.homes.remove(&h.name).unwrap()).collect()
+}
+
 #[test]
 fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
-    // One strong load per agent, scanned once with its recorded cwd and once
-    // with that cwd moved under `<data dir>/audit-runs/`.
-    let sessions = [
-        (Agent::Claude, "claude/pair.jsonl", "/home/nicolas/projects/argus", "projects/p/pair.jsonl"),
-        (Agent::Codex, "codex/name_block.jsonl", "/home/nicolas/projects/demo", "2026/07/27/rollout.jsonl"),
-        (Agent::Pi, "pi/slash.jsonl", "/home/nicolas/dotfiles", "p/session.jsonl"),
-    ];
+    // Scanned once with the recorded cwd and once with it moved under `<data dir>/audit-runs/`.
     for audit in [false, true] {
-        let tmp = tempfile::tempdir().unwrap();
-        let data = fs::canonicalize(tmp.path()).unwrap().join("data/mazo");
-        let run = data.join("audit-runs/run-1");
-        let mut homes = Vec::new();
-        for (agent, fixture, cwd, dest) in sessions {
-            let home = common::home(&ledger::name(agent), agent, &tmp.path().join(ledger::name(agent)));
-            let text = fs::read_to_string(common::fixture(fixture)).unwrap();
-            common::write(
-                &home.transcripts().join(dest),
-                &if audit { text.replace(cwd, run.to_str().unwrap()) } else { text },
-            );
-            homes.push(home);
-        }
-        let cfg = Config {
-            source: Some(tmp.path().join("skills")),
-            loose: vec![],
-            trusted: vec![],
-            evals_dir: Default::default(),
-            context_window: mazo::config::CONTEXT_WINDOW,
-            homes,
-            policy: Default::default(),
-            judge: None,
-        };
-        let report = scan::scan(&cfg, &Inventory::default(), &data, false).unwrap();
-        let counts: Vec<usize> = cfg.homes.iter().map(|h| report.homes[&h.name].new_events.len()).collect();
+        let reports = scan_one_load_each(|text, cwd, data| {
+            if audit { text.replace(cwd, data.join("audit-runs/run-1").to_str().unwrap()) } else { text.to_string() }
+        });
+        let counts: Vec<usize> = reports.iter().map(|h| h.new_events.len()).collect();
         assert_eq!(counts, if audit { [0, 0, 0] } else { [1, 1, 1] }, "audit run: {audit}");
+        assert!(reports.iter().all(|h| h.bad_timestamps == 0), "audit run: {audit}");
     }
+}
+
+/// `text` with every record's top-level `timestamp` set to `ts`, or removed.
+fn with_timestamp(text: &str, ts: Option<&str>) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let mut v: Value = serde_json::from_str(line).unwrap();
+        match ts {
+            Some(ts) => v["timestamp"] = ts.into(),
+            None => drop(v.as_object_mut().unwrap().remove("timestamp")),
+        }
+        out += &format!("{v}\n");
+    }
+    out
+}
+
+#[test]
+fn a_load_whose_timestamp_does_not_parse_is_counted_and_writes_no_event() {
+    for ts in [Some("bogus"), None] {
+        let reports = scan_one_load_each(|text, _, _| with_timestamp(text, ts));
+        let counts: Vec<(usize, usize)> = reports.iter().map(|h| (h.bad_timestamps, h.new_events.len())).collect();
+        assert_eq!(counts, [(1, 0); 3], "timestamp {ts:?}");
+    }
+}
+
+#[test]
+fn scan_report_and_json_show_the_loads_with_a_bad_timestamp() {
+    let env = Env::new(&[], &[]);
+    let text = fs::read_to_string(fixture("slash.jsonl")).unwrap();
+    env.put("slash.jsonl", with_timestamp(&text, Some("bogus")).as_bytes());
+    let out = env.cli(&env.tmp.path().join("report")).args(["scan", "--report"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("\n  skill loads with a bad timestamp in this scan: 1\n"), "{stdout}");
+    let out = env.cli(&env.tmp.path().join("json")).args(["scan", "--json"]).output().unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    let homes: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(homes["claude"]["bad_timestamps"], 1, "{homes}");
 }
 
 /// No prompt text is stored: `show` prints a real example read from the transcript and

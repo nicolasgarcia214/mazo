@@ -141,15 +141,23 @@ pub struct Classifier<'a> {
 /// synced from a machine whose clock runs ahead.
 const SKEW: SignedDuration = SignedDuration::from_hours(24);
 
+/// Why [`Classifier::event`] makes no event of a raw one.
+#[derive(Debug, PartialEq)]
+pub enum Dropped {
+    /// The session's cwd is inside `<data dir>/audit-runs/`: the judge's own
+    /// runs are never usage.
+    AuditRun,
+    /// The record's timestamp does not parse or lies past `now` and [`SKEW`].
+    Timestamp,
+}
+
 impl Classifier<'_> {
-    /// The event for `raw`, or `None` for a session whose cwd is inside
-    /// `<data dir>/audit-runs/` (the judge's own runs are never usage) and for
-    /// a record whose timestamp does not parse or lies past `now` and [`SKEW`].
-    pub fn event(&self, roots: &mut Roots, raw: Raw, file: &Path) -> Option<Event> {
+    /// The event for `raw`, or why there is none.
+    pub fn event(&self, roots: &mut Roots, raw: Raw, file: &Path) -> std::result::Result<Event, Dropped> {
         if raw.session.cwd.as_deref().is_some_and(|c| Path::new(c).starts_with(self.audit_runs)) {
-            return None;
+            return Err(Dropped::AuditRun);
         }
-        raw.ts.parse::<Timestamp>().ok().filter(|t| t.duration_since(self.now) <= SKEW)?;
+        raw.ts.parse::<Timestamp>().ok().filter(|t| t.duration_since(self.now) <= SKEW).ok_or(Dropped::Timestamp)?;
         let session = roots.root(self.home, &raw.session.id, raw.session.parent.as_ref());
         let id = match &raw.key {
             Key::Plain(s) => s.clone(),
@@ -173,7 +181,7 @@ impl Classifier<'_> {
         // Transcript fields are anyone's text: stored inert, so no report,
         // card or TUI can print a control character from one.
         let inert = |s: Option<String>| s.as_deref().map(crate::render::inert);
-        Some(Event {
+        Ok(Event {
             v: 1,
             id,
             ts: raw.ts,
