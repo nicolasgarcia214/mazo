@@ -37,7 +37,7 @@ pub use update::{Update, update};
 use ask::{Consent, confirm_calls, name as skill_name, skills_in};
 use lock::{checked, now, resolved, stage};
 use project::{project_links, unlink_project};
-use source::{Scratch, Source, local};
+use source::{Remote, Scratch, Source, local};
 use vet::{contents, gate, no_judge};
 
 /// A file error as the store reports it: the path, then the error. The path
@@ -155,7 +155,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
     let project = if args.project { Some(project_root("add")?) } else { None };
     let (arg, out) = (args.source, args.io);
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
-    let (mut source, trusted) = resolve(cfg, arg, args.trust)?;
+    let (source, trusted) = resolve(cfg, arg, args.trust)?;
     // The judge is set up, and its login checked, before anything is cloned.
     let backend = match &cfg.judge {
         Some(judge) if !trusted => Some((judge, audit::backend(judge, &cfg.homes)?)),
@@ -171,25 +171,25 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
         c.login()?;
     }
     let mut scratch = None;
-    let (root, origin, subpath, r#ref, commit, own) = match &mut source {
+    let from = match source {
         Source::Local(path) => {
-            let root = fs::canonicalize(local(path, &config::home_dir()?)?).map_err(|e| usage(e.to_string()))?;
+            let root = fs::canonicalize(local(&path, &config::home_dir()?)?).map_err(|e| usage(e.to_string()))?;
             let own =
                 root.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or_else(|| usage("no name".into()))?;
-            (root.clone(), root.to_string_lossy().into_owned(), PathBuf::new(), None, None, own)
+            let origin = root.to_string_lossy().into_owned();
+            Fetched { root, origin, subpath: PathBuf::new(), r#ref: None, commit: None, own, clone: None, trusted }
         }
-        Source::Git(remote) => {
+        Source::Git(mut remote) => {
             remote.resolve(&|| out.cancelled())?;
             fs::create_dir_all(data).map_err(|e| err(data, e))?;
             let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
             let _ = fs::remove_dir_all(clone);
-            let commit = remote.clone_into(clone, &|| out.cancelled())?;
-            let (url, subpath, r#ref) = (remote.url.clone(), remote.subpath.clone(), remote.r#ref.clone());
-            (clone.join(&subpath), url, subpath, r#ref, Some(commit), remote.name())
+            let commit = Some(remote.clone_into(clone, &|| out.cancelled())?);
+            let own = remote.name();
+            let Remote { url: origin, subpath, r#ref, .. } = remote;
+            Fetched { root: clone.join(&subpath), origin, subpath, r#ref, commit, own, clone: Some(clone), trusted }
         }
     };
-    let clone = scratch.as_ref().map(|s| s.0.as_path());
-    let from = Fetched { root, origin, subpath, r#ref, commit, own, clone, trusted };
     let children = skills_in(&from.root, &from.own, args)?;
     if children.is_empty() {
         out.line("nothing selected; nothing was installed");
