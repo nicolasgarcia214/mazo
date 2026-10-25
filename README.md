@@ -89,6 +89,7 @@ mazo                              # open the terminal UI
 | [`mazo usage`](docs/usage-tracking.md#mazo-usage) | One row per skill with its loads, last use and audit verdict. |
 | [`mazo unused`](docs/usage-tracking.md#mazo-unused) | Skills with no strong load in the window. |
 | [`mazo show <skill>`](docs/usage-tracking.md#mazo-show) | Everything mazo knows about one skill. |
+| [`mazo evals dir <skill>`](docs/configuration.md#evals_dir) | Print the skill's grades and retros directories. |
 | [`mazo report`](docs/usage-tracking.md#mazo-report) | One self-contained HTML page of usage and cards. |
 | [`mazo status`](docs/managing-skills.md#mazo-status) | Drift and policy for every home. Writes nothing. |
 | [`mazo sync`](docs/managing-skills.md#mazo-sync) | Link every skill into every home. |
