@@ -39,8 +39,8 @@ enum Cmd {
     },
     /// One row per canonical skill: sessions, channel counts, agents, last use.
     Usage {
-        /// The window: <N>d or all; 30 days by default.
-        #[arg(long, default_value = "30d")]
+        /// The window: <N>d or all.
+        #[arg(long, default_value_t = report::SINCE)]
         since: Since,
         /// Only events of this agent.
         #[arg(long, value_enum)]
@@ -60,8 +60,8 @@ enum Cmd {
     },
     /// Skills with no strong event in the window.
     Unused {
-        /// The window: <N>d or all; 60 days by default.
-        #[arg(long, default_value = "60d")]
+        /// The window: <N>d or all.
+        #[arg(long, default_value_t = report::UNUSED_SINCE)]
         since: Since,
         /// Print the window and the skills as JSON.
         #[arg(long)]
@@ -71,8 +71,8 @@ enum Cmd {
     Show {
         /// The skill to show.
         skill: String,
-        /// The window: <N>d or all; 30 days by default.
-        #[arg(long, default_value = "30d")]
+        /// The window: <N>d or all.
+        #[arg(long, default_value_t = report::SINCE)]
         since: Since,
         /// The most recent events to list.
         #[arg(long, default_value_t = report::SHOW_LIMIT)]
@@ -88,8 +88,8 @@ enum Cmd {
     },
     /// Write the HTML report: usage, grades to run, and every skill's card.
     Report {
-        /// The window: <N>d or all; 30 days by default.
-        #[arg(long, default_value = "30d")]
+        /// The window: <N>d or all.
+        #[arg(long, default_value_t = report::SINCE)]
         since: Since,
         /// Defaults to `<data dir>/report.html`.
         #[arg(long)]
@@ -261,7 +261,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             return Ok(ExitCode::SUCCESS);
         }
         let cfg = config::load(&path)?.ok_or("init wrote no config")?;
-        let data = ledger::data_dir()?;
+        let data = config::data_dir()?;
         return store::install_bundled(&cfg, &store::inventory(cfg.source.as_deref(), &data)?, &data);
     }
     let Some(cfg) = config::load(&path)? else {
@@ -270,11 +270,11 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             path.display()
         )));
     };
-    let data = ledger::data_dir()?;
+    let data = config::data_dir()?;
     let inv = store::inventory(cfg.source.as_deref(), &data)?;
     let Some(cmd) = cmd else {
-        return scanned(&cfg, &inv, |data, input| {
-            tui::run(input, data).map_err(|e| e.to_string())?;
+        return scanned(&cfg, &inv, &data, |input| {
+            tui::run(input, &data).map_err(|e| e.to_string())?;
             Ok(ExitCode::SUCCESS)
         });
     };
@@ -284,17 +284,19 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         return Err(Error::Failed(format!("{} names no home; {}", path.display(), config::add_home(&path))));
     }
     match cmd {
-        Cmd::Scan { reparse, report, json } => cmd_scan(&cfg, &inv, reparse, report, json),
+        Cmd::Scan { reparse, report, json } => cmd_scan(&cfg, &inv, &data, reparse, report, json),
         Cmd::Usage { since, agent, channel, all, authoring, json } => {
             let args = UsageArgs { since, agent, channel, all, authoring };
             let inv = Inventory { project: store::Project::current()?, ..inv };
-            with_scanned(&cfg, &inv, |input| Ok(report::usage(input, &args, json, tty)))
+            with_scanned(&cfg, &inv, &data, |input| Ok(report::usage(input, &args, json, tty)))
         }
-        Cmd::Unused { since, json } => with_scanned(&cfg, &inv, |input| Ok(report::unused(input, since, json, tty))),
+        Cmd::Unused { since, json } => {
+            with_scanned(&cfg, &inv, &data, |input| Ok(report::unused(input, since, json, tty)))
+        }
         Cmd::Show { skill, since, limit, json } => {
             // Before paying for a scan.
             report::check_skill(&inv, &skill)?;
-            with_scanned(&cfg, &inv, |input| report::show(input, &skill, since, limit, json, tty))
+            with_scanned(&cfg, &inv, &data, |input| report::show(input, &skill, since, limit, json, tty))
         }
         Cmd::Evals { cmd: EvalsCmd::Dir { skill } } => {
             report::check_skill(&inv, &skill)?;
@@ -302,10 +304,17 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             outln!("grades\t{}\nretros\t{}", grades.display(), retros.display());
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, since, out, open),
+        Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, &data, since, out, open),
         Cmd::Status { agent, json } => {
             let inv = Inventory { project: store::Project::current()?, ..inv };
-            cmd_status(&cfg, &inv, agent, json, render::colour(std::io::stderr().is_terminal(), no_color.as_deref()))
+            cmd_status(
+                &cfg,
+                &inv,
+                &data,
+                agent,
+                json,
+                render::colour(std::io::stderr().is_terminal(), no_color.as_deref()),
+            )
         }
         Cmd::Sync { agent, dry_run } => cmd_sync(&cfg, inv, &data, agent, dry_run),
         Cmd::New { name, description } => lifecycle::new(&cfg, &inv, &name, &description),
@@ -313,7 +322,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             lifecycle::prune(cfg.need_source("prune")?, name.as_deref(), yes, force, std::io::stdin().is_terminal())
         }
         Cmd::Retire { name, force, project } => cmd_retire(&cfg, &data, &name, force, project),
-        Cmd::Audit(args) => cmd_audit(&cfg, &inv, &args, tty),
+        Cmd::Audit(args) => cmd_audit(&cfg, &inv, &data, &args, tty),
         Cmd::Add { source, name, skill, all, trust, yes, force, project } => {
             let (rename, pick) = (name.as_deref(), skill.as_deref());
             let args =
@@ -337,29 +346,30 @@ fn exit(outcome: store::Outcome) -> ExitCode {
     })
 }
 
-/// Scans, then runs `f` on the data directory and the report input loaded from it.
+/// Scans the data directory `data`, then runs `f` on the report input loaded from it.
 fn scanned<T>(
     cfg: &Config,
     inv: &Inventory,
-    f: impl FnOnce(&std::path::Path, &report::Input) -> mazo::Result<T>,
+    data: &std::path::Path,
+    f: impl FnOnce(&report::Input) -> mazo::Result<T>,
 ) -> mazo::Result<T> {
-    let data = ledger::data_dir()?;
-    let r = scan::scan(cfg, inv, &data, false)?;
+    let r = scan::scan(cfg, inv, data, false)?;
     r.warn();
-    let coverage = ledger::load_coverage(&data)?;
-    let audits = audit::latest(&data)?;
+    let coverage = ledger::load_coverage(data)?;
+    let audits = audit::latest(data)?;
     let now = jiff::Timestamp::now();
     let tz = jiff::tz::TimeZone::system();
-    f(&data, &report::Input { cfg, inv, events: &r.events, coverage: &coverage, audits: &audits, now, tz })
+    f(&report::Input { cfg, inv, events: &r.events, coverage: &coverage, audits: &audits, now, tz })
 }
 
 /// Usage reports scan first, then render, then print freshness warnings.
 fn with_scanned(
     cfg: &Config,
     inv: &Inventory,
+    data: &std::path::Path,
     render: impl FnOnce(&report::Input) -> mazo::Result<String>,
 ) -> mazo::Result<ExitCode> {
-    scanned(cfg, inv, |_, input| {
+    scanned(cfg, inv, data, |input| {
         out!("{}", render(input)?);
         for w in policy::freshness(cfg, input.coverage, input.now) {
             eprintln!("{w}");
@@ -370,7 +380,13 @@ fn with_scanned(
 
 /// `mazo audit`: usage errors are caught before the scan, and a failed
 /// login check before any judge call.
-fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo::Result<ExitCode> {
+fn cmd_audit(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &std::path::Path,
+    args: &AuditArgs,
+    tty: bool,
+) -> mazo::Result<ExitCode> {
     let planned = audit::plan(cfg, inv, &args.skill, args.max_budget_usd)?;
     let run = audit::Args {
         limit: (!args.all).then_some(args.limit),
@@ -378,7 +394,7 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
         dry_run: args.dry_run,
         json: args.json,
     };
-    scanned(cfg, inv, |data, input| {
+    scanned(cfg, inv, data, |input| {
         let (out, ok) = audit::command(&planned, &run, input, data, tty, None)?;
         out!("{out}");
         Ok(if ok { ExitCode::SUCCESS } else { ExitCode::from(1) })
@@ -390,16 +406,17 @@ fn cmd_audit(cfg: &Config, inv: &Inventory, args: &AuditArgs, tty: bool) -> mazo
 fn cmd_report(
     cfg: &Config,
     inv: &Inventory,
+    data: &std::path::Path,
     since: Since,
     out: Option<std::path::PathBuf>,
     open: bool,
 ) -> mazo::Result<ExitCode> {
     let path = match &out {
         // Absolute, so the opener and the printed path do not depend on its cwd.
-        Some(p) => std::path::absolute(p).map_err(|e| format!("{}: {e}", p.display()))?,
-        None => ledger::data_dir()?.join("report.html"),
+        Some(p) => std::path::absolute(p).map_err(mazo::at(p))?,
+        None => data.join("report.html"),
     };
-    let code = with_scanned(cfg, inv, |input| {
+    let code = with_scanned(cfg, inv, data, |input| {
         let page = html::render(&report::report(input, since));
         html::write(&path, &page)?;
         Ok(format!("wrote {}\n", path.display()))
@@ -413,10 +430,16 @@ fn cmd_report(
     Ok(code)
 }
 
-fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bool) -> mazo::Result<ExitCode> {
-    let data = ledger::data_dir()?;
-    let was = if reparse { Some(home_counts(Ledger::load(&data)?.events())) } else { None };
-    let r = scan::scan(cfg, inv, &data, reparse)?;
+fn cmd_scan(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &std::path::Path,
+    reparse: bool,
+    detail: bool,
+    json: bool,
+) -> mazo::Result<ExitCode> {
+    let was = if reparse { Some(home_counts(Ledger::load(data)?.events())) } else { None };
+    let r = scan::scan(cfg, inv, data, reparse)?;
     if json {
         r.warn();
         // Through a `Value`, so the keys print sorted.
@@ -442,7 +465,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
                 *counts.entry(e.channel).or_default() += 1;
             }
             let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{}={n}", ledger::name(c))).collect();
-            outln!("{name}: {} files; ledger {}", h.files, counts.join(" "));
+            outln!("{name}: {}; ledger {}", render::count(h.files, "file"), counts.join(" "));
             outln!("  unparsed skill commands in this scan: {}", h.unparsed);
             outln!("  lines that are not JSON in this scan: {}", h.malformed);
             outln!("  skill loads with a bad timestamp in this scan: {}", h.bad_timestamps);
@@ -450,7 +473,7 @@ fn cmd_scan(cfg: &Config, inv: &Inventory, reparse: bool, detail: bool, json: bo
                 outln!("    {s}");
             }
             if !h.canary.is_empty() {
-                outln!("  canary: {} files with a skill marker and no event", h.canary.len());
+                outln!("  canary: {} with a skill marker and no event", render::count(h.canary.len(), "file"));
                 for f in h.canary.iter().take(5) {
                     outln!("    {f}");
                 }
@@ -469,11 +492,6 @@ fn home_counts(events: &[Event]) -> BTreeMap<String, usize> {
     counts
 }
 
-/// `n noun`, with an `s` unless `n` is 1.
-fn count(n: usize, noun: &str) -> String {
-    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
-}
-
 fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
 }
@@ -481,15 +499,21 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
 /// `colour` paints the `ERROR:` and `warning:` prefixes on stderr. Inside
 /// a project, its skills' links are checked too, and `--json` lists them all
 /// under `project`.
-fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, colour: bool) -> mazo::Result<ExitCode> {
+fn cmd_status(
+    cfg: &Config,
+    inv: &Inventory,
+    data: &std::path::Path,
+    agent: Option<Agent>,
+    json: bool,
+    colour: bool,
+) -> mazo::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let skill_errors = policy::per_skill(cfg, inv);
     let plan = links::plan(cfg, inv, &homes, None);
     let project = inv.project.as_ref().map(store::Project::links);
     let policy_errors = policy::home_errors(cfg, inv, &homes);
     let home_errors = || policy_errors.iter().chain(&plan.conflicts);
-    let data = ledger::data_dir()?;
-    let warnings = policy::freshness(cfg, &ledger::load_coverage(&data)?, jiff::Timestamp::now());
+    let warnings = policy::freshness(cfg, &ledger::load_coverage(data)?, jiff::Timestamp::now());
     let drift: Vec<&links::Entry> =
         plan.entries.iter().chain(project.iter().flatten()).filter(|e| e.state != links::State::Ok).collect();
     let failed = !skill_errors.is_empty() || home_errors().next().is_some() || drift.iter().any(|e| e.state.is_error());
@@ -500,8 +524,10 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, c
             serde_json::json!({"home": e.home, "path": e.path, "state": state, "error": error, "scope": e.scope})
         };
         let entries: Vec<serde_json::Value> = drift.iter().map(|e| row(e)).collect();
-        let policy: Vec<&String> = skill_errors.iter().chain(policy_errors.iter().map(|(_, e)| e)).collect();
-        let conflicts: Vec<&String> = plan.conflicts.iter().map(|(_, e)| e).collect();
+        let bare = |e: &String| render::unprefixed(e).to_string();
+        let policy: Vec<String> = skill_errors.iter().chain(policy_errors.iter().map(|(_, e)| e)).map(bare).collect();
+        let conflicts: Vec<String> = plan.conflicts.iter().map(|(_, e)| bare(e)).collect();
+        let warnings: Vec<String> = warnings.iter().map(bare).collect();
         let mut v =
             serde_json::json!({"drift": entries, "policy": policy, "conflicts": conflicts, "warnings": warnings});
         if let Some(project) = &project {
@@ -513,7 +539,7 @@ fn cmd_status(cfg: &Config, inv: &Inventory, agent: Option<Agent>, json: bool, c
             let (errors, info): (Vec<&links::Entry>, Vec<&links::Entry>) =
                 drift.iter().filter(|e| e.scope == Scope::Global && e.home == h.name).partition(|e| e.state.is_error());
             if errors.is_empty() && !home_errors().any(|(home, _)| *home == h.name) {
-                outln!("{}: in sync ({} skills)", h.name, inv.skills.len());
+                outln!("{}: in sync ({})", h.name, render::count(inv.skills.len(), "skill"));
             }
             for e in errors.into_iter().chain(info) {
                 outln!("{}: {} {}", e.home, name(e), e.state.finding());
@@ -566,7 +592,7 @@ fn cmd_sync(
         }
     };
     if plan.actions.is_empty() {
-        outln!("in sync: {}, {}", count(homes.len(), "home"), count(inv.skills.len(), "skill"));
+        outln!("in sync: {}, {}", render::count(homes.len(), "home"), render::count(inv.skills.len(), "skill"));
         return Ok(ExitCode::SUCCESS);
     }
     for line in if dry_run { links::planned(&plan) } else { links::apply(&plan)? } {

@@ -27,7 +27,7 @@ pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
 
 fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
     let skill_md = dir.join("SKILL.md");
-    let text = std::fs::read_to_string(&skill_md).map_err(|e| format!("{}: {e}", skill_md.display()))?;
+    let text = std::fs::read_to_string(&skill_md).map_err(crate::at(&skill_md))?;
     let meta = yaml::frontmatter(&text)?;
     always_on(&meta, name)?;
     if policy.no_disable_model_invocation && yaml::get(&meta, "disable-model-invocation").is_some() {
@@ -35,7 +35,7 @@ fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
     }
     if policy.codex_manifest {
         let manifest_path = dir.join("agents/openai.yaml");
-        let text = std::fs::read_to_string(&manifest_path).map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+        let text = std::fs::read_to_string(&manifest_path).map_err(crate::at(&manifest_path))?;
         let manifest = yaml::load(&text)?;
         let value = yaml::get(&manifest, "policy").and_then(|p| yaml::get(p, "allow_implicit_invocation"));
         if !value.is_some_and(yaml::is_plain_false) {

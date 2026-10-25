@@ -174,7 +174,7 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     assert_eq!(card[..3], ["for:      Removes slop from prose.", "your use: - Tighten the release notes.", ""]);
     assert_eq!(card[3], format!("unslop: since {}", common::ago(30).get(..10).unwrap()));
 
-    let json = report::show(&input, "unslop", report::SHOW_SINCE, report::SHOW_LIMIT, true, false).unwrap();
+    let json = report::show(&input, "unslop", report::SINCE, report::SHOW_LIMIT, true, false).unwrap();
     let audit = &serde_json::from_str::<serde_json::Value>(&json).unwrap()["audit"];
     let line = format!(
         "audit: {}, {} sessions, {} billing: {}",
@@ -1218,12 +1218,12 @@ fn y_audits_in_the_background_and_the_pane_shows_the_result() {
     let screen = text(&mut app, 200, 30);
     assert!(screen.iter().any(|l| l.contains(" audit busy · done · Esc closes ")), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains("busy: 1 judged, 0 dropped")), "{screen:#?}");
-    assert!(screen.iter().any(|l| l.contains("busy: skill report over 1 sessions: ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| l.contains("busy: skill report over 1 session: ")), "{screen:#?}");
 
     // The data was re-read: the card shows the new audit.
     press(&mut app, KeyCode::Enter);
     let screen = text(&mut app, 200, 100);
-    assert!(screen.iter().any(|l| body(l).starts_with("audit: ") && l.contains(", 1 sessions, ")), "{screen:#?}");
+    assert!(screen.iter().any(|l| body(l).starts_with("audit: ") && l.contains(", 1 session, ")), "{screen:#?}");
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
     assert!(!text(&mut app, 200, 30).iter().any(|l| l.contains(" audit busy ")));

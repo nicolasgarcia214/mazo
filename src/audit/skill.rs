@@ -245,7 +245,7 @@ fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<Skil
 fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
     let dir = a.source.join(a.skill);
     let path = dir.join("SKILL.md");
-    let skill = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let skill = fs::read_to_string(&path).map_err(crate::at(&path))?;
     let commits = git(&dir, &["log", COMMITS, "--format=%as %s", "--", "."]).unwrap_or_default();
     // Each file's frontmatter and body; one that no longer reads is left out.
     let split = |file: &Path| fs::read_to_string(file).ok().and_then(|t| crate::yaml::split_frontmatter(&t).ok());
@@ -302,7 +302,7 @@ pub(super) fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
         return Ok(Synthesis::NotDue);
     }
     let input = synthesis_input(a, &judged)?;
-    let progress = format!("reporting on {} sessions", judged.len());
+    let progress = format!("reporting on {}", crate::render::count(judged.len(), "session"));
     Ok(match judge(&a.caller(), &SKILL, a.budget, spent, &input, &progress, |v| validate_report(v, &judged))? {
         Ruling::Valid(result, cost) => {
             let record = SkillRecord {

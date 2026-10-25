@@ -269,7 +269,7 @@ reasons = ["Clear steps."]
 |---|---|
 | 0 | Success. |
 | 1 | The command failed or found a problem: a `status` error, a `status` or `sync` with no `[[home]]`, a refused `sync`, `add`, `retire` or `prune`, a failed `update` of any skill, a failed audit run. |
-| 2 | A usage error: a bad argument, a config that does not parse or names a missing source, an invalid Pi agent directory, an `add` of a taken name or of an untrusted source with no `[judge]`, an `add`, `update` or `retire --project` outside a git repository, an `update` of a name that is not a store skill, an `audit` with no `[judge]`, or a failed judge login check. |
+| 2 | A usage error: a bad argument, a config that does not parse or whose `source` is not a directory, an `init --source` that is not one, an invalid Pi agent directory, an `add` of a taken name or of an untrusted source with no `[judge]`, an `add`, `update` or `retire --project` outside a git repository, an `update` of a name that is not a store skill, an `audit` with no `[judge]`, or a failed judge login check. |
 
 A command whose reader closes stdout early, as `mazo usage | head -1` does,
 stops writing and exits 0.

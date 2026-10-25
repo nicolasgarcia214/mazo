@@ -172,8 +172,8 @@ fn repo(root: &Path) -> PathBuf {
     source
 }
 
-fn ts(s: &str) -> Option<jiff::Timestamp> {
-    Some(s.parse().unwrap())
+fn ts(s: &str) -> jiff::Timestamp {
+    s.parse().unwrap()
 }
 
 #[test]
@@ -645,7 +645,7 @@ fn the_command_judge_reads_the_prompt_schema_and_input_on_stdin_and_answers_on_s
 
     let out = fx.mazo(&["audit", "unslop", "--limit", "1"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped\nunslop: skill report over 1 sessions: "));
+    assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped\nunslop: skill report over 1 session: "));
     let calls = fx.calls();
     assert_eq!(calls.len(), 2, "one session call under --limit 1, then the skill report");
     let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
@@ -712,7 +712,7 @@ fn a_judges_terminal_controls_are_made_inert_before_they_are_printed_or_recorded
     let out = fx.mazo(&["audit", "unslop"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let inert = "Fine\u{fffd}]52;c;eA==\u{fffd}\u{fffd}[2J\u{fffd}31m.";
-    assert!(stdout(&out).contains(&format!("skill report over 1 sessions: {inert}\n")), "{:?}", stdout(&out));
+    assert!(stdout(&out).contains(&format!("skill report over 1 session: {inert}\n")), "{:?}", stdout(&out));
     assert_eq!(fx.skill_records()[0]["result"]["verdict"], inert);
 }
 
@@ -822,7 +822,7 @@ fn the_http_judge_posts_the_prompt_schema_and_input_to_chat_completions_with_a_b
 
     let out = fx.mazo_env(&env, &["audit", "unslop", "--limit", "1"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped\nunslop: skill report over 1 sessions: "));
+    assert!(stdout(&out).starts_with("unslop: 1 judged, 0 dropped\nunslop: skill report over 1 session: "));
     let requests = server.requests();
     assert_eq!(requests.len(), 2, "one session call under --limit 1, then the skill report");
     let candidates = audit::select(&three_agents(&fx.root), "unslop", &HashSet::new(), None);
@@ -1241,7 +1241,7 @@ fn session_records_hold_every_field_and_are_judged_once() {
         assert_eq!(r["session"], c.event.session.as_str());
         assert_eq!(r["agent"], mazo::ledger::name(c.event.agent).as_str());
         assert_eq!(r["src"], c.event.src.as_str());
-        assert_eq!(r["session_ts"], c.started().unwrap().to_string().as_str());
+        assert_eq!(r["session_ts"], c.started().to_string().as_str());
         assert!(r["audited_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
         assert_eq!(r["skill_commit"], serde_json::Value::Null, "the source is no repository");
         assert_eq!(r["condensed_chars"], c.condensed.chars().count());
@@ -1994,7 +1994,7 @@ fn api_billing_prints_plain_dollars_and_records_say_who_paid() {
         assert_eq!(r["judge"]["billing"], "api", "{r}");
     }
     let text = stdout(&fx.mazo(&["show", "unslop"]));
-    assert!(text.contains(", 1 sessions, api billing: "), "{text}");
+    assert!(text.contains(", 1 session, api billing: "), "{text}");
 }
 
 #[test]
@@ -2007,13 +2007,13 @@ fn a_record_written_before_billing_was_recorded_reads_as_unknown() {
 
     let show = fx.mazo(&["show", "unslop"]);
     assert_eq!(show.status.code(), Some(0), "{}", stderr(&show));
-    assert!(stdout(&show).contains(", 1 sessions, unknown billing: "), "{}", stdout(&show));
+    assert!(stdout(&show).contains(", 1 session, unknown billing: "), "{}", stdout(&show));
     let json: serde_json::Value = serde_json::from_str(&stdout(&fx.mazo(&["show", "unslop", "--json"]))).unwrap();
     assert_eq!(json["audit"]["judge"]["billing"], serde_json::Value::Null);
     let page = fx.root.join("report.html");
     let out = fx.mazo(&["report", "--out", page.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(fs::read_to_string(&page).unwrap().contains(", 1 sessions, unknown billing</span>"));
+    assert!(fs::read_to_string(&page).unwrap().contains(", 1 session, unknown billing</span>"));
 }
 
 #[test]

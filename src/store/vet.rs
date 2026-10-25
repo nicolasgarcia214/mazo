@@ -6,12 +6,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::ask::Consent;
-use super::err;
+use super::work;
 use crate::Result;
 use crate::audit::{self, Caller, Vet};
 use crate::inventory::Inventory;
 use crate::ledger::Ledger;
-use crate::work;
 
 /// The most bytes of one file, and of all files, the vet judge is sent; a
 /// file past either, or one that is not text, is withheld.
@@ -50,7 +49,7 @@ pub(super) fn contents(dir: &Path, files: &[PathBuf]) -> Result<Vec<(String, Vec
     files
         .map(|rel| {
             let path = dir.join(rel);
-            Ok((rel.to_string_lossy().into_owned(), fs::read(&path).map_err(|e| err(&path, e))?))
+            Ok((rel.to_string_lossy().into_owned(), fs::read(&path).map_err(crate::at(&path))?))
         })
         .collect()
 }

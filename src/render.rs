@@ -50,12 +50,19 @@ pub fn paint(token: &str, on: bool) -> String {
     format!("\x1b[{code}m{token}\x1b[0m")
 }
 
+/// `line` split after a leading `ERROR:` or `warning:`.
+fn prefixed(line: &str) -> Option<(&str, &str)> {
+    line.split_once(' ').filter(|(head, _)| matches!(*head, "ERROR:" | "warning:"))
+}
+
 /// `line` with a leading `ERROR:` or `warning:` painted.
 pub fn paint_prefix(line: &str, on: bool) -> String {
-    match line.split_once(' ') {
-        Some((head @ ("ERROR:" | "warning:"), rest)) => format!("{} {rest}", paint(head, on)),
-        _ => line.to_string(),
-    }
+    prefixed(line).map_or_else(|| line.to_string(), |(head, rest)| format!("{} {rest}", paint(head, on)))
+}
+
+/// `line` without a leading `ERROR:` or `warning:`, for JSON whose key says which.
+pub fn unprefixed(line: &str) -> &str {
+    prefixed(line).map_or(line, |(_, rest)| rest)
 }
 
 /// Visible columns of `s`: its display width, less `ESC [ … m` colour
@@ -130,7 +137,17 @@ pub fn inert_value(value: serde_json::Value) -> serde_json::Value {
 /// The timestamp `ts` in `tz`, formatted with `format`; `ts` unchanged when it
 /// does not parse.
 pub fn local(ts: &str, tz: &TimeZone, format: &str) -> String {
-    ts.parse::<Timestamp>().map_or(ts.to_string(), |t| t.to_zoned(tz.clone()).strftime(format).to_string())
+    ts.parse().map_or(ts.to_string(), |t| zoned(t, tz, format))
+}
+
+/// `n noun`, with an `s` unless `n` is 1.
+pub fn count(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
+}
+
+/// `t` in `tz`, formatted with `format`.
+pub fn zoned(t: Timestamp, tz: &TimeZone, format: &str) -> String {
+    t.to_zoned(tz.clone()).strftime(format).to_string()
 }
 
 #[cfg(test)]

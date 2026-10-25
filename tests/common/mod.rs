@@ -47,7 +47,7 @@ pub fn event(id: &str, skill: &str, channel: Channel, session: &str, ts: &str) -
     Event {
         v: 1,
         id: id.into(),
-        ts: ts.into(),
+        ts: ts.parse().unwrap(),
         agent: Agent::Claude,
         home: "claude".into(),
         agent_version: None,

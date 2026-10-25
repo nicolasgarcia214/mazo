@@ -5,7 +5,7 @@ goal-smart: since 2026-09-13
 day        strong weak
 2026-10-01      1    0 ████████████████████████████████████████
 
-last 1 of 1 events:
+last 1 of 1 event:
 ts               agent  channel actor cwd   src
 2026-10-01 12:00 claude tool    main  /work claude:gs.jsonl:1 expired
 

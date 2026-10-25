@@ -693,7 +693,7 @@ fn a_store_skill_is_added_synced_used_and_retired_without_source() {
     let out = fx.mazo(&["sync"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(fs::read_link(fx.link("theirs")).unwrap(), store);
-    assert!(stdout(&fx.mazo(&["status"])).contains("claude: in sync (1 skills)"));
+    assert!(stdout(&fx.mazo(&["status"])).contains("claude: in sync (1 skill)"));
     for cmd in ["usage", "unused"] {
         let out = fx.mazo(&[cmd]);
         assert!(stdout(&out).lines().any(|l| l.starts_with("theirs ")), "{cmd}: {}", stdout(&out));
@@ -708,10 +708,12 @@ fn a_store_skill_is_added_synced_used_and_retired_without_source() {
 #[test]
 fn a_missing_source_still_fails_and_loose_or_links_need_one() {
     let fx = Sourceless::new();
-    let missing = format!("{}: No such file", fx.root.join("config/missing").display());
+    let missing = format!("source {}: No such file", fx.root.join("config/missing").display());
+    let file = format!("source {}: not a directory", fx.config.display());
     let unanchored = "loose and links are relative to source; set it";
     for (config, want) in [
         ("source = \"missing\"\n", missing.as_str()),
+        ("source = \"mazo.toml\"\n", file.as_str()),
         ("loose = [\"AGENTS.md\"]\n", unanchored),
         (
             "[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\nlinks = { \"CLAUDE.md\" = \"AGENTS.md\" }\n",

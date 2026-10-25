@@ -1,11 +1,15 @@
 //! mazo: skill usage from agent transcripts, and sync of skill links.
 //!
-//! Five paths: write `tail → adapters → classify → ledger`, read
-//! `ledger + inventory + evals → report`, sync `config + inventory + policy → links`,
-//! judge `ledger + adapters (condense) → audit`, store `source → audit (vet) →
-//! store + mazo.lock → links` for `add` and `update` and `lifecycle → store` for
-//! `retire`, each on a project's store and lockfile with `--project`. The TUI
-//! draws the read path's report and runs the CLI's own code for its actions.
+//! Five paths:
+//! - write: `tail → adapters → classify → ledger`;
+//! - read: `ledger + inventory + evals → report`;
+//! - sync: `config + inventory + policy → links`;
+//! - judge: `ledger + adapters (condense) → audit`;
+//! - store: `source → audit (vet) → store + mazo.lock → links` for `add` and
+//!   `update`, `lifecycle → store` for `retire`; with `--project` these three
+//!   act on a project's store and lockfile.
+//!
+//! The TUI draws the read path's report and runs the CLI's own code for its actions.
 
 pub mod adapters;
 pub mod audit;
@@ -13,17 +17,17 @@ pub mod classify;
 pub mod config;
 pub mod ctx;
 pub mod evals;
-pub mod examples;
+mod examples;
 pub mod help;
-pub mod history;
+mod history;
 pub mod html;
 pub mod inventory;
 pub mod ledger;
 pub mod lifecycle;
 pub mod links;
-pub mod pick;
+mod pick;
 pub mod policy;
-pub mod readcmd;
+mod readcmd;
 pub mod render;
 pub mod report;
 pub mod scan;
@@ -31,7 +35,6 @@ pub mod store;
 pub mod tail;
 pub mod theme;
 pub mod tui;
-pub mod work;
 pub mod yaml;
 
 /// An error is reported to the user as one `ERROR: …` line; its kind picks
@@ -74,6 +77,12 @@ impl From<&str> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// The error of a step on `p`: `<p>: <error>`. The path is
+/// [`inert`](render::inert), since a skill's author or a transcript may name it.
+pub fn at<E: std::fmt::Display>(p: &std::path::Path) -> impl Fn(E) -> String + Copy {
+    move |e| format!("{}: {e}", render::inert(&p.display().to_string()))
+}
 
 /// Writes `args` to stdout. A reader that closed it early, as `head` does,
 /// ends mazo quietly with 0; any other write error ends it with 1.

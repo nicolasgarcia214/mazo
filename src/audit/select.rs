@@ -25,8 +25,8 @@ pub struct Candidate {
 
 impl Candidate {
     /// When the session started: its transcript's first timestamp, else the load's.
-    pub fn started(&self) -> Option<Timestamp> {
-        crate::scan::first_timestamp(Path::new(self.event.src_file())).or_else(|| self.event.ts.parse().ok())
+    pub fn started(&self) -> Timestamp {
+        crate::scan::first_timestamp(Path::new(self.event.src_file())).unwrap_or(self.event.ts)
     }
 }
 
@@ -46,8 +46,7 @@ pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: O
         if audited.contains(&e.session) {
             continue;
         }
-        let Ok(t) = e.ts.parse::<Timestamp>() else { continue };
-        sessions.entry((e.agent, &e.session)).or_default().push((t, e));
+        sessions.entry((e.agent, &e.session)).or_default().push((e.ts, e));
     }
     let mut sessions: Vec<Loads> = sessions.into_values().collect();
     for loads in &mut sessions {
@@ -106,11 +105,10 @@ pub struct SkillText {
 /// `<source>/<skill>/SKILL.md` as of the last commit before `started` that
 /// touched it, or the current file when there is no repository or no earlier
 /// commit.
-pub fn skill_at(source: &Path, skill: &str, started: Option<Timestamp>) -> Result<SkillText> {
+pub fn skill_at(source: &Path, skill: &str, started: Timestamp) -> Result<SkillText> {
     let dir = source.join(skill);
-    let at = started.and_then(|t| {
-        let before = format!("--before={t}");
-        let log = git(&dir, &["log", "-1", "--format=%H", &before, "--", "SKILL.md"])?;
+    let before = format!("--before={started}");
+    let at = git(&dir, &["log", "-1", "--format=%H", &before, "--", "SKILL.md"]).and_then(|log| {
         let commit = Some(log.trim()).filter(|c| !c.is_empty())?;
         let text = git(&dir, &["show", &format!("{commit}:./SKILL.md")])?;
         Some(SkillText { commit: Some(commit.to_string()), text })
@@ -119,7 +117,7 @@ pub fn skill_at(source: &Path, skill: &str, started: Option<Timestamp>) -> Resul
         Some(at) => Ok(at),
         None => {
             let path = dir.join("SKILL.md");
-            let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let text = fs::read_to_string(&path).map_err(crate::at(&path))?;
             Ok(SkillText { commit: None, text })
         }
     }

@@ -68,7 +68,7 @@ impl Subprocess for Claude {
     fn login(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<()> {
         let (_, dir) = run_dir(data)?;
         let checked = claude_login(OsStr::new("claude"), &dir, AUTH_TIMEOUT, cancel);
-        fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        fs::remove_dir_all(&dir).map_err(crate::at(&dir))?;
         checked.map_err(Error::Usage)
     }
 

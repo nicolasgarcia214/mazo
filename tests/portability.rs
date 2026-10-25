@@ -280,6 +280,16 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
         .collect();
     assert_eq!(homes, [["claude", "claude", "~/.claude"], ["pi", "pi", "~/.pi/agent"]], "{text}");
 
+    let file = f.home.join("notes.md");
+    fs::write(&file, "").unwrap();
+    for (source, want) in [(f.home.join("missing"), "No such file"), (file, "not a directory")] {
+        let (source, bad) = (source.to_str().unwrap(), f.home.join("bad.toml"));
+        let o = f.init(&[("MAZO_CONFIG", bad.as_os_str())], &["--source", source]);
+        assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+        assert!(stderr(&o).contains(&format!("--source {source}: {want}")), "{}", stderr(&o));
+        assert!(!bad.exists(), "a bad --source writes no config");
+    }
+
     fs::write(&path, "mine\n").unwrap();
     let o = f.init(&env, &["--source", "skills"]);
     assert_eq!(o.status.code(), Some(1));
@@ -324,7 +334,11 @@ fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
         }
         let o = f.init(&[], &[]);
         assert_ok(&o);
-        assert_eq!(stdout(&o).lines().nth(1), Some(&*format!("judge: {want}")), "{stubs:?}");
+        let note = stdout(&o).lines().nth(1).map(str::to_string);
+        assert!(
+            note.is_some_and(|n| n == format!("judge: {want}") || want == "pi" && n.starts_with("judge: pi, ")),
+            "{stubs:?}"
+        );
         let path = f.home.join(".config/mazo/config.toml");
         let judge = judge(&path).unwrap_or_else(|| panic!("{stubs:?}: no [judge]"));
         assert_eq!(judge["agent"].as_str(), Some(want), "{stubs:?}");

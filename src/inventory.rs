@@ -108,7 +108,7 @@ pub fn description(dir: &Path) -> Option<String> {
 
 /// Any non-hidden child directory of the root that contains `SKILL.md`.
 pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
-    let entries = std::fs::read_dir(source).map_err(|e| format!("{}: {e}", source.display()))?;
+    let entries = std::fs::read_dir(source).map_err(crate::at(source))?;
     let mut out = BTreeSet::new();
     for e in entries.flatten() {
         let path = e.path();

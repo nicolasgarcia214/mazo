@@ -39,6 +39,9 @@ fn claude_work_is_linked_and_policy_checked() {
     );
     assert!(r.stderr().contains(&needle), "{}", r.stderr());
     assert_eq!(fx.snapshot(), before);
+    let status: serde_json::Value = serde_json::from_str(&fx.mazo(&["status", "--json"]).stdout()).unwrap();
+    let policy = status["policy"].as_array().unwrap();
+    assert!(policy.iter().any(|p| p.as_str().unwrap().starts_with(&needle[7..])), "{status}");
 
     fs::remove_file(work.join("settings.json")).unwrap();
     let r = fx.mazo(&["sync"]);

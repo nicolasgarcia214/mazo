@@ -57,14 +57,16 @@ pub(super) struct Dialog {
 }
 
 /// Applies the confirmed sync `plan` under the data lock, as `mazo sync`
-/// does, or refuses when a re-plan on the inventory read under it differs.
+/// does, or refuses when a re-plan on the inventory read under it differs
+/// or is refused itself.
 fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<String>> {
     let _lock = ledger::lock(&d.dir)?;
     let inv = store::inventory(d.cfg.source.as_deref(), &d.dir)?;
     let homes: Vec<&Home> = d.cfg.homes.iter().collect();
     match links::checked(&d.cfg, &inv, &homes) {
         Ok(now) if now.actions == plan.actions => links::apply(plan),
-        _ => Err("sync refused: the links changed since the plan; press s to plan again".into()),
+        Err(errors) => Ok([vec!["sync refused:".into()], errors].concat()),
+        Ok(_) => Err("sync refused: the links changed since the plan; press s to plan again".into()),
     }
 }
 

@@ -39,7 +39,7 @@ impl Grade {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Evals {
     /// The skill's current [`content_hash`]; None for a name in no root.
     pub content_hash: Option<String>,
@@ -47,6 +47,8 @@ pub struct Evals {
     pub grades: Vec<Grade>,
     /// Every retro, oldest first; the last one is the latest.
     pub retros: Vec<Eval>,
+    /// Each grade or retro file with frontmatter that was skipped, and why.
+    pub skipped: Vec<String>,
 }
 
 /// `skill`'s grade and retro directories under `evals_dir`.
@@ -58,21 +60,23 @@ pub fn dirs(evals_dir: &Path, skill: &str) -> [PathBuf; 2] {
 /// skill of `inv`; none for a name in no root.
 pub fn load(evals_dir: &Path, inv: &Inventory, skill: &str) -> Evals {
     let Some(root) = inv.root(skill) else {
-        return Evals { content_hash: None, grades: Vec::new(), retros: Vec::new() };
+        return Evals::default();
     };
     let current = content_hash(&root.join(skill)).ok();
     let [grades, retros] = dirs(evals_dir, skill);
-    let grades = read_dir(&grades)
+    let mut skipped = Vec::new();
+    let grades = read_dir(&grades, &mut skipped)
         .into_iter()
         .map(|(eval, hash)| Grade { stale: hash.is_none() || hash != current, content_hash: hash, eval })
         .collect();
-    Evals { grades, retros: read_dir(&retros).into_iter().map(|(eval, _)| eval).collect(), content_hash: current }
+    let retros = read_dir(&retros, &mut skipped).into_iter().map(|(eval, _)| eval).collect();
+    Evals { grades, retros, content_hash: current, skipped }
 }
 
 /// Every `*.md` in `dir` with loadable frontmatter and a `date`, with its
 /// frontmatter `content_hash`, sorted by (date, filename). Other files are
-/// skipped, a rejected one with a warning.
-fn read_dir(dir: &Path) -> Vec<(Eval, Option<String>)> {
+/// skipped, one with frontmatter noted in `skipped` with why.
+fn read_dir(dir: &Path, skipped: &mut Vec<String>) -> Vec<(Eval, Option<String>)> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let file = entry.path();
@@ -85,15 +89,17 @@ fn read_dir(dir: &Path) -> Vec<(Eval, Option<String>)> {
         if !text.trim_start_matches('\u{feff}').starts_with("---") {
             continue; // no frontmatter: not an evaluation artifact
         }
+        // A file's name and YAML error are anyone's text.
+        let skip = |why: &str| crate::render::inert(&format!("{}: {why}", file.display()));
         let fm = match yaml::frontmatter(&text) {
             Ok(fm) => fm,
             Err(e) => {
-                eprintln!("warning: {}: {e}; skipped", file.display());
+                skipped.push(skip(&e.to_string()));
                 continue;
             }
         };
         let Some(date) = yaml::get(&fm, "date").and_then(yaml::text).and_then(date) else {
-            eprintln!("warning: {}: no YYYY-MM-DD date; skipped", file.display());
+            skipped.push(skip("no YYYY-MM-DD date"));
             continue;
         };
         let field = |key| yaml::get(&fm, key).and_then(yaml::text).map(str::to_string);

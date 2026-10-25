@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::err;
 use super::source::{Remote, Scratch, Source};
 use crate::Result;
 use crate::audit::VetVerdict;
@@ -97,9 +96,9 @@ impl Lock {
     pub fn load(data: &Path) -> Result<Lock> {
         let path = data.join("mazo.lock");
         match fs::read_to_string(&path) {
-            Ok(text) => parse(&text).map_err(|e| format!("{}: {e}", path.display()).into()),
+            Ok(text) => parse(&text).map_err(|e| crate::at(&path)(e).into()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Lock::default()),
-            Err(e) => Err(err(&path, e).into()),
+            Err(e) => Err(crate::at(&path)(e).into()),
         }
     }
 
@@ -122,9 +121,9 @@ impl Lock {
 /// `src` resolved; inside `clone` when there is one, so that a symlink in the
 /// repository cannot lead the copy outside it.
 pub(super) fn resolved(src: &Path, clone: Option<&Path>) -> std::result::Result<PathBuf, String> {
-    let src = fs::canonicalize(src).map_err(|e| err(src, e))?;
+    let src = fs::canonicalize(src).map_err(crate::at(src))?;
     if let Some(clone) = clone
-        && !src.starts_with(fs::canonicalize(clone).map_err(|e| err(clone, e))?)
+        && !src.starts_with(fs::canonicalize(clone).map_err(crate::at(clone))?)
     {
         return Err(format!("{} leaves the repository", crate::render::inert(&src.display().to_string())));
     }
@@ -152,25 +151,25 @@ pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: PathB
     let dir = staged.0.as_path();
     let _ = fs::remove_dir_all(dir);
     reap(dir);
-    fs::create_dir_all(dir).map_err(|e| err(dir, e))?;
+    fs::create_dir_all(dir).map_err(crate::at(dir))?;
     files.iter().try_for_each(|rel| {
         let (from, dest) = (src.join(rel), dir.join(rel));
         // Typed on the handle that is read, not on the path [`tree`] listed:
         // an entry swapped for a symlink since is refused, not followed.
-        let mut file = unfollowed(src, rel).map_err(|e| err(&from, e))?;
-        let meta = file.metadata().map_err(|e| err(&from, e))?;
+        let mut file = unfollowed(src, rel).map_err(crate::at(&from))?;
+        let meta = file.metadata().map_err(crate::at(&from))?;
         let ft = meta.file_type();
         if ft.is_dir() {
-            fs::create_dir(&dest).map_err(|e| err(&dest, e))
+            fs::create_dir(&dest).map_err(crate::at(&dest))
         } else if !ft.is_file() {
             Err(format!("{} is not a regular file or directory", crate::render::inert(&from.display().to_string())))
         } else if rel == Path::new("SKILL.md") {
-            fs::write(&dest, skill_md).map_err(|e| err(&dest, e))
+            fs::write(&dest, skill_md).map_err(crate::at(&dest))
         } else {
-            let mut to = fs::File::create_new(&dest).map_err(|e| err(&dest, e))?;
-            std::io::copy(&mut file, &mut to).map_err(|e| err(&dest, e))?;
+            let mut to = fs::File::create_new(&dest).map_err(crate::at(&dest))?;
+            std::io::copy(&mut file, &mut to).map_err(crate::at(&dest))?;
             // As `fs::copy` does, so that a script stays executable.
-            to.set_permissions(meta.permissions()).map_err(|e| err(&dest, e))
+            to.set_permissions(meta.permissions()).map_err(crate::at(&dest))
         }
     })?;
     let hash = content_hash(dir)?;
@@ -189,10 +188,12 @@ fn unfollowed(root: &Path, rel: &Path) -> std::io::Result<fs::File> {
         let name = std::ffi::CString::new(part.as_os_str().as_bytes())?;
         let dir = if parts.peek().is_some() { libc::O_DIRECTORY } else { 0 };
         let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC | dir;
+        // SAFETY: `file` stays open across the call and `name` is NUL-terminated.
         let fd = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(), flags) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
+        // SAFETY: `fd` was just returned by openat(2) and nothing else owns it.
         file = unsafe { fs::File::from_raw_fd(fd) };
     }
     Ok(file)
@@ -211,6 +212,7 @@ fn reap(staged: &Path) {
         let pid =
             entry.file_name().to_str().and_then(|n| n.strip_prefix(prefix)?.strip_prefix('-')?.parse::<u32>().ok());
         let gone = |pid: u32| {
+            // SAFETY: kill(2) with signal 0 only probes; it takes no pointers.
             let signalled = unsafe { libc::kill(pid as libc::pid_t, 0) };
             signalled != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
         };
@@ -252,13 +254,13 @@ fn tree(root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
     let mut stack = vec![PathBuf::new()];
     while let Some(rel) = stack.pop() {
         let dir = root.join(&rel);
-        for e in fs::read_dir(&dir).map_err(|e| err(&dir, e))? {
-            let e = e.map_err(|e| err(&dir, e))?;
+        for e in fs::read_dir(&dir).map_err(crate::at(&dir))? {
+            let e = e.map_err(crate::at(&dir))?;
             if e.file_name() == ".git" {
                 continue;
             }
             let path = rel.join(e.file_name());
-            let ft = e.file_type().map_err(|io| err(&e.path(), io))?;
+            let ft = e.file_type().map_err(crate::at(&e.path()))?;
             if ft.is_dir() {
                 stack.push(path.clone());
             } else if !ft.is_file() {
@@ -282,7 +284,7 @@ pub fn content_hash(dir: &Path) -> Result<String> {
         if path.is_dir() {
             continue;
         }
-        let bytes = fs::read(&path).map_err(|e| err(&path, e))?;
+        let bytes = fs::read(&path).map_err(crate::at(&path))?;
         sha.update(rel.as_os_str().as_encoded_bytes());
         sha.update(format!("\0{}\0", bytes.len()).as_bytes());
         sha.update(&bytes);

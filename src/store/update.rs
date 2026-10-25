@@ -6,7 +6,7 @@ use super::bundled;
 use super::lock::{checked, now, resolved, stage};
 use super::source::{Remote, Scratch};
 use super::vet::{gate, no_judge};
-use super::{Lock, Locked, Outcome, Target, content_hash, err, project_hint, project_inventory, project_root};
+use super::{Lock, Locked, Outcome, Target, content_hash, inventory, project_hint, project_inventory, project_root};
 use crate::audit::{self, Backend, Caller, Vet};
 use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
@@ -124,8 +124,11 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             }
         }
     }
-    if updated {
-        let (plan, errors) = target.home_sync(cfg, inv, None);
+    // A project's skills are linked relative to its store, so need no sync.
+    if updated && target.project.is_none() {
+        // Under the lock, on the inventory read under it, as `mazo sync` does.
+        let _lock = ledger::lock(data)?;
+        let (plan, errors) = target.home_sync(cfg, &inventory(cfg.source.as_deref(), data)?, None);
         for e in &errors {
             out.error(e);
         }
@@ -133,8 +136,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             for line in links::apply(&plan)? {
                 out.line(&line);
             }
-        }
-        if !errors.is_empty() {
+        } else {
             outcome = outcome.max(Outcome::Failed);
         }
     }
@@ -167,7 +169,7 @@ fn refresh(
     let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
     {
         let _lock = ledger::lock(data)?;
-        recover(&to, &old).map_err(|e| err(&old, e))?;
+        recover(&to, &old).map_err(crate::at(&old))?;
     }
     let scratch = Scratch(data.join(format!(".clone-{}", std::process::id())));
     let clone = scratch.0.as_path();
@@ -202,13 +204,15 @@ fn refresh(
     if out.cancelled() {
         return Err(audit::CANCELLED.into());
     }
-    recover(&to, &old).map_err(|e| err(&old, e))?;
-    let swapped = fs::rename(&to, &old).map_err(|e| err(&to, e)).and_then(|()| {
-        fs::rename(&staged.0, &to).map_err(|e| err(&to, e)).inspect_err(|_| drop(fs::rename(&old, &to)))
-    });
+    recover(&to, &old).map_err(crate::at(&old))?;
+    // Read under the lock, so a concurrent `retire` or `add` cannot stale the check.
+    let fresh = if target.project.is_none() { Some(inventory(cfg.source.as_deref(), data)?) } else { None };
+    let swapped = fs::rename(&to, &old)
+        .map_err(crate::at(&to))
+        .and_then(|()| fs::rename(&staged.0, &to).map_err(crate::at(&to)).inspect_err(|_| drop(fs::rename(&old, &to))));
     swapped?;
 
-    let (_, errors) = target.home_sync(cfg, inv, None);
+    let errors = fresh.map_or_else(Vec::new, |inv| target.home_sync(cfg, &inv, None).1);
     let recorded = if errors.is_empty() {
         Lock::load(&lock_dir).and_then(|mut lock| {
             let entry = lock.skills.iter_mut().find(|s| s.name == l.name).ok_or("no longer in the lockfile")?;
@@ -225,9 +229,13 @@ fn refresh(
         Err("update refused; the skill was left as it was".into())
     };
     if let Err(e) = recorded {
-        fs::remove_dir_all(&to).and_then(|()| fs::rename(&old, &to)).map_err(|e| err(&to, e))?;
         for e in &errors {
             out.error(e);
+        }
+        // A failed undo is the error to report, after why it ran.
+        if let Err(c) = fs::remove_dir_all(&to).and_then(|()| fs::rename(&old, &to)) {
+            let why = if errors.is_empty() { e.to_string() } else { "the sync refused it".into() };
+            return Err(format!("the update failed ({why}), and undoing it failed: {}", crate::at(&to)(c)).into());
         }
         return Err(e);
     }

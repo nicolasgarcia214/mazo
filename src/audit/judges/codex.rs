@@ -87,7 +87,7 @@ impl Subprocess for Codex {
             .or_else(|e| if e.kind() == ErrorKind::NotFound { Ok(()) } else { Err(e) })
             .and_then(|()| fs::create_dir_all(&home))
             .and_then(|()| std::os::unix::fs::symlink(&self.auth, home.join("auth.json")))
-            .map_err(|e| format!("{}: {e}", home.display()))?;
+            .map_err(crate::at(&home))?;
         Ok(Some(("CODEX_HOME", home)))
     }
 

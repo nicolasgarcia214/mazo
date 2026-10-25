@@ -341,7 +341,7 @@ fn times_are_local_under_a_fixed_zone() {
     let jst = TimeZone::fixed(jiff::tz::offset(9));
     let local = ts.to_zoned(jst).date();
     let mut e = event("t1", "unslop", Channel::Slash, "s-t1", &ago(0));
-    e.ts = ts.to_string();
+    e.ts = ts;
     write(&b.root.join("data/mazo/events.jsonl"), &format!("{}\n", serde_json::to_string(&e).unwrap()));
 
     let out = b.run().command(&[("TZ", "JST-9".as_ref())], &["report"]).output().unwrap();

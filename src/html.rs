@@ -153,10 +153,9 @@ fn usage(model: &Report) -> String {
 }
 
 fn coverage(model: &Report) -> String {
-    let parts: Vec<String> = model.usage.coverage.iter().map(|(home, c)| format!("{} {}", esc(home), esc(c))).collect();
     format!(
-        "<p class=\"muted\">coverage: {}</p><p class=\"muted\">legend: {}</p>",
-        parts.join(" · "),
+        "<p class=\"muted\">{}</p><p class=\"muted\">legend: {}</p>",
+        esc(&report::coverage_note("coverage", &model.usage.coverage)),
         esc(&help::legend(true, |_, _| true))
     )
 }
@@ -195,7 +194,7 @@ fn examples(ex: &Examples, tz: &TimeZone) -> String {
             let cwd = r.cwd.as_deref().map_or("-".into(), |p| esc(&tilde(p)));
             format!(
                 "<li><span class=\"muted\">{} {} {cwd}</span><blockquote>{}</blockquote></li>",
-                local(Some(&r.ts), tz, DAY),
+                esc(&render::zoned(r.ts, tz, DAY)),
                 esc(&name(r.agent)),
                 esc(&r.text),
             )
@@ -237,9 +236,9 @@ fn audit(a: Option<&SkillRecord>, tz: &TimeZone) -> String {
         .map(|i| format!("<li>{} <span class=\"muted\">{}</span></li>", esc(&i.change), esc(&i.reason)))
         .collect();
     format!(
-        "<dt>audit</dt><dd><span class=\"muted\">{}, {} sessions, {} billing</span> {}<br>{}<ol>{improvements}</ol></dd>",
+        "<dt>audit</dt><dd><span class=\"muted\">{}, {}, {} billing</span> {}<br>{}<ol>{improvements}</ol></dd>",
         local(Some(&a.audited_at), tz, DAY),
-        a.sessions.len(),
+        render::count(a.sessions.len(), "session"),
         esc(&a.judge.billing.map_or("unknown".into(), name)),
         esc(&a.result.verdict),
         rates.join(", "),
@@ -258,7 +257,7 @@ fn card(c: &Card, tz: &TimeZone) -> String {
                 src.push_str(" <span class=\"muted\">expired</span>");
             }
             vec![
-                local(Some(e.ts), tz, MINUTE),
+                esc(&render::zoned(e.ts, tz, MINUTE)),
                 esc(&name(e.agent)),
                 esc(&name(e.channel)),
                 esc(&name(e.actor)),
@@ -276,16 +275,16 @@ fn card(c: &Card, tz: &TimeZone) -> String {
         .collect();
     format!(
         "<section id=\"{id}\"><h2>{name}</h2><p class=\"muted\">{from}</p>{hist}\
-         <h3>Last {shown} of {total} events</h3>{events}\
+         <h3>Last {shown} of {total}</h3>{events}\
          <dl><dt>description</dt><dd>{desc}</dd><dt>path</dt><dd class=\"mono\">{path}</dd>{history}\
          <dt>cites</dt><dd>{cites}</dd><dt>cited by</dt><dd>{cited_by}</dd>\
          <dt>strong</dt><dd>{strong}</dd><dt>last use</dt><dd>{last_use}</dd><dt>projects</dt><dd>{projects}</dd>\
-         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{examples}{vet}{audit}</dl></section>",
+         <dt>grades</dt><dd>{grades}</dd><dt>retros</dt><dd>{retro_note}{retros}</dd>{skipped}{examples}{vet}{audit}</dl></section>",
         id = anchor(c.skill),
         name = esc(c.skill),
         hist = histogram(&c.histogram),
         shown = c.events.len(),
-        total = c.total_events,
+        total = render::count(c.total_events, "event"),
         events = table(&["ts", "agent", "channel", "actor", "cwd", "src"], &events),
         desc = or_dash(c.description.as_deref()),
         path = or_dash(c.path.as_ref().map(|p| tilde(&p.to_string_lossy())).as_deref()),
@@ -297,6 +296,7 @@ fn card(c: &Card, tz: &TimeZone) -> String {
         grades = if grades.is_empty() { "none".into() } else { table(&["date", "score"], &grades) },
         retro_note = esc(&c.retro_note()),
         retros = if retros.is_empty() { String::new() } else { table(&["date", "score", "verdict"], &retros) },
+        skipped = c.skipped.iter().map(|s| format!("<dt>skipped</dt><dd>{}</dd>", esc(s))).collect::<String>(),
         examples = examples(&c.examples, tz),
         vet = c.vet.map_or(String::new(), |v| format!("<dt>vet</dt><dd>{}</dd>", esc(&v.line()))),
         audit = audit(c.audit, tz),
@@ -325,9 +325,8 @@ pub fn render(model: &Report) -> String {
 /// Writes `html` to `path` with mode 0600, replacing any previous file:
 /// the page shows cwds and prompt excerpts, the one place prompt text is written.
 pub fn write(path: &Path, html: &str) -> crate::Result<()> {
-    let err = |e: std::io::Error| format!("{}: {e}", path.display());
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        fs::create_dir_all(dir).map_err(err)?;
+        fs::create_dir_all(dir).map_err(crate::at(dir))?;
     }
     crate::ledger::write_atomic(path, html.as_bytes(), 0o600)
 }

@@ -179,13 +179,13 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
         .map(|s| (s, Scope::Global))
         .chain(project)
         .map(|(skill, scope)| {
-            let select = |start| view.select(&f, Some(skill), start).filter(move |(e, _)| view.scope(e) == scope);
+            let select = |start| view.select(&f, Some(skill), start).filter(move |e| view.scope(e) == scope);
             let window: Vec<_> = select(start).collect();
-            let keys: HashSet<Key> = window.iter().map(|(e, _)| (e.agent, e.session.as_str(), e.channel)).collect();
+            let keys: HashSet<Key> = window.iter().map(|e| (e.agent, e.session.as_str(), e.channel)).collect();
             let count = |c: Channel| keys.iter().filter(|k| k.2 == c).count();
             let sess = keys.iter().filter(|k| k.2.strong()).map(|k| (k.0, k.1)).collect::<HashSet<_>>().len();
-            let agents: BTreeSet<Agent> = window.iter().map(|(e, _)| e.agent).collect();
-            let last = window.iter().filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
+            let agents: BTreeSet<Agent> = window.iter().map(|e| e.agent).collect();
+            let last = window.iter().filter(|e| e.channel.strong()).map(|e| e.ts).max();
             let spark_from = input.now.checked_sub(SignedDuration::from_hours(24 * (SPARK_DAYS + 1))).ok();
             let last_30d = view.daily_strong(select(spark_from), SPARK_DAYS);
             let sessions = |days| view.strong_sessions(select(None), days);
