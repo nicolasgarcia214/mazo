@@ -69,7 +69,8 @@ impl Roots {
             }
             passed.push(id);
         }
-        // Matches the old walks: Codex returned the next parent's id, Pi the last header read.
+        // A walk cut off at 64 steps stores nothing: Codex ends at the next
+        // unread parent's id, Pi at the last session whose header was read.
         match parent {
             Parent::Codex(id) => id,
             Parent::Pi(_) => passed.pop().unwrap_or_default(),
