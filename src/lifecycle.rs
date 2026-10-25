@@ -37,7 +37,7 @@ pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Resu
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(format!("new refused: {} already exists", dir.display()).into());
         }
-        r => r.map_err(|e| format!("{}: {e}", dir.display()))?,
+        r => r.map_err(crate::at(&dir))?,
     }
     let mut files = vec![("SKILL.md", skill_md)];
     if cfg.policy.codex_manifest {
@@ -48,8 +48,8 @@ pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Resu
     for (rel, text) in files {
         let path = dir.join(rel);
         let parent = path.parent().unwrap_or(&dir);
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::create_dir_all(parent).map_err(crate::at(parent))?;
+        std::fs::write(&path, text).map_err(crate::at(&path))?;
         outln!("wrote {}", path.display());
     }
     if cfg.policy.claude_name_only {
@@ -110,7 +110,7 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
         outln!("delete {}", archive.join(n).display());
     }
     if !yes {
-        eprint!("delete {} archived skill(s) permanently? [y/N] ", names.len());
+        eprint!("delete {} permanently? [y/N] ", crate::render::count(names.len(), "archived skill"));
         let mut answer = String::new();
         std::io::stdin().lock().read_line(&mut answer).map_err(|e| format!("stdin: {e}"))?;
         if !matches!(answer.trim(), "y" | "Y" | "yes") {
@@ -119,7 +119,7 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
     }
     for n in &names {
         let dir = archive.join(n);
-        std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::remove_dir_all(&dir).map_err(crate::at(&dir))?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -197,7 +197,7 @@ fn unsaved(source: &Path, names: &[String]) -> Result<Vec<String>> {
 /// --stdin` of its link text.
 fn link_blob(source: &Path, rel: &str) -> Result<String> {
     let path = source.join(rel);
-    let target = std::fs::read_link(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let target = std::fs::read_link(&path).map_err(crate::at(&path))?;
     let fail = |e: std::io::Error| format!("git hash-object --stdin: {e}");
     let mut child = Command::new("git")
         .arg("--no-optional-locks")
@@ -219,7 +219,7 @@ fn link_blob(source: &Path, rel: &str) -> Result<String> {
 
 /// Every non-directory under `dir`, as a path relative to `source`.
 fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
-    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).map_err(crate::at(dir))?;
     let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     paths.sort();
     for p in paths {
@@ -305,11 +305,11 @@ pub fn retire(
     let mut out = match &to {
         Some(to) => {
             let archive = root.join(".archive");
-            std::fs::create_dir_all(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+            std::fs::create_dir_all(&archive).map_err(crate::at(&archive))?;
             if git(&root, &["ls-files", "--", name]).is_some_and(|o| !o.is_empty()) {
                 git(&root, &["mv", "--", name, &format!(".archive/{name}")]).ok_or(format!("git mv {name} failed"))?;
             } else {
-                std::fs::rename(&from, to).map_err(|e| format!("{}: {e}", from.display()))?;
+                std::fs::rename(&from, to).map_err(crate::at(&from))?;
             }
             links::apply_after(vec![format!("archived  {} -> {}", from.display(), to.display())], &plan)?
         }

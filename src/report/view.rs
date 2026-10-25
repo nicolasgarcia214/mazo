@@ -19,7 +19,6 @@ pub(super) type Key<'e> = (Agent, &'e str, Channel);
 pub(super) struct View<'a> {
     pub(super) input: &'a Input<'a>,
     today: Date,
-    events: Vec<(&'a Event, Timestamp)>,
     authoring_sessions: HashSet<(Agent, &'a str)>,
     /// The ids of the events whose path is in a project skill's directory.
     project: HashSet<&'a str>,
@@ -61,8 +60,6 @@ pub(super) fn relative(input: &Input, t: Timestamp) -> String {
 impl<'a> View<'a> {
     pub(super) fn new(input: &'a Input<'a>) -> View<'a> {
         let today = day(input, input.now);
-        let events: Vec<(&Event, Timestamp)> =
-            input.events.iter().filter_map(|e| Some((e, e.ts.parse::<Timestamp>().ok()?))).collect();
         // `policy.authoring_skills` matched on the name after the last `:`, so a
         // plugin's `skill-creator:skill-creator` counts.
         let authoring = &input.cfg.policy.authoring_skills;
@@ -76,7 +73,7 @@ impl<'a> View<'a> {
             let of = |e: &Event| e.path.as_deref().and_then(|path| p.skill_of(path)).is_some();
             input.events.iter().filter(|e| of(e)).map(|e| e.id.as_str()).collect()
         });
-        View { input, today, events, authoring_sessions, project, upstream: OnceCell::new(), ctx: OnceCell::new() }
+        View { input, today, authoring_sessions, project, upstream: OnceCell::new(), ctx: OnceCell::new() }
     }
 
     pub(super) fn ctx(&self) -> &Contexts {
@@ -120,39 +117,36 @@ impl<'a> View<'a> {
         f: &'s Filter,
         skill: Option<&'s str>,
         start: Option<Timestamp>,
-    ) -> impl Iterator<Item = &'s (&'a Event, Timestamp)> + 's {
-        self.events.iter().filter(move |(e, t)| {
-            skill.is_none_or(|s| e.skill == s) && start.is_none_or(|s| *t >= s) && self.kept(e, f)
-        })
+    ) -> impl Iterator<Item = &'a Event> + 's {
+        self.input
+            .events
+            .iter()
+            .filter(move |e| skill.is_none_or(|s| e.skill == s) && start.is_none_or(|s| e.ts >= s) && self.kept(e, f))
     }
 
     /// Skills with a strong event at or after `start`, under the default filter.
     pub(super) fn used(&self, start: Option<Timestamp>) -> BTreeSet<&'a str> {
         let f = Filter::default();
-        self.select(&f, None, start).filter(|(e, _)| e.channel.strong()).map(|(e, _)| e.skill.as_str()).collect()
+        self.select(&f, None, start).filter(|e| e.channel.strong()).map(|e| e.skill.as_str()).collect()
     }
 
     /// Distinct (agent, session) pairs with a strong event on a local day
     /// `days` ago, today being 0.
     pub(super) fn strong_sessions<'s>(
         &self,
-        events: impl Iterator<Item = &'s (&'s Event, Timestamp)>,
+        events: impl Iterator<Item = &'s Event>,
         days: std::ops::Range<i64>,
     ) -> usize {
         let ago = |t: Timestamp| (self.today - self.date(t)).get_days() as i64;
-        let pairs = events.filter(|(e, t)| e.channel.strong() && days.contains(&ago(*t)));
-        pairs.map(|(e, _)| (e.agent, e.session.as_str())).collect::<HashSet<_>>().len()
+        let pairs = events.filter(|e| e.channel.strong() && days.contains(&ago(e.ts)));
+        pairs.map(|e| (e.agent, e.session.as_str())).collect::<HashSet<_>>().len()
     }
 
     /// Distinct collapse keys of strong events per local day, for the last `days` days.
-    pub(super) fn daily_strong<'s>(
-        &self,
-        events: impl Iterator<Item = &'s (&'s Event, Timestamp)>,
-        days: i64,
-    ) -> Vec<usize> {
+    pub(super) fn daily_strong<'s>(&self, events: impl Iterator<Item = &'s Event>, days: i64) -> Vec<usize> {
         let mut per_day: Vec<HashSet<Key>> = vec![HashSet::new(); days as usize];
-        for (e, t) in events.filter(|(e, _)| e.channel.strong()) {
-            let ago = (self.today - self.date(*t)).get_days() as i64;
+        for e in events.filter(|e| e.channel.strong()) {
+            let ago = (self.today - self.date(e.ts)).get_days() as i64;
             if (0..days).contains(&ago) {
                 per_day[(days - 1 - ago) as usize].insert((e.agent, &e.session, e.channel));
             }
@@ -163,15 +157,11 @@ impl<'a> View<'a> {
     /// Distinct (agent, session) pairs with a strong event per bucket of
     /// `since`'s [`Unit`], from the bucket of the window's start (of the first
     /// event, for all time) to today's.
-    pub(super) fn buckets<'s>(
-        &self,
-        events: impl Iterator<Item = &'s (&'s Event, Timestamp)>,
-        since: Since,
-    ) -> Vec<Bucket> {
+    pub(super) fn buckets<'s>(&self, events: impl Iterator<Item = &'s Event>, since: Since) -> Vec<Bucket> {
         let unit = Unit::of(since);
         let mut per: BTreeMap<Date, HashSet<(Agent, &str)>> = BTreeMap::new();
-        for (e, t) in events.filter(|(e, _)| e.channel.strong()) {
-            per.entry(unit.start(self.date(*t))).or_default().insert((e.agent, &e.session));
+        for e in events.filter(|e| e.channel.strong()) {
+            per.entry(unit.start(self.date(e.ts))).or_default().insert((e.agent, &e.session));
         }
         let today = unit.start(self.today);
         let first = self.start(since).map(|s| unit.start(self.date(s)));
@@ -201,10 +191,11 @@ impl<'a> View<'a> {
                             let from = start.map_or(first, |s| s.max(first));
                             // Typed events reach back before the first transcript.
                             let typed = self
+                                .input
                                 .events
                                 .iter()
-                                .filter(|(e, _)| e.home == h.name && e.channel == Channel::Typed)
-                                .map(|(_, t)| start.map_or(*t, |s| s.max(*t)))
+                                .filter(|e| e.home == h.name && e.channel == Channel::Typed)
+                                .map(|e| start.map_or(e.ts, |s| s.max(e.ts)))
                                 .min()
                                 .filter(|t| *t < from);
                             match typed {
@@ -294,8 +285,12 @@ pub struct Bucket {
     pub partial: bool,
 }
 
-/// `label: home window · …`: the coverage note under `usage` and `unused`.
+/// `label: home window · …`: the coverage note under `usage` and `unused`;
+/// `label: no home` for none.
 pub fn coverage_note<'s>(label: &str, homes: impl IntoIterator<Item = (&'s String, &'s String)>) -> String {
     let parts: Vec<String> = homes.into_iter().map(|(h, t)| format!("{h} {t}")).collect();
+    if parts.is_empty() {
+        return format!("{label}: no home");
+    }
     format!("{label}: {}", parts.join(" · "))
 }

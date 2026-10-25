@@ -194,7 +194,7 @@ pub fn scan_with<'a>(
 
         // A load read from a transcript older than the recorded start, added
         // since the home's first scan, moves the start back to it.
-        let loaded = hr.new_events.iter().filter_map(|e| e.ts.parse::<jiff::Timestamp>().ok()).min();
+        let loaded = hr.new_events.iter().map(|e| e.ts).min();
         if home.agent == Agent::Claude && first_scan {
             let raws = adapters::claude::backfill(home, &inv.known);
             let target = if reparse { &mut fresh } else { &mut ledger };

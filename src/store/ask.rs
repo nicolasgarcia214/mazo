@@ -5,7 +5,7 @@
 use std::io::{BufRead, IsTerminal};
 use std::path::Path;
 
-use super::{Add, err};
+use super::Add;
 use crate::audit::Pane;
 use crate::inventory::description;
 use crate::{Error, Result, outln};
@@ -123,11 +123,11 @@ impl Consent<'_> {
 /// judge calls, one per skill, shown and agreed to y/N before the first;
 /// `--yes` agrees, and without a terminal it is required.
 pub(super) fn confirm_calls(n: usize, consent: Consent) -> Result<()> {
-    let s = if n == 1 { "" } else { "s" };
-    let count = format!("vetting {n} skill{s} makes {n} judge call{s}");
+    let calls = crate::render::count(n, "judge call");
+    let count = format!("vetting {} makes {calls}", crate::render::count(n, "skill"));
     consent.io.line(&count);
     consent.answerable().map_err(Error::Usage)?;
-    if !consent.yes && !consent.ask(vec![count], &format!("make {n} judge call{s}?"), false)? {
+    if !consent.yes && !consent.ask(vec![count], &format!("make {calls}?"), false)? {
         return Err("add declined; nothing was installed".into());
     }
     Ok(())
@@ -188,7 +188,7 @@ pub(super) fn name(path: &str) -> &str {
 /// and does not descend into a skill.
 fn skill_dirs(root: &Path) -> std::result::Result<Vec<String>, String> {
     fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> std::result::Result<(), String> {
-        let entries = std::fs::read_dir(dir).map_err(|e| err(dir, e))?;
+        let entries = std::fs::read_dir(dir).map_err(crate::at(dir))?;
         for e in entries.flatten() {
             let child = e.file_name().to_string_lossy().into_owned();
             if child.starts_with('.') || child == "node_modules" {

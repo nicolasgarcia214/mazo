@@ -456,12 +456,12 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     // No transcript exists here, so line 1 counts too.
     assert_eq!(first.homes["claude"].new_events.len(), 3);
     let ledger = Ledger::load(&data).unwrap();
-    let got: Vec<(&str, Origin, &str)> =
-        ledger.events().iter().map(|e| (e.skill.as_str(), e.origin, e.ts.as_str())).collect();
+    let got: Vec<(&str, Origin, String)> =
+        ledger.events().iter().map(|e| (e.skill.as_str(), e.origin, e.ts.to_string())).collect();
     assert_eq!(got[0].0, "gitmoji-conventional-commit");
     assert_eq!(got[0].1, Origin::Other);
     assert_eq!((got[1].0, got[1].1), ("grade", Origin::Canonical));
-    assert_eq!(got[2], ("argus", Origin::Other, HISTORY_ARGUS_TS));
+    assert_eq!(got[2], ("argus", Origin::Other, HISTORY_ARGUS_TS.to_string()));
     assert!(
         ledger.events().iter().all(|e| e.channel == Channel::Typed
             && e.src.ends_with(".jsonl:1") == (e.skill == "gitmoji-conventional-commit"))

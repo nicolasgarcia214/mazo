@@ -17,7 +17,7 @@ use super::{App, Screen};
 use crate::ctx;
 use crate::ledger::name;
 use crate::render::{self, Align, Colour};
-use crate::report::{self, Since};
+use crate::report;
 use crate::store;
 use crate::theme;
 
@@ -83,13 +83,6 @@ fn logo() -> Line<'static> {
 /// `s` in the muted colour.
 fn muted(s: &str) -> Span<'static> {
     Span::raw(s.to_string()).fg(theme::MUTED)
-}
-
-fn window(since: Since) -> String {
-    match since {
-        Since::Days(n) => format!("{n}d"),
-        Since::All => "all".into(),
-    }
 }
 
 /// `t` styled in its [`render::status_colour`].
@@ -279,7 +272,7 @@ impl App {
     fn top(&self, width: usize) -> (Line<'static>, Line<'static>, Option<Line<'static>>) {
         let mut chips: Vec<(&str, String)> = Vec::new();
         if self.screen != Screen::Card {
-            chips.push(("", format!("{} skills", self.listed().len())));
+            chips.push(("", render::count(self.listed().len(), "skill")));
             if self.typing || !self.filter.is_empty() {
                 chips.push(("filter ", format!("/{}{}", self.filter, if self.typing { "_" } else { "" })));
             }
@@ -289,7 +282,7 @@ impl App {
             Screen::Unused => self.unused_since,
             Screen::Card => self.card_since,
         };
-        chips.push(("window ", window(since)));
+        chips.push(("window ", since.to_string()));
         if self.screen != Screen::Unused {
             chips.extend(self.agent.map(|a| ("agent ", name(a))));
             chips.extend(self.channel.map(|c| ("channel ", name(c))));

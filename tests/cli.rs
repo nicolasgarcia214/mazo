@@ -40,9 +40,9 @@ fn piped_output_carries_no_escape_codes_without_no_color() {
 fn since_help_names_its_syntax_and_default_window() {
     let (_temp, mazo) = fixture();
     let usage = stdout(&mazo.output(&["usage", "--help"]));
-    assert!(usage.contains("<N>d or all") && usage.contains("30 days"), "{usage}");
+    assert!(usage.contains("<N>d or all") && usage.contains("[default: 30d]"), "{usage}");
     let unused = stdout(&mazo.output(&["unused", "--help"]));
-    assert!(unused.contains("<N>d or all") && unused.contains("60 days"), "{unused}");
+    assert!(unused.contains("<N>d or all") && unused.contains("[default: 60d]"), "{unused}");
 }
 
 /// AC1, AC5: `evals dir` prints the two directories under the default

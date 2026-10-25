@@ -248,7 +248,7 @@ fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
     let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
     let runs = data.join("audit-runs");
     let dir = runs.join(&unique);
-    fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(crate::at(&dir))?;
     Ok((unique, dir))
 }
 
@@ -308,8 +308,8 @@ fn spawn(
     let removed = fs::remove_dir_all(&dir);
     let cleaned = fs::remove_dir_all(&files);
     let output = output.map_err(|e| format!("{}: {e}", argv[0]))?;
-    removed.map_err(|e| format!("{}: {e}", dir.display()))?;
-    cleaned.map_err(|e| format!("{}: {e}", files.display()))?;
+    removed.map_err(crate::at(&dir))?;
+    cleaned.map_err(crate::at(&files))?;
     if scratch.is_some() {
         backend.scratch(data)?;
     }
@@ -425,7 +425,7 @@ mod tests {
     fn a_backend_that_owns_its_call_is_called_without_a_subprocess() {
         let data = tempfile::tempdir().unwrap();
         let judge = Judge { agent: JudgeAgent::Claude, ..Judge::default() };
-        let evals = crate::evals::Evals { content_hash: None, grades: vec![], retros: vec![] };
+        let evals = crate::evals::Evals::default();
         let a = Audit {
             skill: "s",
             source: data.path(),

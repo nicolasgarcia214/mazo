@@ -1,5 +1,5 @@
-//! Reports over the ledger: usage, unused, the card (show);
-//! collapse, held and cluster.
+//! Reports over the ledger: usage, unused and the card (`show`), one submodule
+//! each; here their inputs, legend, JSON line and report model.
 
 mod card;
 mod unused;
@@ -46,8 +46,18 @@ impl std::str::FromStr for Since {
         }
         s.strip_suffix('d')
             .and_then(|n| n.parse().ok())
+            .filter(|&n| n > 0)
             .map(Since::Days)
-            .ok_or_else(|| format!("expected <N>d or all, got {s:?}"))
+            .ok_or_else(|| format!("expected <N>d with N > 0, or all, got {s:?}"))
+    }
+}
+
+impl std::fmt::Display for Since {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Since::Days(n) => write!(f, "{n}d"),
+            Since::All => f.write_str("all"),
+        }
     }
 }
 
@@ -83,8 +93,11 @@ impl UsageArgs {
 /// The card shows the audit's top improvements, this many.
 pub const AUDIT_IMPROVEMENTS: usize = 3;
 
-/// `show`'s default window.
-pub const SHOW_SINCE: Since = Since::Days(30);
+/// The default window of `usage`, `show` and `report`.
+pub const SINCE: Since = Since::Days(30);
+
+/// `unused`'s default window.
+pub const UNUSED_SINCE: Since = Since::Days(60);
 
 /// `show`'s default `--limit`, which the report's and the TUI's cards list too.
 pub const SHOW_LIMIT: usize = 20;

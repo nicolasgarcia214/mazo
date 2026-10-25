@@ -175,7 +175,7 @@ fn validate_vet(answer: Value, existing: &[&str]) -> std::result::Result<Vet, St
 
 /// The vet judge's input: the files of `skill` as `(relative path, text)`,
 /// the diff from the installed copy for an update, each existing skill as
-/// `(name, description)`, then the [`crate::work::summary`] of the user's
+/// `(name, description)`, then the summary of the user's
 /// recent work.
 pub fn vet_input(
     skill: &str,

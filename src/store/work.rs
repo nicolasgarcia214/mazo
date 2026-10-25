@@ -38,7 +38,7 @@ pub fn summary(events: &[Event], now: Timestamp) -> String {
     let mut recent: Vec<(Timestamp, &Event)> = events
         .iter()
         .filter(|e| e.channel.strong() && e.actor == Actor::Main)
-        .filter_map(|e| Some((e.ts.parse::<Timestamp>().ok()?, e)))
+        .map(|e| (e.ts, e))
         .filter(|(ts, _)| (since..=now).contains(ts))
         .collect();
     if recent.is_empty() {
@@ -103,7 +103,7 @@ mod tests {
         Event {
             v: 1,
             id: id.into(),
-            ts: ts.into(),
+            ts: ts.parse().unwrap(),
             agent: Agent::Claude,
             home: "claude".into(),
             agent_version: None,

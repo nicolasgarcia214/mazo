@@ -36,7 +36,7 @@ pub struct Invocation {
 
 #[derive(Serialize)]
 pub struct Real {
-    pub ts: String,
+    pub ts: jiff::Timestamp,
     pub agent: Agent,
     pub cwd: Option<String>,
     pub text: String,
@@ -99,7 +99,7 @@ fn real<'e>(skill: &str, events: impl IntoIterator<Item = &'e Event>) -> Vec<Rea
                 .flatten()
                 .find(|(_, text)| text.chars().count() >= MIN_CHARS && !bare.iter().any(|b| b == text.trim()))
                 .map(|(e, text)| Real {
-                    ts: e.ts.clone(),
+                    ts: e.ts,
                     agent: e.agent,
                     cwd: e.cwd.clone(),
                     text: text.chars().take(MAX_CHARS).collect(),

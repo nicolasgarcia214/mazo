@@ -158,7 +158,12 @@ impl Classifier<'_> {
         if raw.session.cwd.as_deref().is_some_and(|c| Path::new(c).starts_with(self.audit_runs)) {
             return Err(Dropped::AuditRun);
         }
-        raw.ts.parse::<Timestamp>().ok().filter(|t| t.duration_since(self.now) <= SKEW).ok_or(Dropped::Timestamp)?;
+        let ts = raw
+            .ts
+            .parse::<Timestamp>()
+            .ok()
+            .filter(|t| t.duration_since(self.now) <= SKEW)
+            .ok_or(Dropped::Timestamp)?;
         let session = roots.root(self.home, &raw.session.id, raw.session.parent.as_ref());
         let id = match &raw.key {
             Key::Plain(s) => s.clone(),
@@ -185,7 +190,7 @@ impl Classifier<'_> {
         Ok(Event {
             v: 1,
             id,
-            ts: raw.ts,
+            ts,
             agent: self.home.agent,
             home: self.home.name.clone(),
             agent_version: raw.session.version.clone(),

@@ -36,7 +36,7 @@ pub struct Args {
 /// not a skill, no judge, or a budget the judge cannot take.
 pub fn plan<'a>(cfg: &'a Config, inv: &'a Inventory, skill: &'a str, budget: Option<u64>) -> Result<Planned<'a>> {
     let Some(root) = inv.root(skill) else {
-        return Err(Error::Usage(format!("not a skill in the source: {skill}")));
+        return Err(Error::Usage(format!("{skill} is not a canonical skill")));
     };
     let Some(judge) = &cfg.judge else {
         return Err(Error::Usage(

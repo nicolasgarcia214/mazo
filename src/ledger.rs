@@ -74,7 +74,7 @@ pub enum Origin {
 pub struct Event {
     pub v: u32,
     pub id: String,
-    pub ts: String,
+    pub ts: jiff::Timestamp,
     pub agent: Agent,
     pub home: String,
     pub agent_version: Option<String>,
@@ -110,14 +110,6 @@ impl Coverage {
     }
 }
 
-/// `${XDG_DATA_HOME:-~/.local/share}/mazo`.
-pub fn data_dir() -> Result<PathBuf> {
-    if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|x| !x.is_empty()) {
-        return Ok(PathBuf::from(x).join("mazo"));
-    }
-    Ok(PathBuf::from(crate::config::home_dir()?).join(".local/share/mazo"))
-}
-
 /// The ledger, held under `scan.lock` while a scan or reparse writes it.
 pub struct Ledger {
     dir: PathBuf,
@@ -135,8 +127,9 @@ impl Ledger {
         let mut ledger = Ledger::empty(dir);
         let path = dir.join("events.jsonl");
         for (n, event) in jsonl::<Event>(&path)? {
-            // A torn line (crash mid-append) is skipped, and the next scan drops
-            // it from the file; `scan --reparse` re-derives its event.
+            // A torn line (crash mid-append), or one from before timestamps were
+            // checked whose `ts` does not parse, is skipped, and the next scan
+            // drops it from the file; `scan --reparse` re-derives its event.
             match event {
                 Some(event) => ledger.keep(event),
                 None => {
@@ -223,15 +216,10 @@ impl Ledger {
 /// Takes `<dir>/scan.lock` with a blocking flock, held until the file is
 /// dropped. Every writer of the data directory holds it.
 pub fn lock(dir: &Path) -> Result<File> {
-    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    fs::create_dir_all(dir).map_err(crate::at(dir))?;
     let path = dir.join("scan.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    lock.lock().map_err(|e| format!("{}: {e}", path.display()))?;
+    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(&path).map_err(crate::at(&path))?;
+    lock.lock().map_err(crate::at(&path))?;
     Ok(lock)
 }
 
@@ -239,7 +227,7 @@ pub fn lock(dir: &Path) -> Result<File> {
 /// last line; appending to it would make the first new line unreadable too, so
 /// the new lines start on their own.
 pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
-    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    let err = crate::at(path);
     let mut f = OpenOptions::new().create(true).read(true).append(true).open(path).map_err(err)?;
     if f.metadata().map_err(err)?.len() > 0 {
         let mut last = [0u8];
@@ -250,7 +238,7 @@ pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
         }
     }
     f.write_all(out.as_bytes()).map_err(err)?;
-    f.sync_data().map_err(|e| err(e).into())
+    Ok(f.sync_data().map_err(err)?)
 }
 
 /// Rebuilt from the transcripts still on disk when the file does not parse,
@@ -276,7 +264,7 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("{}: {e}", path.display()).into()),
+        Err(e) => Err(crate::at(path)(e).into()),
     }
 }
 
@@ -297,17 +285,16 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".new");
     let tmp = PathBuf::from(tmp);
-    let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     match fs::remove_file(&tmp) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(err(&tmp, e).into()),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(crate::at(&tmp)(e).into()),
         _ => {}
     }
-    let mut f = OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp).map_err(|e| err(&tmp, e))?;
-    f.write_all(bytes).map_err(|e| err(&tmp, e))?;
-    f.sync_all().map_err(|e| err(&tmp, e))?;
-    fs::rename(&tmp, path).map_err(|e| err(path, e))?;
+    let mut f = OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp).map_err(crate::at(&tmp))?;
+    f.write_all(bytes).map_err(crate::at(&tmp))?;
+    f.sync_all().map_err(crate::at(&tmp))?;
+    fs::rename(&tmp, path).map_err(crate::at(path))?;
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    fs::File::open(parent).and_then(|d| d.sync_all()).map_err(|e| err(parent, e).into())
+    Ok(fs::File::open(parent).and_then(|d| d.sync_all()).map_err(crate::at(parent))?)
 }
 
 /// Each non-blank line of the JSONL file at `path`, numbered from 1, parsed as
@@ -318,11 +305,11 @@ pub fn jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<(usize, 
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("{}: {e}", path.display()).into()),
+        Err(e) => return Err(crate::at(path)(e).into()),
     };
     let mut lines = Vec::new();
     for (n, line) in BufReader::new(file).split(b'\n').enumerate() {
-        let line = line.map_err(|e| format!("{}: {e}", path.display()))?;
+        let line = line.map_err(crate::at(path))?;
         if !line.trim_ascii().is_empty() {
             lines.push((n + 1, serde_json::from_slice(&line).ok()));
         }
@@ -338,7 +325,7 @@ mod tests {
         Event {
             v: 1,
             id: id.into(),
-            ts: "2026-10-01T00:00:00Z".into(),
+            ts: "2026-10-01T00:00:00Z".parse().unwrap(),
             agent: Agent::Claude,
             home: "claude".into(),
             agent_version: None,

@@ -64,7 +64,7 @@ fn unused_of(view: &View, since: Since) -> Unused {
     let f = Filter::default();
     let start = view.start(since);
     let used = view.used(start);
-    let weak: BTreeSet<&str> = view.select(&f, None, start).map(|(e, _)| e.skill.as_str()).collect();
+    let weak: BTreeSet<&str> = view.select(&f, None, start).map(|e| e.skill.as_str()).collect();
     let graph = inventory::fan_in(input.inv);
     let named = inventory::mentions(input.inv, &graph);
     let mut rows: Vec<UnusedRow> = input

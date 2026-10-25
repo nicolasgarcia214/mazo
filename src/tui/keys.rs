@@ -14,7 +14,7 @@ use crate::pick::Step;
 use crate::report::{self, Since};
 
 /// The windows `w` cycles through.
-const WINDOWS: [Since; 3] = [Since::Days(30), Since::Days(60), Since::All];
+const WINDOWS: [Since; 3] = [report::SINCE, report::UNUSED_SINCE, Since::All];
 
 /// The next of `all` after `cur`, `None` (no filter) after the last.
 fn cycle<T: Copy + PartialEq>(all: &[T], cur: Option<T>) -> Option<T> {
@@ -112,8 +112,11 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.shift(-(self.page as isize)),
             KeyCode::Right | KeyCode::Char('l') => self.shift(self.page as isize),
             // An unused store skill is past its install-date window: retire first.
-            KeyCode::Enter if self.screen == Screen::Unused && self.selected_unused_store().is_some() => {
-                self.retire(self.selected_unused_store().unwrap());
+            KeyCode::Enter
+                if self.screen == Screen::Unused
+                    && let Some(skill) = self.selected_unused_store() =>
+            {
+                self.retire(skill);
             }
             KeyCode::Enter if list => {
                 if let Some(skill) = self.listed().get(self.selected).map(|s| s.to_string()) {

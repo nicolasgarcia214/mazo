@@ -187,6 +187,55 @@ struct RawConfig {
     homes: Vec<RawHome>,
 }
 
+impl RawConfig {
+    /// Why the file is invalid on its own, before any path is resolved.
+    fn check(&self) -> std::result::Result<(), String> {
+        // A first segment with a `.` is a host, which an owner or owner/repo follows.
+        let malformed = |t: &&String| {
+            let segments: Vec<&str> = t.split('/').collect();
+            let most = if segments[0].contains('.') { 3 } else { 2 };
+            !(most - 1..=most).contains(&segments.len()) || segments.iter().any(|s| s.is_empty())
+        };
+        if let Some(bad) = self.trusted.iter().find(malformed) {
+            return Err(format!("trusted entry {bad:?} must be owner, owner/repo, host/owner or host/owner/repo"));
+        }
+        // Plain components, `.` aside: no root or `..` to leave the directory a
+        // `links` key or value is joined to.
+        let inside = |p: &str| {
+            let mut components = Path::new(p).components().filter(|c| *c != Component::CurDir).peekable();
+            components.peek().is_some() && components.all(|c| matches!(c, Component::Normal(_)))
+        };
+        // A `loose` entry names its link too, so it is exactly one plain component.
+        let file_name = |l: &String| matches!(Path::new(l).components().collect::<Vec<_>>()[..], [Component::Normal(n)] if n == l.as_str());
+        if let Some(bad) = self.loose.iter().find(|l| !file_name(l)) {
+            return Err(format!("loose entry {bad:?} must be a file name in source"));
+        }
+        for h in &self.homes {
+            if let Some((k, v)) = h.links.iter().find(|(k, v)| !inside(k) || !inside(v)) {
+                return Err(format!(
+                    "home {:?} link {k:?} = {v:?} must map a path in the home to a path in source",
+                    h.name
+                ));
+            }
+        }
+        if self.context_window == Some(0) {
+            return Err("context_window must be a positive number of tokens".into());
+        }
+        if let Some(judge) = &self.judge {
+            judge.check()?;
+        }
+        if self.source.is_none() && (!self.loose.is_empty() || self.homes.iter().any(|h| !h.links.is_empty())) {
+            return Err("loose and links are relative to source; set it".into());
+        }
+        for (i, h) in self.homes.iter().enumerate() {
+            if self.homes[..i].iter().any(|o| o.name == h.name) {
+                return Err(format!("two homes are named {:?}", h.name));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RawHome {
@@ -210,6 +259,24 @@ pub fn path() -> Result<PathBuf> {
     Ok(dir.join("mazo/config.toml"))
 }
 
+/// `${XDG_DATA_HOME:-~/.local/share}/mazo`.
+pub fn data_dir() -> Result<PathBuf> {
+    if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|x| !x.is_empty()) {
+        return Ok(PathBuf::from(x).join("mazo"));
+    }
+    Ok(PathBuf::from(home_dir()?).join(".local/share/mazo"))
+}
+
+/// `source` resolved physically, through symlinks, so a directory alias still
+/// links the canonical source; an error for one that is not a directory.
+fn source_dir(source: &Path) -> std::result::Result<PathBuf, String> {
+    let dir = fs::canonicalize(source).map_err(crate::at(source))?;
+    if !dir.is_dir() {
+        return Err(crate::at(source)("not a directory"));
+    }
+    Ok(dir)
+}
+
 /// The config at `path`, or `None` when no file is there.
 pub fn load(path: &Path) -> Result<Option<Config>> {
     // The physical file, so a config symlinked from a skills repo resolves
@@ -217,67 +284,19 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     let path = match fs::canonicalize(path) {
         Ok(p) => p,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{}: {e}", path.display()).into()),
+        Err(e) => return Err(crate::at(path)(e).into()),
     };
-    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let raw: RawConfig = toml::from_str(&text).map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
-    // A first segment with a `.` is a host, which an owner or owner/repo follows.
-    let malformed = |t: &&String| {
-        let segments: Vec<&str> = t.split('/').collect();
-        let most = if segments[0].contains('.') { 3 } else { 2 };
-        !(most - 1..=most).contains(&segments.len()) || segments.iter().any(|s| s.is_empty())
-    };
-    if let Some(bad) = raw.trusted.iter().find(malformed) {
-        return Err(Error::Usage(format!(
-            "{}: trusted entry {bad:?} must be owner, owner/repo, host/owner or host/owner/repo",
-            path.display()
-        )));
-    }
-    // Plain components, `.` aside: no root or `..` to leave the directory a
-    // `links` key or value is joined to.
-    let inside = |p: &str| {
-        let mut components = Path::new(p).components().filter(|c| *c != Component::CurDir).peekable();
-        components.peek().is_some() && components.all(|c| matches!(c, Component::Normal(_)))
-    };
-    // A `loose` entry names its link too, so it is exactly one plain component.
-    let file_name = |l: &String| matches!(Path::new(l).components().collect::<Vec<_>>()[..], [Component::Normal(n)] if n == l.as_str());
-    if let Some(bad) = raw.loose.iter().find(|l| !file_name(l)) {
-        return Err(Error::Usage(format!("{}: loose entry {bad:?} must be a file name in source", path.display())));
-    }
-    for h in &raw.homes {
-        if let Some((k, v)) = h.links.iter().find(|(k, v)| !inside(k) || !inside(v)) {
-            return Err(Error::Usage(format!(
-                "{}: home {:?} link {k:?} = {v:?} must map a path in the home to a path in source",
-                path.display(),
-                h.name
-            )));
-        }
-    }
-    if raw.context_window == Some(0) {
-        return Err(Error::Usage(format!("{}: context_window must be a positive number of tokens", path.display())));
-    }
-    if let Some(judge) = &raw.judge {
-        judge.check().map_err(|e| Error::Usage(format!("{}: {e}", path.display())))?;
-    }
+    let text = fs::read_to_string(&path).map_err(crate::at(&path))?;
+    let usage = |e: String| Error::Usage(crate::at(&path)(e));
+    let raw: RawConfig = toml::from_str(&text).map_err(|e| usage(e.to_string()))?;
+    raw.check().map_err(usage)?;
     let base = path.parent().unwrap_or(Path::new("/"));
-    // `source` is relative to the config file and resolved physically, through
-    // symlinks, so a directory alias still links the canonical source.
-    let source = match &raw.source {
-        Some(s) => {
-            let joined = base.join(s);
-            Some(fs::canonicalize(&joined).map_err(|e| Error::Usage(format!("{}: {e}", joined.display())))?)
-        }
-        None if !raw.loose.is_empty() || raw.homes.iter().any(|h| !h.links.is_empty()) => {
-            return Err(Error::Usage(format!("{}: loose and links are relative to source; set it", path.display())));
-        }
-        None => None,
-    };
+    // `source` is relative to the config file.
+    let source = raw.source.as_ref().map(|s| source_dir(&base.join(s)).map_err(|e| usage(format!("source {e}"))));
+    let source = source.transpose()?;
     let home = home_dir()?;
     let mut homes: Vec<Home> = Vec::new();
     for h in raw.homes {
-        if homes.iter().any(|o| o.name == h.name) {
-            return Err(Error::Usage(format!("{}: two homes are named {:?}", path.display(), h.name)));
-        }
         // A relative `path` is relative to this file, like `source`; Pi
         // resolves its own variable against the cwd, so mazo does too.
         let path = match (h.agent, std::env::var("PI_CODING_AGENT_DIR").ok().filter(|v| !v.is_empty())) {
@@ -293,7 +312,7 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     // Relative to this file, like a home `path`.
     let evals_dir = match &raw.evals_dir {
         Some(dir) => resolve(base, &expand_tilde(dir, &home)),
-        None => crate::ledger::data_dir()?.join("evals"),
+        None => data_dir()?.join("evals"),
     };
     Ok(Some(Config {
         source,
@@ -319,7 +338,7 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
     }
     let source = match source {
         Some(source) => {
-            let abs = fs::canonicalize(source).map_err(|e| format!("{}: {e}", source.display()))?;
+            let abs = source_dir(source).map_err(|e| Error::Usage(format!("--source {e}")))?;
             Some(abs.to_str().ok_or_else(|| format!("{}: not UTF-8", abs.display()))?.to_string())
         }
         None => None,
@@ -343,13 +362,13 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
     };
     let text = config_text(source, homes, judge.map(|(InitJudge::Detected(a) | InitJudge::Chosen(a))| a))?;
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        fs::create_dir_all(dir).map_err(crate::at(dir))?;
     }
     let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| match e.kind() {
         ErrorKind::AlreadyExists => exists(),
-        _ => format!("{}: {e}", path.display()),
+        _ => crate::at(path)(e),
     })?;
-    file.write_all(text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    file.write_all(text.as_bytes()).map_err(crate::at(path))?;
     if no_homes {
         let dirs: Vec<String> = AGENT_HOMES.iter().map(|(_, _, rel)| format!("~/{rel}")).collect();
         eprintln!("warning: found no agent home at {}; {}", dirs.join(", "), add_home(path));
@@ -366,7 +385,8 @@ pub fn add_home(path: &Path) -> String {
     format!("add a [[home]] table with name, agent and path to {}", path.display())
 }
 
-/// The judge `init` wrote: one it found logged in, or one the user chose.
+/// The judge `init` wrote: one it found on `PATH` and, but for Pi, logged in;
+/// or one the user chose.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InitJudge {
     Detected(JudgeAgent),
@@ -387,6 +407,10 @@ pub fn init_note(judge: Option<InitJudge>) -> String {
                 "judge: {0}, which was not found on PATH or not logged in; log in to {0} before mazo audit",
                 name(a)
             )
+        }
+        Some(InitJudge::Detected(JudgeAgent::Pi)) => {
+            "judge: pi, found on PATH; mazo cannot check Pi's login, so check that pi -p answers before mazo audit"
+                .into()
         }
         Some(InitJudge::Detected(a)) => format!("judge: {}", name(a)),
         None => "no judge: log in to claude, codex or pi and add [judge] agent = \"<agent>\" to the config, \
@@ -422,7 +446,7 @@ fn detect_judge() -> Result<Option<JudgeAgent>> {
         std::process::id(),
         jiff::Timestamp::now().as_nanosecond()
     ));
-    DirBuilder::new().mode(0o700).create(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    DirBuilder::new().mode(0o700).create(&scratch).map_err(crate::at(&scratch))?;
     let detected = JUDGE_AGENTS[..3].iter().find_map(|&(name, agent)| {
         let found = std::env::split_paths(&path)
             .any(|dir| dir.join(name).metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0));
@@ -430,7 +454,7 @@ fn detect_judge() -> Result<Option<JudgeAgent>> {
         (found && crate::audit::backend(&judge, &[]).and_then(|b| b.login(&scratch, &|| false)).is_ok())
             .then_some(agent)
     });
-    fs::remove_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    fs::remove_dir_all(&scratch).map_err(crate::at(&scratch))?;
     Ok(detected)
 }
 
@@ -829,6 +853,7 @@ mod tests {
     #[test]
     fn init_note_warns_that_a_chosen_agent_is_not_logged_in() {
         assert_eq!(init_note(Some(InitJudge::Detected(JudgeAgent::Codex))), "judge: codex");
+        assert!(init_note(Some(InitJudge::Detected(JudgeAgent::Pi))).contains("cannot check Pi's login"));
         assert_eq!(
             init_note(Some(InitJudge::Chosen(JudgeAgent::Codex))),
             "judge: codex, which was not found on PATH or not logged in; log in to codex before mazo audit"

@@ -235,7 +235,7 @@ fn fork_pair_scanned_fresh_or_incrementally_stores_the_parent_copy() {
     assert_eq!(e.session, "019d3f9f-e9d9-7c50-a727-71c34e2255b3");
     assert_eq!(e.actor, Actor::Main);
     assert_eq!(e.src, format!("{}:2", m.day.join(FORK_PARENT).display()));
-    assert_eq!(e.ts, "2026-03-30T16:42:36.643Z", "the parent's timestamp, not the child's re-stamp");
+    assert_eq!(e.ts.to_string(), "2026-03-30T16:42:36.643Z", "the parent's timestamp, not the child's re-stamp");
 }
 
 #[test]

@@ -124,7 +124,7 @@ impl App {
     /// The usage view of `input`, over each command's default window and
     /// filter. The actions write under, and re-read from, the data directory `data`.
     pub fn new(input: &Input, data: &Path) -> App {
-        let (usage_since, unused_since) = (Since::Days(30), Since::Days(60));
+        let (usage_since, unused_since) = (report::SINCE, report::UNUSED_SINCE);
         App {
             data: Data {
                 cfg: input.cfg.clone(),

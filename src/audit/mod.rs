@@ -442,7 +442,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                     session: &c.event.session,
                     agent: c.event.agent,
                     src: &c.event.src,
-                    session_ts: c.started().map(|t| t.to_string()),
+                    session_ts: Some(c.started().to_string()),
                     audited_at: stamp(),
                     skill_commit: skill.commit.as_deref(),
                     condensed_chars: c.condensed.chars().count(),
@@ -502,7 +502,7 @@ impl Run<'_> {
         match &self.report {
             Synthesis::NotDue => {}
             Synthesis::Written(r) => {
-                out.push_str(&format!("{skill}: skill report over {} sessions: {}\n", r.sessions.len(), r.result.verdict));
+                out.push_str(&format!("{skill}: skill report over {}: {}\n", render::count(r.sessions.len(), "session"), r.result.verdict));
                 for (label, rate) in r.rates.labeled() {
                     out.push_str(&format!("  {label} {}: {}\n", rate.of(), rate.sessions.join(", ")));
                 }
@@ -568,7 +568,7 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
     let rows: Vec<Vec<String>> = candidates
         .iter()
         .map(|c| {
-            let ts = render::local(&c.event.ts, &tz, render::MINUTE);
+            let ts = render::zoned(c.event.ts, &tz, render::MINUTE);
             let cwd = c.event.cwd.clone().unwrap_or_else(|| "-".into());
             vec![ts, name(c.event.agent), cwd, chars(c).to_string(), c.event.session.clone()]
         })
@@ -582,11 +582,10 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
     ];
     let judge = a.backend.dry_run(a.data);
     let total: usize = candidates.iter().map(chars).sum();
-    let n = candidates.len();
     let model = a.backend.model().map(|m| format!("model: {m}\n")).unwrap_or_default();
     let mut out = format!(
-        "{skill}: {n} session{} to judge with the {} judge\n\n{}\njudge: {judge}\nbilling: {}\n{model}input: {total} condensed characters, about {} tokens\n",
-        if n == 1 { "" } else { "s" },
+        "{skill}: {} to judge with the {} judge\n\n{}\njudge: {judge}\nbilling: {}\n{model}input: {total} condensed characters, about {} tokens\n",
+        render::count(candidates.len(), "session"),
         name(a.judge.agent),
         render::table(&header, &rows, tty),
         name(a.judge.billing),
@@ -594,9 +593,9 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
     );
     if let (Some(_), Some((cost, records))) = (a.budget, estimate_cost(a.data, total)?) {
         out.push_str(&format!(
-            "cost: about {}, at the rate of {records} earlier session record{}\n",
+            "cost: about {}, at the rate of {}\n",
             a.usd(cost),
-            if records == 1 { "" } else { "s" }
+            render::count(records, "earlier session record")
         ));
     }
     Ok(out)

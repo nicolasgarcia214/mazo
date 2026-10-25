@@ -719,7 +719,7 @@ fn coverage_first_moves_back_to_an_older_load_read_after_the_first_scan() {
         .collect();
     env.put("slash.jsonl", dated.as_bytes());
     let r = env.scan();
-    assert!(r.homes["claude"].new_events.iter().any(|e| e.ts.parse::<jiff::Timestamp>().unwrap() < before));
+    assert!(r.homes["claude"].new_events.iter().any(|e| e.ts < before));
     assert_eq!(env.coverage()["claude"].first_at(), Some(old.parse().unwrap()));
     env.put("slash.jsonl", &fs::read(fixture("slash.jsonl")).unwrap());
     env.scan();

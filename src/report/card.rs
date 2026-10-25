@@ -10,7 +10,7 @@ use serde::Serialize;
 use super::unused::citers;
 use super::usage::{GradeOut, vet_of};
 use super::view::{Bucket, Filter, Key, View, day, relative};
-use super::{AUDIT_IMPROVEMENTS, Input, SHOW_SINCE, Since, UsageArgs, json_line};
+use super::{AUDIT_IMPROVEMENTS, Input, SINCE, Since, UsageArgs, json_line};
 use crate::audit::{SkillRecord, VetVerdict};
 use crate::ctx::Ctx;
 use crate::evals::{self, Eval, Evals};
@@ -23,7 +23,7 @@ use crate::store::Locked;
 
 #[derive(Serialize)]
 pub struct ShownEvent<'e> {
-    pub ts: &'e str,
+    pub ts: Timestamp,
     pub agent: Agent,
     pub channel: Channel,
     pub actor: Actor,
@@ -204,6 +204,9 @@ pub struct Card<'a> {
     pub grades: Vec<GradeOut>,
     /// Newest first.
     pub retros: Vec<Eval>,
+    /// Grade and retro files skipped, and why ([`Evals::skipped`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
     /// Strong events on days after the latest retro, over the whole ledger.
     pub strong_since_retro: Option<usize>,
     pub cites: Vec<Link>,
@@ -326,11 +329,11 @@ pub(super) fn card<'a>(
     let f = Filter::from(args);
     let start = view.start(args.since);
     let mut window: Vec<_> = view.select(&f, Some(skill), start).collect();
-    window.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    window.sort_by_key(|e| std::cmp::Reverse(e.ts));
 
     let mut days: BTreeMap<Date, (HashSet<Key>, HashSet<Key>)> = BTreeMap::new();
-    for (e, t) in &window {
-        let day = days.entry(view.date(*t)).or_default();
+    for e in &window {
+        let day = days.entry(view.date(e.ts)).or_default();
         let set = if e.channel.strong() { &mut day.0 } else { &mut day.1 };
         set.insert((e.agent, &e.session, e.channel));
     }
@@ -340,8 +343,8 @@ pub(super) fn card<'a>(
     let events = window
         .iter()
         .take(limit)
-        .map(|(e, _)| ShownEvent {
-            ts: &e.ts,
+        .map(|e| ShownEvent {
+            ts: e.ts,
             agent: e.agent,
             channel: e.channel,
             actor: e.actor,
@@ -360,13 +363,13 @@ pub(super) fn card<'a>(
         uncommitted: h.wip(skill),
     });
 
-    let Evals { content_hash, grades, mut retros } = evals::load(&view.input.cfg.evals_dir, inv, skill);
+    let Evals { content_hash, grades, mut retros, skipped } = evals::load(&view.input.cfg.evals_dir, inv, skill);
     let grades: Vec<GradeOut> = grades.into_iter().rev().map(GradeOut::from).collect();
     retros.reverse();
     let strong_since_retro = retros.first().and_then(|r| r.date.parse::<Date>().ok()).map(|d| {
         view.select(&f, Some(skill), None)
-            .filter(|(e, t)| e.channel.strong() && view.date(*t) > d)
-            .map(|(e, _)| (e.agent, e.session.as_str(), e.channel))
+            .filter(|e| e.channel.strong() && view.date(e.ts) > d)
+            .map(|e| (e.agent, e.session.as_str(), e.channel))
             .collect::<HashSet<Key>>()
             .len()
     });
@@ -379,9 +382,9 @@ pub(super) fn card<'a>(
     let cited_by = citers(graph, skill).iter().map(|a| link(a)).collect();
 
     let mut ledger: Vec<_> = view.select(&f, Some(skill), None).collect();
-    ledger.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    ledger.sort_by_key(|e| std::cmp::Reverse(e.ts));
     let agents = view.input.cfg.homes.iter().map(|h| h.agent);
-    let mut examples = examples::examples(agents, path.as_deref(), skill, ledger.iter().map(|(e, _)| *e));
+    let mut examples = examples::examples(agents, path.as_deref(), skill, ledger.iter().copied());
     let audit = view.input.audits.get(skill);
     examples.curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
 
@@ -408,6 +411,7 @@ pub(super) fn card<'a>(
         history,
         grades,
         retros,
+        skipped,
         strong_since_retro,
         cites,
         cited_by,
@@ -424,7 +428,7 @@ pub(super) fn card<'a>(
 fn card_usage(view: &View, f: &Filter, skill: &str, start: Option<Timestamp>) -> CardUsage {
     let mut by: BTreeMap<(Agent, Channel), HashSet<&str>> = BTreeMap::new();
     let mut projects: BTreeMap<&str, HashSet<(Agent, &str)>> = BTreeMap::new();
-    for (e, _) in view.select(f, Some(skill), start).filter(|(e, _)| e.channel.strong()) {
+    for e in view.select(f, Some(skill), start).filter(|e| e.channel.strong()) {
         by.entry((e.agent, e.channel)).or_default().insert(&e.session);
         if let Some(cwd) = &e.cwd {
             projects.entry(cwd).or_default().insert((e.agent, &e.session));
@@ -434,7 +438,7 @@ fn card_usage(view: &View, f: &Filter, skill: &str, start: Option<Timestamp>) ->
         projects.into_iter().map(|(cwd, s)| Project { cwd: cwd.to_string(), sessions: s.len() }).collect();
     projects.sort_by_key(|p| std::cmp::Reverse(p.sessions));
     projects.truncate(3);
-    let last_use = view.select(f, Some(skill), None).filter(|(e, _)| e.channel.strong()).map(|(_, t)| *t).max();
+    let last_use = view.select(f, Some(skill), None).filter(|e| e.channel.strong()).map(|e| e.ts).max();
     CardUsage {
         strong: by.into_iter().map(|((agent, channel), s)| ByChannel { agent, channel, events: s.len() }).collect(),
         last_use: last_use.map(|t| t.to_string()),
@@ -446,8 +450,7 @@ fn card_usage(view: &View, f: &Filter, skill: &str, start: Option<Timestamp>) ->
 /// the audit's stage 2 reads.
 pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
     let view = View::new(input);
-    serde_json::to_value(card_usage(&view, &Filter::default(), skill, view.start(SHOW_SINCE)))
-        .expect("usage serialises")
+    serde_json::to_value(card_usage(&view, &Filter::default(), skill, view.start(SINCE))).expect("usage serialises")
 }
 
 /// `$HOME` as `~`.
@@ -498,12 +501,12 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
     let hist_header = [("day", Align::Left), ("strong", Align::Right), ("weak", Align::Right), ("", Align::Left)];
     out.push_str(&render::table(&hist_header, &hist_rows, tty));
 
-    out.push_str(&format!("\nlast {} of {} events:\n", card.events.len(), card.total_events));
+    out.push_str(&format!("\nlast {} of {}:\n", card.events.len(), render::count(card.total_events, "event")));
     let ev_rows: Vec<Vec<String>> = card
         .events
         .iter()
         .map(|e| {
-            let ts = render::local(e.ts, &input.tz, render::MINUTE);
+            let ts = render::zoned(e.ts, &input.tz, render::MINUTE);
             let src = if e.expired { format!("{} expired", locator(e)) } else { locator(e) };
             vec![ts, name(e.agent), name(e.channel), name(e.actor), e.cwd.map_or("-".into(), tilde), src]
         })
@@ -538,6 +541,9 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
         let header = [("date", Align::Left), ("score", Align::Right), ("verdict", Align::Left)];
         out.push_str(&render::table(&header, &rows, tty));
     }
+    for s in &card.skipped {
+        out.push_str(&format!("skipped: {s}\n"));
+    }
 
     out.push_str(&format!("cites: {}\n", links(&card.cites, str::to_string)));
     out.push_str(&format!("cited by: {}\n", links(&card.cited_by, str::to_string)));
@@ -561,7 +567,7 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
     } else {
         out.push_str("examples:\n");
         for r in &ex.real {
-            let date = r.ts.parse::<Timestamp>().map_or(r.ts.clone(), |t| day(input, t).to_string());
+            let date = day(input, r.ts);
             let text = r.text.split_whitespace().collect::<Vec<_>>().join(" ");
             out.push_str(&format!("  {date} {}: {text}\n", r.cwd.as_deref().map_or("-".into(), tilde)));
         }
@@ -584,8 +590,8 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
             let date = a.audited_at.parse::<Timestamp>().map_or(a.audited_at.clone(), |t| day(input, t).to_string());
             let billing = a.judge.billing.map_or("unknown".into(), name);
             out.push_str(&format!(
-                "audit: {date}, {} sessions, {billing} billing: {}\n",
-                a.sessions.len(),
+                "audit: {date}, {}, {billing} billing: {}\n",
+                render::count(a.sessions.len(), "session"),
                 a.result.verdict
             ));
             let rates: Vec<String> = a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect();

@@ -33,7 +33,7 @@ fn reports_match_their_golden_files() {
         outputs.push((format!("usage-all.{ext}"), report::usage(&input, &usage, json, false)));
         outputs.push((format!("unused.{ext}"), report::unused(&input, Since::Days(30), json, false)));
         for skill in ["goal-smart", "unslop", "writing-for-agents"] {
-            let card = report::show(&input, skill, report::SHOW_SINCE, 20, json, false).unwrap();
+            let card = report::show(&input, skill, report::SINCE, 20, json, false).unwrap();
             outputs.push((format!("show-{skill}.{ext}"), card));
         }
     }

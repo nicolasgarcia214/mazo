@@ -342,8 +342,9 @@ pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
     apply_after(Vec::new(), plan)
 }
 
-/// [`apply`] after the writes that the lines `out` report. A failed write's
-/// error lists them and the writes before it, which stand.
+/// [`apply`], continuing `out`, the lines of writes already made. A failed
+/// write's error lists every link and prune done before it, `out`'s
+/// included; none is undone.
 pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> crate::Result<Vec<String>> {
     assert!(plan.conflicts.is_empty(), "apply() is only called on a conflict-free plan");
     for a in &plan.actions {
@@ -362,7 +363,7 @@ pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> crate::Result<Vec<Strin
             } else {
                 format!("; done before it:{}", out.iter().map(|l| format!("\n  {l}")).collect::<String>())
             };
-            return Err(format!("{}: {e}{done}", path.display()).into());
+            return Err(crate::at(path)(format!("{e}{done}")).into());
         }
     }
     Ok(out)

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{Lock, Locked, err};
+use super::{Lock, Locked};
 use crate::inventory::{Inventory, Scope};
 use crate::links;
 use crate::{Error, Result};
@@ -74,7 +74,7 @@ pub(super) fn unlink_project(project: &Path, name: &str) -> Result<Vec<String>> 
     let mut out = Vec::new();
     for (link, target) in project_links(project, name) {
         if fs::read_link(&link).is_ok_and(|t| t == target) {
-            fs::remove_file(&link).map_err(|e| err(&link, e))?;
+            fs::remove_file(&link).map_err(crate::at(&link))?;
             out.push(format!("pruned    {}", link.display()));
         }
     }

@@ -7,7 +7,8 @@
 //! Here `add`, its install into a [`Target`], and that target's removal;
 //! [`update`] re-fetches, and [`bundled`] installs mazo's own skills. A
 //! source is parsed, trusted and cloned in [`source`], copied, hashed and
-//! recorded in [`lock`], judged in [`vet`], asked about in [`ask`], and a
+//! recorded in [`lock`], judged in [`vet`] beside the user's recent [`work`],
+//! asked about in [`ask`], and a
 //! project's root and links are [`project`]'s.
 
 mod ask;
@@ -17,6 +18,7 @@ mod project;
 mod source;
 mod update;
 mod vet;
+mod work;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,12 +41,6 @@ use lock::{checked, now, resolved, stage};
 use project::{project_links, unlink_project};
 use source::{Remote, Scratch, Source, local};
 use vet::{contents, gate, no_judge};
-
-/// A file error as the store reports it: the path, then the error. The path
-/// is [`inert`](crate::render::inert), since a skill's author names its files.
-fn err(p: &Path, e: std::io::Error) -> String {
-    format!("{}: {e}", crate::render::inert(&p.display().to_string()))
-}
 
 /// `<data dir>/store`, the skill root after the source.
 pub fn dir(data: &Path) -> PathBuf {
@@ -140,17 +136,17 @@ struct Fetched<'a> {
 }
 
 /// `mazo add <source> [--skill <name> | --all] [--as <name>] [--trust]
-/// [--yes] [--force]`: copies the skills chosen at `source` (a local path, or
-/// a repository shallow-cloned at its ref, resolved first, into
-/// `<data dir>/.clone-<pid>`) into the store, each recorded in the lockfile and linked into every home ([`install`]). A
-/// source that is not trusted is first vetted by the judge ([`gate`]),
-/// with `--all` once its judge calls are agreed to ([`confirm_calls`]). A
-/// source of several skills installs the one `--skill` names, every one with
-/// `--all`, else the ones picked at a terminal ([`skills_in`]); none picked
-/// installs nothing. A refused skill leaves the rest to install; the
-/// outcome is the worst of the refusals'. With
-/// `--project`, outside a git repository is a usage error before anything
-/// else, and the vet sees the project's skills too.
+/// [--yes] [--force]`: copies the chosen skills at `source` into the store,
+/// records each in the lockfile and links it into every home ([`install`]).
+/// `source` is a local path, or a repository whose ref is resolved and then
+/// shallow-cloned into `<data dir>/.clone-<pid>`. `--skill` picks one skill,
+/// `--all` every one, and otherwise a terminal picker ([`skills_in`]); none
+/// picked installs nothing. The judge vets an untrusted source first
+/// ([`gate`]); with `--all`, only once its judge calls are agreed to
+/// ([`confirm_calls`]). A skill that fails or is refused leaves the rest to
+/// install, and the outcome is the worst of them. With `--project`, running
+/// outside a git repository is a usage error before anything else, and the
+/// vet also sees the project's skills.
 pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Outcome> {
     let project = if args.project { Some(project_root("add")?) } else { None };
     let (arg, out) = (args.source, args.io);
@@ -181,7 +177,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
         }
         Source::Git(mut remote) => {
             remote.resolve(&|| out.cancelled())?;
-            fs::create_dir_all(data).map_err(|e| err(data, e))?;
+            fs::create_dir_all(data).map_err(crate::at(data))?;
             let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
             let _ = fs::remove_dir_all(clone);
             let commit = Some(remote.clone_into(clone, &|| out.cancelled())?);
@@ -248,7 +244,7 @@ impl Target<'_> {
             out.extend(unlink_project(p, name)?);
         }
         Lock::remove(&self.lock_dir(), name)?;
-        fs::remove_dir_all(from).map_err(|e| err(from, e))?;
+        fs::remove_dir_all(from).map_err(crate::at(from))?;
         out.push(format!("removed   {}", from.display()));
         Ok(out)
     }
@@ -339,7 +335,13 @@ fn install(
     // adds into one project are serialized only when they share a data dir.
     let _lock = ledger::lock(data)?;
     unclaimed(claimed())?;
-    fs::rename(&staged.0, &to).map_err(|e| err(&to, e))?;
+    // Read under the lock, so a concurrent `retire` or `add` cannot stale the plan.
+    let fresh = inventory(cfg.source.as_deref(), data)?;
+    let mut with = match project {
+        Some(p) => project_inventory(&fresh, p)?,
+        None => fresh,
+    };
+    fs::rename(&staged.0, &to).map_err(crate::at(&to))?;
 
     // From here until the lockfile is written, `store/<name>` has no lock
     // entry. A crash in that window leaves it there unrecorded: a re-run of
@@ -372,7 +374,6 @@ fn install(
     };
     // A store skill joins the homes' links; a project skill gets its own
     // links in the project skill dirs, and the homes' plan for its store is empty.
-    let mut with = inv.clone();
     with.skills.insert(name.clone());
     with.known.insert(name.clone());
     with.origins.insert(name.clone(), vec![store]);
@@ -381,8 +382,8 @@ fn install(
     let recorded = if errors.is_empty() {
         let linked = links.iter().try_for_each(|(link, target)| {
             let parent = link.parent().expect("a project link has a parent");
-            fs::create_dir_all(parent).map_err(|e| err(parent, e))?;
-            std::os::unix::fs::symlink(target, link).map_err(|e| err(link, e))?;
+            fs::create_dir_all(parent).map_err(crate::at(parent))?;
+            std::os::unix::fs::symlink(target, link).map_err(crate::at(link))?;
             made.push(link);
             Ok(())
         });
@@ -391,16 +392,21 @@ fn install(
         Err("add refused; nothing was installed".into())
     };
     if let Err(e) = recorded {
-        for link in &made {
-            fs::remove_file(link).map_err(|e| err(link, e))?;
-        }
-        fs::remove_dir_all(&to).map_err(|e| err(&to, e))?;
         for e in &errors {
             out.error(e);
         }
+        let undone = made
+            .iter()
+            .try_for_each(|link| fs::remove_file(link).map_err(crate::at(link)))
+            .and_then(|()| fs::remove_dir_all(&to).map_err(crate::at(&to)));
+        // A failed undo is the error to report, after why it ran.
+        if let Err(c) = undone {
+            let why = if errors.is_empty() { e.to_string() } else { "the sync refused it".into() };
+            return Err(format!("add {arg}: the install failed ({why}), and undoing it failed: {c}").into());
+        }
         return Err(e);
     }
-    // Recorded: the next skill of this add plans its links with this one.
+    // Recorded: the next skill of this add is vetted beside this one.
     *inv = with;
     out.line(&format!("installed {}", to.display()));
     for link in made {

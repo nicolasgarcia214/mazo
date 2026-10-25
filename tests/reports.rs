@@ -1190,13 +1190,15 @@ fn evals_latest_date_and_staleness() {
     let retros: Vec<&str> = e.retros.iter().map(|r| r.file.file_name().unwrap().to_str().unwrap()).collect();
     assert_eq!(retros, ["r2.md", "r0.md", "r1.md", "r3.md"], "by date, ties by filename; r4.md has no YYYY-MM-DD");
     assert_eq!(e.retros[3].date, "2026-03-06", "a timestamp is read as a string, its first 10 characters the date");
+    let skipped: Vec<&str> = e.skipped.iter().map(|s| s.rsplit_once('/').unwrap().1).collect();
+    assert!(skipped[0].starts_with("bad.md: ") && skipped[1] == "r4.md: no YYYY-MM-DD date", "{skipped:?}");
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
     let g = load("s").grades.pop().unwrap();
     assert!(g.stale && g.mark() == "stale", "a changed skill makes its grade stale");
 
     write(&evals.join("grades/gone/g.md"), "---\ndate: 2026-01-01\nscore: 9\n---\n");
-    assert_eq!(load("gone"), evals::Evals { content_hash: None, grades: vec![], retros: vec![] }, "a name in no root");
+    assert_eq!(load("gone"), evals::Evals::default(), "a name in no root");
 }
 
 /// `show --json`'s origin (D24): a store skill's lockfile entry when its
