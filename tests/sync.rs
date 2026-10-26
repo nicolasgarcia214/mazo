@@ -153,13 +153,14 @@ fn status_prints_one_plain_line_per_finding() {
 
     let r = fx.mazo(&["status"]);
     assert_eq!(r.code(), 1);
+    let n = fx.skills.len();
     let expected = format!(
-        "{}claude: synced is not from the source; left alone (foreign)\n{}\
+        "claude: in sync ({n} skills; 1 foreign left alone)\n\
+         claude: synced is not from the source; left alone (foreign)\n{}\
          codex: {missing} is not linked (missing)\n\
          codex: {wrong} links somewhere else (wrong-link)\n\
          codex: {obstructed} is a real file, not a link (obstructed)\n\
          codex: gone link target is gone (dangling)\n{}",
-        in_sync(&fx, &["claude"]),
         in_sync(&fx, &["claude-work"]),
         in_sync(&fx, &["pi"]),
     );
@@ -173,8 +174,8 @@ fn status_prints_one_plain_line_per_finding() {
     let r = fx.mazo(&["status"]);
     r.assert_ok();
     let expected = format!(
-        "{}claude: synced is not from the source; left alone (foreign)\n{}",
-        in_sync(&fx, &["claude"]),
+        "claude: in sync ({n} skills; 1 foreign left alone)\n\
+         claude: synced is not from the source; left alone (foreign)\n{}",
         in_sync(&fx, &["claude-work", "codex", "pi"]),
     );
     assert_eq!(r.stdout(), expected);

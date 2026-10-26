@@ -539,7 +539,9 @@ fn cmd_status(
             let (errors, info): (Vec<&links::Entry>, Vec<&links::Entry>) =
                 drift.iter().filter(|e| e.scope == Scope::Global && e.home == h.name).partition(|e| e.state.is_error());
             if errors.is_empty() && !home_errors().any(|(home, _)| *home == h.name) {
-                outln!("{}: in sync ({})", h.name, render::count(inv.skills.len(), "skill"));
+                let foreign =
+                    if info.is_empty() { String::new() } else { format!("; {} foreign left alone", info.len()) };
+                outln!("{}: in sync ({}{foreign})", h.name, render::count(inv.skills.len(), "skill"));
             }
             for e in errors.into_iter().chain(info) {
                 outln!("{}: {} {}", e.home, name(e), e.state.finding());
