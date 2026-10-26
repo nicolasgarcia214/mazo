@@ -4,6 +4,20 @@ This guide covers how mazo counts skill loads and the commands that report
 them: `mazo scan`, `mazo usage`, `mazo unused`, `mazo show` and `mazo report`.
 Back to the [README](../README.md).
 
+## Example
+
+```console
+$ mazo usage
+skill         sess 7d 30d trend slash tool typed read ref agents ctx last   grade audit
+release-notes    3  2   3 new       3    0     0    0   0 C      C●  1d ago     - -
+triage           1  1   1 new       1    0     0    0   0 C      C●  4d ago     - -
+tidy-imports     0  0   0           0    0     0    0   0        C●  -          - -
+coverage: claude since 2026-09-14
+legend: agents C Claude, X Codex, P Pi; ● name and description in context: Claude on, every Codex skill, Pi by default
+```
+
+This example uses sample data: three skills, with recorded invocations for two.
+
 ## How mazo counts loads
 
 `mazo scan` reads each home's transcripts from a per-file cursor and appends

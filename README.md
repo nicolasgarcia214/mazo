@@ -1,172 +1,125 @@
-# mazo
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.png">
+    <img src="docs/assets/logo-light.png" alt="mazo: a deck of three cyan cards beside the mazo wordmark" width="360">
+  </picture>
+</p>
 
-See which skills Claude Code, Codex and Pi actually load, and keep one skills
-directory linked into all of them.
+<h1 align="center">Make every skill earn its place.</h1>
 
-A skill is a directory holding a `SKILL.md` that an agent loads. mazo reads
-the session logs those agents already write and stores each skill load in its
-own ledger. It links your skills, and skills you install from git, into every
-agent home. Before it installs a skill from a source you have not trusted, it
-has a judge of your choice vet it.
+<p align="center">
+  Manage your collection across Claude Code, Codex, and Pi.<br>
+  See what gets used, learn from real sessions, and decide what to improve or retire.
+</p>
 
-```console
-$ mazo usage
-skill         sess 7d 30d trend slash tool typed read ref agents ctx last   grade audit
-release-notes    3  2   3 new       3    0     0    0   0 C      C●  1d ago     - -
-triage           1  1   1 new       1    0     0    0   0 C      C●  4d ago     - -
-tidy-imports     0  0   0           0    0     0    0   0        C●  -          - -
-coverage: claude since 2026-09-14
-legend: agents C Claude, X Codex, P Pi; ● name and description in context: Claude on, every Codex skill, Pi by default
-```
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/commands.md">Commands</a> ·
+  <a href="#documentation">Documentation</a>
+</p>
 
-## What it does
+![Mazo's terminal UI showing skill usage, grades, and a selected skill's session history.](docs/assets/tui.png)
 
-- Counts every skill load per session, channel and agent, with the sessions
-  of the last 7 and 30 days, their trend, and the last use.
-- Lists skills with no strong load in a window, so you can retire them.
-- Links your skills directory and the skills you install into each configured
-  agent home, such as `~/.claude`, `~/.codex` and `~/.pi/agent`, and reports
-  drift.
-- Installs skills from a git URL, a GitHub `owner/repo` or a local path into a
-  store pinned by `mazo.lock`, for you or for one project.
-- Sends an untrusted skill to a judge agent before installing it, and again
-  when an update changes it.
-- Audits how a skill performs in your real sessions and writes a report with
-  ranked improvements.
-- Shows all of this in a terminal UI and in one self-contained HTML page.
+<p align="center"><sub>The actual Mazo TUI, rendered with synthetic sample data. <a href="docs/tui.md">Explore the terminal UI →</a></sub></p>
+
+## Know your collection
+
+A skill is a directory containing a `SKILL.md` that gives an agent instructions.
+Mazo brings your skills into one collection and reads the session logs your agents
+already write, so you can see how that collection gets used.
+
+- Keep your skills linked across agent homes. Install more from GitHub, git URLs,
+  or local directories, with versions recorded in `mazo.lock`.
+- Track invocations, recent activity, and trends. Open a skill's card to see the
+  sessions behind its counts, or export a self-contained HTML report.
+- Learn what to improve. A configured judge can review real sessions and return
+  ranked recommendations. It also vets untrusted installs and their updates.
+- Find skills to retire. See what's unused, what another skill depends on, and
+  what is still too new to judge.
+
+Usage reflects the logs available on your machine. Mazo distinguishes invocations
+from weaker evidence such as file reads; the [counting guide](docs/usage-tracking.md#how-mazo-counts-loads)
+explains what each count means.
 
 ## Install
 
-mazo runs on Linux and macOS (x86_64 and aarch64) and needs at least one of
-Claude Code, Codex or Pi.
+Mazo runs on **Linux and macOS**, on x86_64 and ARM64, with at least one of Claude
+Code, Codex, or Pi. You need Git and a Rust toolchain to build it.
 
-### Build from source
-
-No release has been published yet, so this is the way to install mazo today.
-It needs a Rust toolchain.
-
-Build with Cargo. Set `CARGO_NET_GIT_FETCH_WITH_CLI=true` so Cargo fetches the
-private repository with your git credentials:
+Releases are not published yet. Build from source with credentials that can read
+this currently private repository:
 
 ```sh
 CARGO_NET_GIT_FETCH_WITH_CLI=true \
   cargo install --locked --git https://github.com/nicolasgarcia214/mazo
 ```
 
-### Prebuilt binaries
-
-A release ships a prebuilt binary through npm, Homebrew and a shell installer.
-These download from the repository's GitHub releases, so they work once a
-release is published and readable:
-
-```sh
-npx mazo                          # or: npm install -g mazo
-brew install nicolasgarcia214/tap/mazo
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nicolasgarcia214/mazo/releases/latest/download/mazo-installer.sh | sh
-```
-
 ## Quick start
 
-For your own skills you need a skills directory: one subdirectory per skill,
-each holding a `SKILL.md`. If you only install other people's skills with
-`mazo add`, you need none.
+Start with an existing skills directory: one subdirectory per skill, each with a
+`SKILL.md`. Replace `~/skills` below with its path. Run your agent at least once so
+its home directory exists for Mazo to detect.
 
 ```sh
-mazo init                         # write the config and install grade and retro; --source <skills dir> for your own, --no-skills to skip the install
-mazo sync                         # link every skill into every agent home
-mazo usage                        # see which skills your agents load
-mazo unused                       # list skills with no strong load in the window
-mazo add owner/repo               # install a skill from GitHub, vetted unless trusted
-mazo                              # open the terminal UI
+mazo init --source ~/skills
+mazo sync
+mazo usage
+mazo
 ```
 
-## Commands
+`init` writes the config, detects agent homes and a judge, and installs the bundled
+`grade` and `retro` skills over the network. Use `--no-skills` to skip that install.
+`sync` links your collection into those homes; bare `mazo` opens the TUI.
 
-| Command | What it does |
-|---|---|
-| [`mazo init`](docs/configuration.md#mazo-init) | Write the config and install the bundled grade and retro skills (`--no-skills` skips them). |
-| [`mazo scan`](docs/usage-tracking.md#mazo-scan) | Read new log lines into the ledger. |
-| [`mazo usage`](docs/usage-tracking.md#mazo-usage) | One row per skill with its loads, last use and audit verdict. |
-| [`mazo unused`](docs/usage-tracking.md#mazo-unused) | Skills with no strong load in the window. |
-| [`mazo show <skill>`](docs/usage-tracking.md#mazo-show) | Everything mazo knows about one skill. |
-| [`mazo evals dir <skill>`](docs/configuration.md#evals_dir) | Print the skill's grades and retros directories. |
-| [`mazo report`](docs/usage-tracking.md#mazo-report) | One self-contained HTML page of usage and cards. |
-| [`mazo status`](docs/managing-skills.md#mazo-status) | Drift and policy for every home. Writes nothing. |
-| [`mazo sync`](docs/managing-skills.md#mazo-sync) | Link every skill into every home. |
-| [`mazo new <name>`](docs/managing-skills.md#mazo-new) | Create a skill in `source`. |
-| [`mazo add <source>`](docs/installing-skills.md#mazo-add) | Install a skill into the store, vetting an untrusted one. |
-| [`mazo update [names...]`](docs/installing-skills.md#mazo-update) | Re-fetch store skills from their origins. |
-| [`mazo retire <name>`](docs/managing-skills.md#mazo-retire) | Archive a skill of `source`, or remove a store skill. |
-| [`mazo prune [<name>]`](docs/managing-skills.md#mazo-prune) | Delete archived skills from `.archive/`. |
-| [`mazo audit <skill>`](docs/audit.md) | Have an agent judge how the skill performs in real sessions. |
-| [`mazo`](docs/tui.md) | Open the TUI; print the help when not on a terminal. |
+In the TUI, use `/` to filter, `Enter` to inspect a skill, `Tab` to find unused
+skills, and `q` to quit. The [TUI guide](docs/tui.md) covers every action.
 
-`add`, `update` and `retire` take `--project` to act on one project's skills;
-see [project skills](docs/project-skills.md). Exit codes are 0 on success, 1
-when a command failed or found a problem, and 2 for a usage error; the
-[exit code table](docs/configuration.md#exit-codes) lists the cases.
+To add a skill from GitHub, replace `owner/repo` with its repository:
 
-## Configuration
-
-mazo reads `$MAZO_CONFIG`, else `$XDG_CONFIG_HOME/mazo/config.toml`
-(`~/.config/mazo/config.toml` when `XDG_CONFIG_HOME` is unset). `mazo init`
-writes it.
-
-```toml
-source = "."                      # your skills directory, relative to this file; optional
-
-[[home]]
-name  = "claude"
-agent = "claude"
-path  = "~/.claude"
-
-[judge]                           # the agent that vets installs and runs audits; none without this table
-agent = "claude"                  # claude (default), codex, pi, command or http
-model = "sonnet"                  # optional; unset means the agent's own default
-billing = "subscription"          # subscription (default) or api
+```sh
+mazo add owner/repo
 ```
 
-- [`source`](docs/configuration.md#source): your own skills directory.
-- [`loose` and `links`](docs/configuration.md#loose-and-home-links): extra
-  files to link into each home.
-- [`[[home]]`](docs/configuration.md#home): one table per agent home.
-- [`trusted`](docs/configuration.md#trusted): owners and repositories whose
-  skills install without vetting.
-- [`[policy]`](docs/configuration.md#policy): optional rules that `sync` and
-  `status` check.
-- [`[judge]`](docs/configuration.md#judge): the agent that vets and audits,
-  one of claude, codex, pi, command or http, and who pays for it.
+Mazo asks you to choose when the repository contains several skills. Untrusted
+installs need a [configured judge](docs/configuration.md#judge) to vet them first.
+If you only install other people's skills, start with `mazo init` without `--source`.
 
-The [configuration reference](docs/configuration.md) also covers the data
-directory, the store and the `mazo.lock` format.
+Once you have some session history, try:
 
-## TUI
+```sh
+mazo unused                  # Find skills with no recorded invocations in the window
+mazo show <skill>             # Inspect usage, history, grades, and audit results
+mazo audit <skill>            # Ask your judge for improvements grounded in real sessions
+mazo report --open           # Explore the collection in an HTML report
+```
 
-Bare `mazo` at a terminal opens a TUI with the usage table, the unused list and
-each skill's card. The main keys:
+Replace `<skill>` with a skill's name. Audits use the judge you configure and may
+incur model costs; the [audit guide](docs/audit.md) explains billing and limits.
 
-| Key | Action |
+## Documentation
+
+| Guide | What you'll find |
 |---|---|
-| `Enter`, `Esc` | Open a card, go back. |
-| `Tab` | Switch between usage and unused. |
-| `/` | Filter by name. |
-| `i`, `u`, `x` | Add a source, update a store skill, audit a skill. |
-| `q` | Quit. |
+| [Commands](docs/commands.md) | Every command and its reference. |
+| [Usage tracking](docs/usage-tracking.md) | Counts, trends, skill cards, and HTML reports. |
+| [Managing skills](docs/managing-skills.md) | Sync, drift, creation, and retirement. |
+| [Installing skills](docs/installing-skills.md) | Sources, updates, trust, and vetting. |
+| [Project skills](docs/project-skills.md) | A collection scoped to one repository. |
+| [Audits](docs/audit.md) | Grade, retro, session reviews, and judge billing. |
+| [Configuration](docs/configuration.md) | Agent homes, policies, judges, and storage. |
+| [Terminal UI](docs/tui.md) | Views, keyboard shortcuts, and background jobs. |
 
-The [TUI guide](docs/tui.md) lists every key and dialog.
+## Your data
 
-## Privacy
+Mazo collects no telemetry. Usage tracking reads local logs and stores its ledger
+locally. Vetting and audits send skill content and selected session context to
+your configured judge; [the vetting guide](docs/installing-skills.md#vetting-a-skill)
+and [audit guide](docs/audit.md#how-an-audit-runs) describe what it receives.
+Installing and updating git-sourced skills also contact their source repositories.
 
-mazo collects no telemetry. It sends data only to the `[judge]` you configure
-(see [vetting a skill](docs/installing-skills.md#vetting-a-skill)). Its only
-other network use is the git clone that `mazo add` and `mazo update` make of
-the source you name.
+## Contributing
 
-## Development
-
-[CONTRIBUTING.md](CONTRIBUTING.md) covers the checks CI runs, the test suite
-and adding an agent.
-
-## License
-
-[MIT](LICENSE)
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, checks, and adding
+support for another agent. Mazo is [MIT licensed](LICENSE).

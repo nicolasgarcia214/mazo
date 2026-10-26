@@ -1258,10 +1258,10 @@ fn show_gives_the_github_origin_of_store_and_source_skills() {
     assert_eq!(origin("unslop"), Value::Null, "a remote off github.com");
 }
 
-/// The README's `mazo usage` sample is what the binary prints for its
+/// The usage guide's `mazo usage` sample is what the binary prints for its
 /// scenario: three skills linked into one Claude home, two of them loaded.
 #[test]
-fn the_readme_usage_sample_is_current() {
+fn the_usage_guide_sample_is_current() {
     let source = tempfile::tempdir().unwrap();
     for skill in ["release-notes", "triage", "tidy-imports"] {
         write(&source.path().join(format!("{skill}/SKILL.md")), &format!("---\nname: {skill}\ndescription: D.\n---\n"));
@@ -1274,7 +1274,7 @@ fn the_readme_usage_sample_is_current() {
         event("d", "triage", Channel::Slash, "D", &ago(4)),
     ];
     let printed = format!("$ mazo usage\n{}", report::usage(&w.input(&events), &args(), false, false));
-    let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
-    let sample = readme.split("```console\n").nth(1).and_then(|s| s.split("```").next()).unwrap();
+    let guide = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/usage-tracking.md")).unwrap();
+    let sample = guide.split("```console\n").nth(1).and_then(|s| s.split("```").next()).unwrap();
     assert_eq!(sample, printed);
 }

@@ -115,19 +115,19 @@ fn a_reader_that_closes_stdout_early_ends_the_command_with_0_and_no_panic() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }
 
-/// Every subcommand `mazo --help` lists has a row in the README's Commands
-/// table.
+/// Every subcommand `mazo --help` lists has a row in the command reference.
 #[test]
-fn the_readme_commands_table_lists_every_subcommand() {
+fn the_command_reference_lists_every_subcommand() {
     let (_temp, mazo) = fixture();
     let help = stdout(&mazo.output(&["--help"]));
-    let readme = fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).unwrap();
-    let table = readme.split("## Commands\n\n").nth(1).and_then(|s| s.split("\n\n").next()).unwrap();
+    let reference =
+        fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/commands.md")).unwrap();
+    let table = reference.split("# Commands\n\n").nth(1).and_then(|s| s.split("\n\n").next()).unwrap();
     let commands = help.split("Commands:\n").nth(1).and_then(|s| s.split("\n\n").next()).unwrap();
     let names: Vec<&str> =
         commands.lines().filter_map(|l| l.split_whitespace().next()).filter(|&n| n != "help").collect();
     assert!(names.contains(&"evals"), "{help}");
     for name in names {
-        assert!(table.contains(&format!("| [`mazo {name}")), "no README row for `mazo {name}`");
+        assert!(table.contains(&format!("| [`mazo {name}")), "no command reference row for `mazo {name}`");
     }
 }
