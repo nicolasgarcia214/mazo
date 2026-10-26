@@ -294,7 +294,9 @@ impl Revet<'_> {
             .map_err(|e| format!("git: {e}"))?;
         // 1 means the copies differ, which the hash already said.
         if !matches!(out.status.code(), Some(0 | 1)) {
-            return Err(format!("git diff: {}", String::from_utf8_lossy(&out.stderr).trim()).into());
+            return Err(
+                format!("git diff: {}", crate::render::inert(String::from_utf8_lossy(&out.stderr).trim())).into()
+            );
         }
         let (from, to) = (format!("/{staged}/"), format!("/{name}/"));
         let diff = out.stdout.split_inclusive(|b| *b == b'\n').flat_map(|line| {

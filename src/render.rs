@@ -115,11 +115,19 @@ pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> Strin
 pub const DAY: &str = "%Y-%m-%d";
 pub const MINUTE: &str = "%Y-%m-%d %H:%M";
 
-/// `text` with every control character but newline and tab, C0, DEL and C1,
-/// replaced by U+FFFD, so text from a skill or a judge cannot drive the
-/// terminal it is printed to.
+/// `text` with U+FFFD in place of every control character but newline and
+/// tab (C0, DEL and C1), so text from a skill or a judge cannot drive the
+/// terminal it is printed to. The bidi controls go too, so it cannot reorder
+/// what is shown, as do the zero-width space, the BOM and the line and
+/// paragraph separators. Zero-width joiners stay, as scripts and emoji need them.
 pub fn inert(text: &str) -> String {
-    text.chars().map(|c| if c.is_control() && !matches!(c, '\n' | '\t') { '\u{fffd}' } else { c }).collect()
+    let spoofs = |c| {
+        matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            || matches!(c, '\u{200b}' | '\u{2028}' | '\u{2029}' | '\u{feff}')
+    };
+    text.chars()
+        .map(|c| if (c.is_control() && !matches!(c, '\n' | '\t')) || spoofs(c) { '\u{fffd}' } else { c })
+        .collect()
 }
 
 /// `value` with every string in it, keys too, [`inert`]: a judge's answer, or
@@ -163,10 +171,15 @@ mod tests {
     }
 
     #[test]
-    fn inert_replaces_controls_but_newline_and_tab() {
+    fn inert_replaces_controls_but_newline_and_tab_and_spoofing_marks() {
         let osc = "\x1b]52;c;ZXZpbA==\x07\x1b[2J\x7f\u{9b}31m\r";
         assert_eq!(inert(osc), "\u{fffd}]52;c;ZXZpbA==\u{fffd}\u{fffd}[2J\u{fffd}\u{fffd}31m\u{fffd}");
         assert_eq!(inert("a\tb\nc é 日"), "a\tb\nc é 日");
+        assert_eq!(
+            inert("evil\u{202e}gpj.sh\u{200b}\u{2028}\u{2066}x\u{feff}\u{61c}"),
+            "evil\u{fffd}gpj.sh\u{fffd}\u{fffd}\u{fffd}x\u{fffd}\u{fffd}"
+        );
+        assert_eq!(inert("👨\u{200d}👩 خانه\u{200c}ها"), "👨\u{200d}👩 خانه\u{200c}ها");
     }
 
     #[test]

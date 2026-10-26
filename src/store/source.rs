@@ -268,7 +268,7 @@ impl Remote {
         };
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(format!("git {verb} {}: {}", self.url, stderr.trim()).into());
+            return Err(format!("git {verb} {}: {}", self.url, crate::render::inert(stderr.trim())).into());
         }
         Ok(out.stdout)
     }
