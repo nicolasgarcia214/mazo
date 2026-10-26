@@ -244,7 +244,7 @@ origin = "https://github.com/owner/repo.git" # a git URL, or a local path's phys
 subpath = "skills/theirs"         # its directory inside origin; "." for origin itself
 ref = "main"                      # the branch, tag or commit cloned; none for the default branch
 commit = "9fceb02…"               # the commit cloned; local paths have none
-content_hash = "3f2a…"            # SHA-1 of its sorted relative paths and file contents
+content_hash = "3f2a…"            # SHA-1 of its sorted relative paths, executable bits and file contents
 trusted = true                    # installed without vetting; update ignores it
 installed_at = "2026-10-21T12:00:00Z"
 ```

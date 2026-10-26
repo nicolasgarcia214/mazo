@@ -251,8 +251,11 @@ fn tree(root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
 
 /// SHA-1 over every file under `dir` in relative-path order, sorted
 /// component-wise (as `Path` orders, not by string bytes): each contributes
-/// its path, a NUL, its length in decimal, a NUL and its bytes.
+/// its path, a NUL, an `x` and a NUL if it is executable, its length in
+/// decimal, a NUL and its bytes. The `x` makes setting or clearing an
+/// executable bit a change that `update` installs, re-vetting it when untrusted.
 pub fn content_hash(dir: &Path) -> Result<String> {
+    use std::os::unix::fs::PermissionsExt;
     let mut sha = sha1_smol::Sha1::new();
     for rel in tree(dir)? {
         let path = dir.join(&rel);
@@ -260,8 +263,9 @@ pub fn content_hash(dir: &Path) -> Result<String> {
             continue;
         }
         let bytes = fs::read(&path).map_err(crate::at(&path))?;
+        let executable = fs::metadata(&path).map_err(crate::at(&path))?.permissions().mode() & 0o111 != 0;
         sha.update(rel.as_os_str().as_encoded_bytes());
-        sha.update(format!("\0{}\0", bytes.len()).as_bytes());
+        sha.update(format!("\0{}{}\0", if executable { "x\0" } else { "" }, bytes.len()).as_bytes());
         sha.update(&bytes);
     }
     Ok(sha.digest().to_string())
@@ -354,7 +358,8 @@ mod tests {
     }
 
     #[test]
-    fn the_content_hash_covers_paths_and_contents() {
+    fn the_content_hash_covers_paths_contents_and_the_executable_bit() {
+        use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         std::fs::create_dir(dir.join("refs")).unwrap();
@@ -366,6 +371,12 @@ mod tests {
         sha.update(b"refs/x.md\x001\x00b");
         assert_eq!(first, sha.digest().to_string());
         std::fs::rename(dir.join("refs/x.md"), dir.join("refs/y.md")).unwrap();
-        assert_ne!(content_hash(dir).unwrap(), first, "a renamed file changes the hash");
+        let renamed = content_hash(dir).unwrap();
+        assert_ne!(renamed, first, "a renamed file changes the hash");
+        std::fs::set_permissions(dir.join("refs/y.md"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut sha = sha1_smol::Sha1::new();
+        sha.update(b"SKILL.md\x001\x00a");
+        sha.update(b"refs/y.md\x00x\x001\x00b");
+        assert_eq!(content_hash(dir).unwrap(), sha.digest().to_string(), "a chmod changes the hash");
     }
 }

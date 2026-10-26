@@ -903,6 +903,25 @@ fn update_installs_a_changed_skill_and_records_its_commit_and_hash() {
 }
 
 #[test]
+fn update_installs_a_change_that_only_makes_a_file_executable() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut fx = git_fixture();
+    let url = trusted_repo(&mut fx, "theirs", &[(".", "theirs")]);
+    push_change(&fx, "theirs", "run.sh", "echo hi\n");
+    add(&fx, &[&url, "--trust"]).assert_ok();
+    let run = store(&fx).join("theirs/run.sh");
+    assert_eq!(fs::metadata(&run).unwrap().permissions().mode() & 0o111, 0);
+
+    let work = fx.root.join("work/theirs");
+    fs::set_permissions(work.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    push_change(&fx, "theirs", "run.sh", "echo hi\n");
+    let r = fx.mazo(&["update"]);
+    r.assert_ok();
+    assert!(r.stdout().contains(&format!("to {}", head(&fx, &url))), "{}", r.stdout());
+    assert_ne!(fs::metadata(&run).unwrap().permissions().mode() & 0o111, 0);
+}
+
+#[test]
 fn an_unchanged_skill_is_up_to_date_and_its_entry_untouched() {
     let mut fx = git_fixture();
     let url = trusted_repo(&mut fx, "theirs", &[(".", "theirs")]);
