@@ -92,8 +92,8 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             remote.r#ref = Some(bundled::tag());
         }
         let vet = match &revet {
-            // Re-derived on each run: a lockfile, a project's anyone's commit, grants nothing,
-            // and no project holds a bundled skill.
+            // Trust is re-derived on each run. A lockfile grants none, since anyone can
+            // commit a project's, and no project holds a bundled skill.
             _ if (project.is_none() && bundled::bundled(l)) || remote.trusted_by(&cfg.trusted) => None,
             None => {
                 out.error(&format!(

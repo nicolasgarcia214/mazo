@@ -82,9 +82,9 @@ impl Locked {
     }
 }
 
-/// Lockfile text parsed, with every string in it, and in an error that quotes
-/// it, [`inert`](crate::render::inert): a project's lockfile is anyone's
-/// commit, and its verdicts, origins and refs are printed.
+/// Parses lockfile text and makes every string in it [`inert`](crate::render::inert),
+/// including any a parse error quotes. A project's lockfile is anyone's commit,
+/// and its verdicts, origins and refs are printed.
 fn parse(text: &str) -> std::result::Result<Lock, String> {
     use crate::render::{inert, inert_value};
     let lock: Lock = toml::from_str(text).map_err(|e| inert(&e.to_string()))?;

@@ -289,9 +289,10 @@ const CLONE_LIMIT: Duration = Duration::from_secs(10 * 60);
 pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Scratch {
-    /// `<dir>/<prefix>-<pid>`, not yet made, once it and every `<prefix>-<pid>`
-    /// of a process since gone are removed: a run interrupted at the judge,
-    /// the prompt or a clone leaves its own, which no later run reuses.
+    /// The path `<dir>/<prefix>-<pid>`, not yet created. It first removes any
+    /// directory at that path and every `<prefix>-<pid>` whose process is gone:
+    /// a run interrupted at the judge, the prompt or a clone leaves its own,
+    /// which no later run reuses.
     pub(super) fn new(dir: &Path, prefix: &str) -> Scratch {
         let path = dir.join(format!("{prefix}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
