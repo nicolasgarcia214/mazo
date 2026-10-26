@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::config::{Config, Home};
 use crate::inventory::{self, Inventory, Scope};
 use crate::ledger::Agent;
-use crate::{links, store, yaml};
+use crate::{links, policy, store, yaml};
 
 /// What an agent keeps of a skill in context, the costliest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -120,8 +120,8 @@ pub fn approx(n: usize) -> String {
 pub struct Contexts {
     /// Each skill's linked homes, as `(agent, home)`.
     linked: BTreeMap<String, Vec<(Agent, String)>>,
-    /// Each Claude home's `skillOverrides`, `settings.local.json`'s over `settings.json`'s.
-    overrides: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each Claude home's [`policy::overrides`].
+    overrides: BTreeMap<String, BTreeMap<String, (PathBuf, serde_json::Value)>>,
 }
 
 impl Contexts {
@@ -131,7 +131,8 @@ impl Contexts {
         for (home, skill) in links::linked(cfg, inv, &homes) {
             linked.entry(skill).or_default().push((home.agent, home.name.clone()));
         }
-        let overrides = homes.iter().filter(|h| h.agent == Agent::Claude).map(|h| (h.name.clone(), overrides(h)));
+        let overrides =
+            homes.iter().filter(|h| h.agent == Agent::Claude).map(|h| (h.name.clone(), policy::overrides(h).0));
         Contexts { linked, overrides: overrides.collect() }
     }
 
@@ -155,7 +156,7 @@ impl Contexts {
         let disabled = dir.is_some_and(|d| disables_model_invocation(&d));
         let state = |agent: Agent, home: Option<&str>| match agent {
             Agent::Claude => {
-                let value = home.and_then(|h| self.overrides.get(h)?.get(skill)).map(String::as_str);
+                let value = home.and_then(|h| self.overrides.get(h)?.get(skill)?.1.as_str());
                 Invocation::claude(value, disabled)
             }
             Agent::Codex => Invocation::On,
@@ -184,18 +185,6 @@ impl Contexts {
         let [claude, codex, pi] = chars.map(|n| n / 4);
         Tokens { claude, codex, pi }
     }
-}
-
-/// A Claude home's `skillOverrides`, merged per skill with
-/// `settings.local.json` winning; a file that is missing or does not parse
-/// sets none.
-fn overrides(home: &Home) -> BTreeMap<String, String> {
-    let read = |path: PathBuf| -> Option<BTreeMap<String, String>> {
-        let settings: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-        let o = settings.get("skillOverrides")?.as_object()?;
-        Some(o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
-    };
-    [home.settings(), home.path.join("settings.local.json")].into_iter().filter_map(read).flatten().collect()
 }
 
 /// Whether the SKILL.md in `dir` sets `disable-model-invocation: true`.

@@ -35,6 +35,7 @@ pub struct Locked {
     pub commit: Option<String>,
     /// [`content_hash`] of the installed copy.
     pub content_hash: String,
+    /// Whether it was installed unvetted: a record, which grants `update` no trust.
     pub trusted: bool,
     /// RFC 3339.
     pub installed_at: String,
@@ -103,7 +104,7 @@ impl Lock {
     }
 
     /// Drops `name`'s entry from the lockfile under `data`, if it has one.
-    pub fn remove(data: &Path, name: &str) -> Result<()> {
+    pub(super) fn remove(data: &Path, name: &str) -> Result<()> {
         let mut lock = Lock::load(data)?;
         lock.skills.retain(|s| s.name != name);
         lock.save(data)
@@ -142,15 +143,12 @@ pub(super) fn checked(src: &Path, name: &str, rename: bool) -> std::result::Resu
     Ok((skill_md, files))
 }
 
-/// Copies `files` of `src` into a fresh `staged`, `SKILL.md` as `skill_md`:
-/// the copy, removed when dropped, and its [`content_hash`]. The copy is
-/// what the judge reads and what is renamed into place, so that a source
-/// changed after it was read installs nothing unvetted.
-pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: PathBuf) -> Result<(Scratch, String)> {
-    let staged = Scratch(staged);
+/// Copies `files` of `src` into `staged`, `SKILL.md` as `skill_md`: the
+/// copy and its [`content_hash`]. The copy is what the judge reads and what
+/// is renamed into place, so that a source changed after it was read
+/// installs nothing unvetted.
+pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: Scratch) -> Result<(Scratch, String)> {
     let dir = staged.0.as_path();
-    let _ = fs::remove_dir_all(dir);
-    reap(dir);
     fs::create_dir_all(dir).map_err(crate::at(dir))?;
     files.iter().try_for_each(|rel| {
         let (from, dest) = (src.join(rel), dir.join(rel));
@@ -197,29 +195,6 @@ fn unfollowed(root: &Path, rel: &Path) -> std::io::Result<fs::File> {
         file = unsafe { fs::File::from_raw_fd(fd) };
     }
     Ok(file)
-}
-
-/// Removes the copies [`stage`] left beside `staged` for the same skill by a
-/// process since gone, such as one interrupted at the judge or the prompt:
-/// each is named for its process, so no later run reuses it.
-fn reap(staged: &Path) {
-    let (Some(parent), Some((prefix, _))) =
-        (staged.parent(), staged.file_name().and_then(|n| n.to_str()).and_then(|n| n.rsplit_once('-')))
-    else {
-        return;
-    };
-    for entry in fs::read_dir(parent).into_iter().flatten().flatten() {
-        let pid =
-            entry.file_name().to_str().and_then(|n| n.strip_prefix(prefix)?.strip_prefix('-')?.parse::<u32>().ok());
-        let gone = |pid: u32| {
-            // SAFETY: kill(2) with signal 0 only probes; it takes no pointers.
-            let signalled = unsafe { libc::kill(pid as libc::pid_t, 0) };
-            signalled != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-        };
-        if pid.is_some_and(gone) {
-            let _ = fs::remove_dir_all(entry.path());
-        }
-    }
 }
 
 /// Now, to the second, RFC 3339.
@@ -294,7 +269,7 @@ pub fn content_hash(dir: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{checked, content_hash, parse, renamed, stage};
+    use super::{Scratch, checked, content_hash, parse, renamed, stage};
 
     #[test]
     fn every_string_a_lockfile_holds_is_inert() {
@@ -349,10 +324,11 @@ mod tests {
             let _ = std::fs::remove_dir(src.join(link));
             std::os::unix::fs::symlink(&target, src.join(link)).unwrap();
             let files: Vec<_> = files.into_iter().map(std::path::PathBuf::from).collect();
-            let staged = tmp.path().join("staged");
-            let Err(e) = stage(&src, &files, "a", staged.clone()) else { panic!("{link} was followed") };
+            let staged = Scratch::new(tmp.path(), "staged");
+            let path = staged.0.clone();
+            let Err(e) = stage(&src, &files, "a", staged) else { panic!("{link} was followed") };
             assert!(e.to_string().starts_with(&src.join(link).display().to_string()), "{e}");
-            assert!(!staged.exists(), "a refused copy is removed");
+            assert!(!path.exists(), "a refused copy is removed");
         }
     }
 
@@ -366,7 +342,7 @@ mod tests {
         std::fs::write(src.join("run.sh"), "b").unwrap();
         std::fs::set_permissions(src.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
         let files = ["SKILL.md", "run.sh"].map(std::path::PathBuf::from);
-        let (staged, _) = stage(&src, &files, "a", tmp.path().join("staged")).unwrap();
+        let (staged, _) = stage(&src, &files, "a", Scratch::new(tmp.path(), "staged")).unwrap();
         let mode = std::fs::metadata(staged.0.join("run.sh")).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755);
     }

@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use super::session::{Followed, Outcome};
 use super::{
-    Audit, JudgeRecord, Ruling, Stage, Synthesis, Verdict, append, frame, judge, list, object, parsed, stamp, text,
+    Audit, JudgeRecord, Ruling, Stage, Synthesis, Verdict, append, check_for_try, for_try, frame, judge, list, object,
+    parsed, stamp, text,
 };
 use crate::Result;
 use crate::inventory::git;
@@ -28,9 +29,6 @@ const VERDICT_CHARS: usize = 400;
 const REPORT_CHARS: usize = 300;
 const REPORT_ITEMS: usize = 5;
 const REPORT_EXAMPLES: usize = 3;
-const FOR_CHARS: usize = 300;
-const TRY_CHARS: usize = 200;
-const TRIES: usize = 3;
 /// Stage 2's input cuts.
 const COMMITS: &str = "-30";
 const GRADE_BODY_CHARS: usize = 6_000;
@@ -41,7 +39,7 @@ const RETRO_BODY_CHARS: usize = 4_000;
 pub static SKILL_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     let sessions = json!({"type": "array", "minItems": 1, "items": {"type": "string"}});
     let cited = object(vec![("text", text(REPORT_CHARS)), ("sessions", sessions.clone())]);
-    object(vec![
+    let mut fields = vec![
         ("verdict", text(VERDICT_CHARS)),
         ("patterns", list(text(REPORT_CHARS), REPORT_ITEMS)),
         ("works", list(cited.clone(), REPORT_ITEMS)),
@@ -67,10 +65,9 @@ pub static SKILL_SCHEMA: LazyLock<String> = LazyLock::new(|| {
                 REPORT_EXAMPLES,
             ),
         ),
-        ("for", text(FOR_CHARS)),
-        ("try", list(text(TRY_CHARS), TRIES)),
-    ])
-    .to_string()
+    ];
+    fields.extend(for_try());
+    object(fields).to_string()
 });
 
 /// A finding of the skill report and the sessions behind it.
@@ -204,12 +201,7 @@ fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<Skil
     if over(&r.verdict, VERDICT_CHARS) || over(&r.versus_grades, VERDICT_CHARS) {
         return Err(format!("verdict or versus_grades over {VERDICT_CHARS} characters"));
     }
-    if r.r#for.as_ref().is_none_or(|f| f.trim().is_empty() || over(f, FOR_CHARS)) {
-        return Err(format!("for is empty or over {FOR_CHARS} characters"));
-    }
-    if r.r#try.len() > TRIES || r.r#try.iter().any(|t| t.trim().is_empty() || over(t, TRY_CHARS)) {
-        return Err(format!("more than {TRIES} try items, or one empty or over {TRY_CHARS} characters"));
-    }
+    check_for_try(r.r#for.as_deref().unwrap_or_default(), &r.r#try)?;
     let texts = r
         .patterns
         .iter()

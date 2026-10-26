@@ -139,10 +139,12 @@ subpath.
   the way `add` does.
 - **Unchanged.** mazo reports the skill up to date and leaves its `mazo.lock`
   entry as it was.
-- **Untrusted and changed.** When the skill has `trusted = false` and its source
-  is not on the `trusted` list either, mazo re-vets it before replacing it (see
-  [re-vetting an update](#re-vetting-an-update)). mazo does not vet a trusted
-  one. With no `[judge]`, mazo refuses the untrusted skill. It prints one line
+- **Untrusted and changed.** When the skill's source is not on the `trusted`
+  list and is not mazo's own repository, mazo re-vets it before replacing it
+  (see [re-vetting an update](#re-vetting-an-update)). The entry's `trusted`
+  value plays no part, so a skill added with `--trust`, or a source dropped
+  from the list, is re-vetted. mazo does not vet a trusted one. With no
+  `[judge]`, mazo refuses the untrusted skill. It prints one line
   per such skill, then the judge tables and issue link of
   [the add refusal](#no-judge) once, and exits 2.
 - **Not updatable.** A local-path skill. A name that is not a store skill is a

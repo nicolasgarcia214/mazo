@@ -24,7 +24,7 @@ const READS: usize = 2 * PROMPTS;
 const PROMPT_CHARS: usize = 200;
 /// The most bytes of the summary the vet judge is sent: a summary past it
 /// loses its last whole lines, and says so, so it fits.
-pub const SUMMARY_BYTES: usize = 8 * 1024;
+const SUMMARY_BYTES: usize = 8 * 1024;
 const CUT: &str = "(cut to fit the size cap)\n";
 
 /// The summary of the strong, main-actor `events` of the last [`DAYS`] days

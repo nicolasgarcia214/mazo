@@ -549,6 +549,8 @@ fn retire_stages_a_rename_prunes_the_links_and_never_commits() {
     common::git(repo, &["add", "-A", "."], DATE);
     common::git(repo, &["commit", "-q", "-m", "c"], DATE);
     assert!(!links_to(&fx, "unslop").is_empty());
+    let local = fx.home.join(".claude-work/settings.local.json");
+    common::write(&local, r#"{"skillOverrides":{"unslop":"name-only"}}"#);
 
     let r = fx.mazo(&["retire", "unslop"]);
     r.assert_ok();
@@ -564,6 +566,8 @@ fn retire_stages_a_rename_prunes_the_links_and_never_commits() {
         let lines = format!("{} can drop:\n  \"unslop\": \"name-only\"\n", fx.settings(dir).display());
         assert!(r.stdout().contains(&lines), "{}", r.stdout());
     }
+    let lines = format!("{} can drop:\n  \"unslop\": \"name-only\"\n", local.display());
+    assert!(r.stdout().contains(&lines), "both files that set it are named: {}", r.stdout());
     fx.mazo(&["status"]).assert_ok();
 }
 

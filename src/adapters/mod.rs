@@ -262,6 +262,9 @@ pub struct Records {
     pub render: fn(&Value) -> Vec<String>,
 }
 
+/// Each adapter's skill-load marker: text a transcript holds only where a skill loaded.
+pub const MARKERS: [&str; 3] = [claude::MARKER, codex::MARKER, pi::MARKER];
+
 pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
     match agent {
         Agent::Claude => &claude::Claude,

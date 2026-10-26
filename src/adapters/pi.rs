@@ -13,9 +13,12 @@ use crate::tail::Chunk;
 
 pub struct Pi;
 
-/// The `/skill:name` expansion Pi injects as a user message.
-static SKILL_BLOCK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^<skill name="([^"]+)" location="([^"]+)">"#).expect("valid regex"));
+/// The opening of the `/skill:name` expansion Pi injects as a user message.
+pub const MARKER: &str = "<skill name=";
+
+static SKILL_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r#"^{}"([^"]+)" location="([^"]+)">"#, regex::escape(MARKER))).expect("valid regex")
+});
 
 const TOOLS: ToolNames = ToolNames { block: "toolCall", input: "arguments", read: "read", path: "path", shell: "bash" };
 

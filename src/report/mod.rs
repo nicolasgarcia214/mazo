@@ -20,8 +20,8 @@ use crate::render::Align;
 
 pub(crate) use card::cut;
 pub use card::{
-    ByChannel, Card, CardHistory, CardUsage, Day, Link, Manual, Project, ShownEvent, SkillOrigin, card_text,
-    check_skill, links, show, skill_card, tilde, usage_section,
+    AuditLines, ByChannel, Card, CardHistory, CardUsage, Day, Link, Manual, Project, ShownEvent, SkillOrigin,
+    card_text, check_skill, links, show, skill_card, tilde, usage_section,
 };
 pub use unused::{UNUSED_HEADER, Unused, UnusedRow, retire_blockers, unused, unused_cells, unused_list};
 pub use usage::{GradeOut, Trend, USAGE_HEADER, Usage, UsageRow, VerdictSource, usage, usage_cells, usage_table};
@@ -90,9 +90,6 @@ impl UsageArgs {
     }
 }
 
-/// The card shows the audit's top improvements, this many.
-pub const AUDIT_IMPROVEMENTS: usize = 3;
-
 /// The default window of `usage`, `show` and `report`.
 pub const SINCE: Since = Since::Days(30);
 
@@ -110,7 +107,7 @@ fn legend(header: &[(&str, Align)], cells: &[Vec<String>]) -> String {
             cells.iter().any(|row| if mark == column { !row[i].is_empty() } else { row[i].contains(mark) })
         })
     };
-    let line = help::legend(false, shown);
+    let line = help::legend(shown);
     if line.is_empty() { line } else { format!("legend: {line}\n") }
 }
 

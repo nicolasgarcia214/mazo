@@ -85,10 +85,11 @@ impl App {
                 }
                 Some(Ask::Audit(skill)) if y => self.run_audit(skill),
                 Some(Ask::Update(skill)) if y => self.run_update(skill),
-                Some(Ask::Quit) if y => {
+                Some(Ask::Quit(_)) if y => {
                     self.stop();
                     return false;
                 }
+                Some(Ask::Quit(under)) => self.dialog = under.map(|d| *d),
                 _ => {}
             }
             return true;
@@ -201,11 +202,15 @@ impl App {
         }
     }
 
-    /// False, quitting, unless a job is running: then it asks first.
+    /// False, quitting, unless a job is running: then it asks first, over
+    /// the open dialog.
     fn quit(&mut self) -> bool {
         let Some(job) = self.running() else { return false };
-        let lines = vec![format!("the {} of {} is running; stop its judge and quit?", job.verb, job.target)];
-        self.dialog = Some(Dialog { lines, ask: Some(Ask::Quit) });
+        if !matches!(self.dialog, Some(Dialog { ask: Some(Ask::Quit(_)), .. })) {
+            let lines = vec![format!("the {} of {} is running; stop its judge and quit?", job.verb, job.target)];
+            let under = self.dialog.take().map(Box::new);
+            self.dialog = Some(Dialog { lines, ask: Some(Ask::Quit(under)) });
+        }
         true
     }
 

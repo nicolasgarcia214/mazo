@@ -1175,6 +1175,7 @@ fn evals_latest_date_and_staleness() {
     write(&evals.join("retros/s/r2.md"), "---\nskill: s\ndate: 2026-03-04\n---\n");
     write(&evals.join("retros/s/r3.md"), "---\nskill: s\ndate: 2026-03-06T09:00:00Z\n---\n");
     write(&evals.join("retros/s/r4.md"), "---\nskill: s\ndate: 20260307\n---\n");
+    write(&evals.join("retros/s/r5.md"), "---\nskill: s\ndate: 2026-02-30\n---\n");
 
     let load = |skill| evals::load(&evals, &Inventory::load(&src).unwrap(), skill);
     let e = load("s");
@@ -1188,10 +1189,18 @@ fn evals_latest_date_and_staleness() {
     assert!(!g.stale && g.mark().is_empty(), "the grade's content_hash is the skill's");
     assert!(e.grades[0].stale && e.grades[0].content_hash.is_none(), "a grade with no content_hash is stale");
     let retros: Vec<&str> = e.retros.iter().map(|r| r.file.file_name().unwrap().to_str().unwrap()).collect();
-    assert_eq!(retros, ["r2.md", "r0.md", "r1.md", "r3.md"], "by date, ties by filename; r4.md has no YYYY-MM-DD");
+    assert_eq!(
+        retros,
+        ["r2.md", "r0.md", "r1.md", "r3.md"],
+        "by date, ties by filename; r4.md and r5.md have no YYYY-MM-DD"
+    );
     assert_eq!(e.retros[3].date, "2026-03-06", "a timestamp is read as a string, its first 10 characters the date");
     let skipped: Vec<&str> = e.skipped.iter().map(|s| s.rsplit_once('/').unwrap().1).collect();
-    assert!(skipped[0].starts_with("bad.md: ") && skipped[1] == "r4.md: no YYYY-MM-DD date", "{skipped:?}");
+    assert!(skipped[0].starts_with("bad.md: "), "{skipped:?}");
+    let mut retro_skips = skipped[1..].to_vec();
+    retro_skips.sort();
+    // r5.md has the right shape, but no such day.
+    assert_eq!(retro_skips, ["r4.md: no YYYY-MM-DD date", "r5.md: no YYYY-MM-DD date"]);
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
     let g = load("s").grades.pop().unwrap();

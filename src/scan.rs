@@ -68,9 +68,6 @@ impl ScanReport {
     }
 }
 
-/// Markers whose presence in a file without any event trips the canary.
-const CANARY: [&str; 3] = ["Base directory for this skill", "<skill>", "<skill name="];
-
 pub fn roots(cfg: &Config, inv: &Inventory) -> SkillRoots {
     SkillRoots {
         source: cfg.source.clone(),
@@ -252,7 +249,7 @@ fn admit(
 }
 
 /// Whether a scan shows the progress line.
-pub fn should_show_progress(is_tty: bool, elapsed: Duration) -> bool {
+fn should_show_progress(is_tty: bool, elapsed: Duration) -> bool {
     is_tty && elapsed > Duration::from_secs(1)
 }
 
@@ -280,8 +277,9 @@ impl Drop for Progress {
     }
 }
 
+/// Whether a line holds an adapter's marker; in a file without any event, that trips the canary.
 fn has_canary(chunk: &tail::Chunk) -> bool {
-    chunk.lines.iter().any(|(_, l)| CANARY.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
+    chunk.lines.iter().any(|(_, l)| adapters::MARKERS.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
 }
 
 /// The earliest `"timestamp"` that parses among the first lines of a transcript: when its

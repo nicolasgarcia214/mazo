@@ -24,7 +24,7 @@ pub struct Examples {
     pub default_prompt: Option<String>,
     /// Newest project first.
     pub real: Vec<Real>,
-    /// Up to three from the latest audit; the card fills them in.
+    /// Up to three from the latest audit.
     pub curated: Vec<crate::audit::Example>,
 }
 
@@ -52,12 +52,14 @@ fn invocation(agent: Agent, skill: &str) -> String {
 }
 
 /// The examples of `skill`, whose directory is `dir` if any, from its ledger
-/// `events` newest first; only strong `main` events are read.
+/// `events` newest first, with the latest audit's `curated` ones; only strong
+/// `main` events are read.
 pub fn examples<'e>(
     agents: impl IntoIterator<Item = Agent>,
     dir: Option<&Path>,
     skill: &str,
     events: impl IntoIterator<Item = &'e Event>,
+    curated: Vec<crate::audit::Example>,
 ) -> Examples {
     let mut agents: Vec<Agent> = agents.into_iter().collect();
     agents.sort();
@@ -72,7 +74,7 @@ pub fn examples<'e>(
                 .map(str::to_string)
         });
     let written = agents.into_iter().map(|agent| Invocation { agent, text: invocation(agent, skill) }).collect();
-    Examples { written, default_prompt, real: real(skill, events), curated: Vec::new() }
+    Examples { written, default_prompt, real: real(skill, events), curated }
 }
 
 /// The most recent informative prompt per project, from the three most recent

@@ -12,6 +12,9 @@ use crate::tail::Chunk;
 
 pub struct Codex;
 
+/// The opening of a `$name` expansion.
+pub const MARKER: &str = "<skill>";
+
 impl Adapter for Codex {
     fn parse(&self, roots: &SkillRoots, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let mut out = Parsed::default();
@@ -120,7 +123,7 @@ fn user_turn(v: &Value) -> Option<String> {
     };
     let text = super::strip_injected(&text)?;
     let bare = text.strip_prefix('$').is_some_and(|name| !name.contains(char::is_whitespace));
-    (!bare && !text.starts_with("<skill>")).then_some(text)
+    (!bare && !text.starts_with(MARKER)).then_some(text)
 }
 
 /// The session a Codex `session_meta` header line describes; `None` for any other line.
@@ -180,7 +183,7 @@ fn slash_blocks(payload: &Value) -> Vec<Found> {
         .enumerate()
         .filter(|(_, b)| b["type"] == "input_text")
         .filter_map(|(i, b)| {
-            let rest = b["text"].as_str()?.strip_prefix("<skill>\n<name>")?;
+            let rest = b["text"].as_str()?.strip_prefix(MARKER)?.strip_prefix("\n<name>")?;
             let (name, rest) = rest.split_once("</name>\n<path>")?;
             let (path, _) = rest.split_once("</path>")?;
             if name.is_empty() || name.contains(['<', '\n']) || path.is_empty() || path.contains(['<', '\n']) {

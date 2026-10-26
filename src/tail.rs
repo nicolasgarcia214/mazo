@@ -10,6 +10,8 @@ use std::path::Path;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::adapters;
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cursor {
     pub dev: u64,
@@ -35,19 +37,17 @@ const MAX_LINE: u64 = 64 << 20;
 pub struct Prefilter(Regex);
 
 impl Prefilter {
-    const MARKERS: [&'static str; 7] = [
-        "Base directory for this skill",
-        "\"Skill\"",
-        "\"commandName\"",
-        "<skill>",
-        "<skill name=",
-        "SKILL.md",
-        "/skills/",
-    ];
+    /// Generic markers, beside each adapter's own.
+    const MARKERS: [&'static str; 4] = ["\"Skill\"", "\"commandName\"", "SKILL.md", "/skills/"];
 
     pub fn new<'a>(extra: impl IntoIterator<Item = &'a str>) -> Prefilter {
-        let alts: Vec<String> =
-            Self::MARKERS.iter().copied().chain(extra).filter(|s| !s.is_empty()).map(regex::escape).collect();
+        let alts: Vec<String> = adapters::MARKERS
+            .into_iter()
+            .chain(Self::MARKERS)
+            .chain(extra)
+            .filter(|s| !s.is_empty())
+            .map(regex::escape)
+            .collect();
         Prefilter(Regex::new(&alts.join("|")).expect("escaped literals form a valid regex"))
     }
 }

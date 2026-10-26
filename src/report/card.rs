@@ -5,13 +5,14 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use jiff::civil::Date;
+use jiff::tz::TimeZone;
 use serde::Serialize;
 
 use super::unused::citers;
 use super::usage::{GradeOut, vet_of};
 use super::view::{Bucket, Filter, Key, View, day, relative};
-use super::{AUDIT_IMPROVEMENTS, Input, SINCE, Since, UsageArgs, json_line};
-use crate::audit::{SkillRecord, VetVerdict};
+use super::{Input, SINCE, Since, UsageArgs, json_line};
+use crate::audit::{Improvement, SkillRecord, VetVerdict};
 use crate::ctx::Ctx;
 use crate::evals::{self, Eval, Evals};
 use crate::examples::{self, Examples};
@@ -98,6 +99,8 @@ const MANUAL_WIDTH: usize = 80;
 const LABEL_WIDTH: usize = 10;
 const FOR_LINES: usize = 3;
 const ITEM_LINES: usize = 2;
+/// The card shows the audit's top improvements, this many.
+const AUDIT_IMPROVEMENTS: usize = 3;
 
 /// `text` cut to `max` characters, the last a `…` when cut.
 pub(crate) fn cut(text: &str, max: usize) -> String {
@@ -304,6 +307,33 @@ impl Card<'_> {
     pub fn retro_note(&self) -> String {
         self.strong_since_retro.map_or("none".into(), |n| format!("{n} strong since the latest"))
     }
+
+    /// The latest audit's lines, its day in `tz`; None when not audited.
+    pub fn audit_lines(&self, tz: &TimeZone) -> Option<AuditLines<'_>> {
+        let a = self.audit?;
+        let billing = a.judge.billing.map_or("unknown".into(), name);
+        Some(AuditLines {
+            run: format!(
+                "{}, {}, {billing} billing",
+                render::local(&a.audited_at, tz, render::DAY),
+                render::count(a.sessions.len(), "session")
+            ),
+            verdict: &a.result.verdict,
+            rates: a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect::<Vec<_>>().join(", "),
+            improvements: &a.result.improvements[..a.result.improvements.len().min(AUDIT_IMPROVEMENTS)],
+        })
+    }
+}
+
+/// The card's audit section, which `show` and the HTML report lay out.
+pub struct AuditLines<'a> {
+    /// `<day>, N sessions, <billing> billing`.
+    pub run: String,
+    pub verdict: &'a str,
+    /// `label rate, …`: the rates mazo computed.
+    pub rates: String,
+    /// The top [`AUDIT_IMPROVEMENTS`] improvements.
+    pub improvements: &'a [Improvement],
 }
 
 /// `cites` or `cited by`: each skill as `skill` writes it, `(held)` after a held one.
@@ -384,9 +414,9 @@ pub(super) fn card<'a>(
     let mut ledger: Vec<_> = view.select(&f, Some(skill), None).collect();
     ledger.sort_by_key(|e| std::cmp::Reverse(e.ts));
     let agents = view.input.cfg.homes.iter().map(|h| h.agent);
-    let mut examples = examples::examples(agents, path.as_deref(), skill, ledger.iter().copied());
     let audit = view.input.audits.get(skill);
-    examples.curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
+    let curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
+    let examples = examples::examples(agents, path.as_deref(), skill, ledger.iter().copied(), curated);
 
     let vet = vet_of(inv, skill);
     let (r#for, r#try) = Manual::guide(vet, audit, description.clone());
@@ -455,9 +485,9 @@ pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
 
 /// `$HOME` as `~`.
 pub fn tilde(path: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let Ok(home) = crate::config::home_dir() else { return path.to_string() };
     match path.strip_prefix(home.as_str()) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
         _ => path.to_string(),
     }
 }
@@ -584,19 +614,11 @@ pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
     if let Some(v) = card.vet {
         out.push_str(&format!("vet: {}\n", v.line()));
     }
-    match card.audit {
+    match card.audit_lines(&input.tz) {
         None => out.push_str("audit: none\n"),
         Some(a) => {
-            let date = a.audited_at.parse::<Timestamp>().map_or(a.audited_at.clone(), |t| day(input, t).to_string());
-            let billing = a.judge.billing.map_or("unknown".into(), name);
-            out.push_str(&format!(
-                "audit: {date}, {}, {billing} billing: {}\n",
-                render::count(a.sessions.len(), "session"),
-                a.result.verdict
-            ));
-            let rates: Vec<String> = a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect();
-            out.push_str(&format!("  {}\n", rates.join(", ")));
-            for (i, imp) in a.result.improvements.iter().take(AUDIT_IMPROVEMENTS).enumerate() {
+            out.push_str(&format!("audit: {}: {}\n  {}\n", a.run, a.verdict, a.rates));
+            for (i, imp) in a.improvements.iter().enumerate() {
                 out.push_str(&format!("  {}. {} ({})\n", i + 1, imp.change, imp.reason));
             }
         }

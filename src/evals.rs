@@ -109,9 +109,10 @@ fn read_dir(dir: &Path, skipped: &mut Vec<String>) -> Vec<(Eval, Option<String>)
     out
 }
 
-/// The leading `YYYY-MM-DD` of a date scalar, quoted or not.
+/// The leading `YYYY-MM-DD` of a date scalar, quoted or not, when it is a
+/// calendar date.
 fn date(text: &str) -> Option<String> {
     let d = text.get(..10)?;
     let shape = d.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
-    shape.then(|| d.to_string())
+    (shape && d.parse::<jiff::civil::Date>().is_ok()).then(|| d.to_string())
 }

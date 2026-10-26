@@ -42,15 +42,16 @@ pub fn project_root(verb: &str) -> Result<PathBuf> {
         .ok_or_else(|| Error::Usage(format!("{verb} --project: {} is not in a git repository", cwd.display())))
 }
 
-/// `inv` with the project's store as a further root, and each store and
-/// project skill's install date.
-pub fn project_inventory(inv: &Inventory, project: &Path) -> Result<Inventory> {
+/// `inv`, under `project` with the project's store as a further root, and
+/// each store and project skill's install date.
+pub fn scoped_inventory(inv: Inventory, project: Option<&Path>) -> Result<Inventory> {
+    let Some(project) = project else { return Ok(inv) };
     let store = project_dir(project);
     let roots: Vec<&Path> = inv.roots.iter().map(PathBuf::as_path).chain([store.as_path()]).collect();
     let mut with = Inventory::load_roots(inv.source.as_deref(), &roots)?;
     // `load_roots` knows no install dates: the global store's, then the project's.
     let project_lock = Lock::load(project)?.skills.into_iter().map(|l| (l.name.clone(), l));
-    with.installed = inv.installed.clone().into_iter().chain(project_lock).collect();
+    with.installed = inv.installed.into_iter().chain(project_lock).collect();
     Ok(with)
 }
 

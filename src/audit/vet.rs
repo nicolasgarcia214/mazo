@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Caller, DEFAULT_BUDGET, Ruling, Stage, enclose, frame, judge, list, object, text};
+use super::{Caller, DEFAULT_BUDGET, Ruling, Stage, check_for_try, enclose, for_try, frame, judge, list, object, text};
 use crate::Result;
 use crate::ledger::name;
 
@@ -17,9 +17,6 @@ pub const VET_PROMPT: &str = include_str!("../../prompts/vet.md");
 const SECURITY_CHARS: usize = 400;
 const REASON_CHARS: usize = 300;
 const REASONS: usize = 5;
-const FOR_CHARS: usize = 300;
-const TRY_CHARS: usize = 200;
-const TRIES: usize = 3;
 
 /// A string of at most `max` characters, or null.
 fn nullable(max: usize) -> Value {
@@ -28,16 +25,15 @@ fn nullable(max: usize) -> Value {
 
 /// The JSON schema of the vet answer.
 pub static VET_SCHEMA: LazyLock<String> = LazyLock::new(|| {
-    object(vec![
+    let mut fields = vec![
         ("security", nullable(SECURITY_CHARS)),
         ("quality", json!({"enum": ["good", "weak", "poor"]})),
         ("value", json!({"enum": ["worth trying", "low value", "irrelevant", "redundant"]})),
         ("redundant_with", json!({"type": ["string", "null"]})),
         ("reasons", list(text(REASON_CHARS), REASONS)),
-        ("for", text(FOR_CHARS)),
-        ("try", list(text(TRY_CHARS), TRIES)),
-    ])
-    .to_string()
+    ];
+    fields.extend(for_try());
+    object(fields).to_string()
 });
 
 /// The vet stage, one call per skill.
@@ -147,14 +143,9 @@ fn validate_vet(answer: Value, existing: &[&str]) -> std::result::Result<Vet, St
     if a.security.as_deref().is_some_and(|s| s.trim().is_empty() || over(s, SECURITY_CHARS)) {
         return Err(format!("security is empty or over {SECURITY_CHARS} characters; null means no finding"));
     }
-    if a.r#for.trim().is_empty() || over(&a.r#for, FOR_CHARS) {
-        return Err(format!("for is empty or over {FOR_CHARS} characters"));
-    }
+    check_for_try(&a.r#for, &a.r#try)?;
     if a.reasons.len() > REASONS || a.reasons.iter().any(|r| over(r, REASON_CHARS)) {
         return Err(format!("more than {REASONS} reasons, or one over {REASON_CHARS} characters"));
-    }
-    if a.r#try.len() > TRIES || a.r#try.iter().any(|t| over(t, TRY_CHARS)) {
-        return Err(format!("more than {TRIES} try items, or one over {TRY_CHARS} characters"));
     }
     match &a.redundant_with {
         Some(other) if !existing.contains(&other.as_str()) => {
@@ -252,6 +243,8 @@ mod tests {
             (with("security", json!("")), "security is empty"),
             (with("for", json!("")), "for is empty"),
             (with("try", json!(["a", "b", "c", "d"])), "more than 3 try items"),
+            (with("try", json!([""])), "one empty"),
+            (with("try", json!([" "])), "one empty"),
             (with("value", json!("redundant")), "redundant_with is null"),
             (with("redundant_with", json!("nope")), "nope, which is not an existing skill"),
             (with("extra", json!(1)), "not the answer schema"),

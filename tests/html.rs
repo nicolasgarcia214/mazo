@@ -112,6 +112,21 @@ fn every_usage_all_skill_appears() {
     assert!(!page.contains("x\"<retired>"), "names are escaped");
 }
 
+/// The usage table's cells are `mazo usage`'s: a project row says so, and
+/// only the global row links to the card.
+#[test]
+fn a_project_row_is_marked_and_unlinked() {
+    let repo = repo();
+    let project = tempfile::tempdir().unwrap();
+    write(&project.path().join("mazo.lock"), "");
+    write(&project.path().join(".mazo/skills/unslop/SKILL.md"), "---\nname: unslop\n---\n");
+    let mut w = world(repo.path());
+    w.inv.project = mazo::store::Project::at(project.path()).unwrap();
+    let page = page(&w, &events());
+    assert!(page.contains("<tr><td><a href=\"#skill-unslop\">unslop</a></td>"), "the global row links");
+    assert!(page.contains("<tr><td>unslop (project)</td>"), "the project row is marked, unlinked");
+}
+
 /// The page's model is the `--json` model: its usage is `usage --all --json`
 /// and each card is `show --json`, so the page cannot drift from either.
 #[test]
@@ -203,7 +218,7 @@ fn the_legend_lists_the_helps_marks() {
          stale the skill changed since the grade; ✓ audited; vet vetted by mazo add, not audited; \
          ! the vet found a security issue; (project) a project skill, counted apart"
     );
-    assert_eq!(legend, format!("legend: {}", mazo::help::legend(true, |_, _| true)));
+    assert_eq!(legend, format!("legend: {}", mazo::help::legend(|_, _| true)));
 }
 
 /// AC4: each missing or stale grade names `/grade <skill>`; a current grade

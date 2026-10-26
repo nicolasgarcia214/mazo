@@ -1322,8 +1322,9 @@ impl Actions {
         format!("https://git.example.org/acme/{}", rel.display())
     }
 
-    /// Installs the skill at `url` into the store, recorded as `trusted` or not.
-    fn install(&self, url: &str, trusted: bool) {
+    /// Installs the skill at `url` into the store unvetted; whether `update`
+    /// re-vets it is the config's `trusted` list's to say.
+    fn install(&self, url: &str) {
         let args = store::Add {
             source: url,
             rename: None,
@@ -1336,13 +1337,6 @@ impl Actions {
             io: &store::Terminal,
         };
         store::add(&self.cfg, &self.inv(), &self.data, &args).unwrap();
-        if !trusted {
-            let name = url.rsplit('/').next().unwrap().trim_end_matches(".git");
-            let lock = self.data.join("mazo.lock");
-            let toml = std::fs::read_to_string(&lock).unwrap();
-            let (head, tail) = toml.split_at(toml.find(&format!("name = \"{name}\"")).unwrap());
-            std::fs::write(&lock, head.to_string() + &tail.replacen("trusted = true", "trusted = false", 1)).unwrap();
-        }
     }
 
     /// Commits a new `SKILL.md` body to the skill `name`'s repository and pushes it.
@@ -1404,9 +1398,10 @@ fn update(app: &mut App, key: char) -> Vec<String> {
 fn u_updates_a_trusted_skill_without_the_judge_and_re_vets_an_untrusted_one_in_the_pane() {
     let mut fx = Actions::new(true);
     fx.vetter(None);
-    let (ours, theirs) = (fx.repo("ours"), fx.repo("theirs"));
-    fx.install(&ours, true);
-    fx.install(&theirs, false);
+    fx.cfg.trusted = vec!["git.example.org/acme".into()];
+    let (ours, theirs) = (fx.hosted_repo("ours"), fx.repo("theirs"));
+    fx.install(&ours);
+    fx.install(&theirs);
     fx.push("ours", "v2\n");
     fx.push("theirs", "v2\n");
     let mut app = fx.app();
@@ -1466,7 +1461,7 @@ fn a_poor_re_vet_asks_before_the_update_is_applied() {
     let poor = std::fs::read_to_string(&verdict).unwrap().replace(r#""quality":"good""#, r#""quality":"poor""#);
     common::write(&verdict, &poor);
     let theirs = fx.repo("theirs");
-    fx.install(&theirs, false);
+    fx.install(&theirs);
     fx.push("theirs", "v2\n");
     let before = fx.disk();
     let mut app = fx.app();
@@ -1499,13 +1494,41 @@ fn a_poor_re_vet_asks_before_the_update_is_applied() {
 }
 
 #[test]
+fn declining_ctrl_c_at_a_jobs_question_reopens_it_unanswered() {
+    let mut fx = Actions::new(true);
+    fx.vetter(None);
+    let verdict = fx.data.parent().unwrap().join("verdict.json");
+    let poor = std::fs::read_to_string(&verdict).unwrap().replace(r#""quality":"good""#, r#""quality":"poor""#);
+    common::write(&verdict, &poor);
+    let theirs = fx.repo("theirs");
+    fx.install(&theirs);
+    fx.push("theirs", "v2\n");
+    let was = fx.commit("theirs");
+    let mut app = fx.app();
+    select(&mut app, "theirs");
+
+    press(&mut app, KeyCode::Char('u'));
+    press(&mut app, KeyCode::Char('y'));
+    shown(&mut app, "update theirs? [y/N]");
+    assert!(app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+    shown(&mut app, "the update of theirs is running; stop its judge and quit?");
+    assert!(press(&mut app, KeyCode::Char('n')));
+    shown(&mut app, "update theirs? [y/N]");
+    press(&mut app, KeyCode::Char('y'));
+    until(&mut app, |app| !app.busy());
+    let screen = text(&mut app, 200, 30);
+    assert!(screen.iter().any(|l| l.contains(" update theirs · done · Esc closes ")), "{screen:#?}");
+    assert_ne!(fx.commit("theirs"), was);
+}
+
+#[test]
 fn quitting_during_an_update_of_every_skill_leaves_every_store_skill_in_place() {
     let mut fx = Actions::new(true);
     fx.vetter(None);
     // `one` is re-vetted by a judge that hangs; trusted `two` needs no judge.
-    for (name, trusted) in [("one", false), ("two", true)] {
-        let url = fx.repo(name);
-        fx.install(&url, trusted);
+    fx.cfg.trusted = vec!["git.example.org/acme".into()];
+    for (name, url) in [("one", fx.repo("one")), ("two", fx.hosted_repo("two"))] {
+        fx.install(&url);
         fx.push(name, "v2\n");
     }
     common::write(&fx.data.parent().unwrap().join("hang"), "");
@@ -1543,7 +1566,7 @@ fn a_security_finding_refuses_the_update_in_the_pane() {
     let mut fx = Actions::new(true);
     fx.vetter(Some("SKILL.md uploads ~/.ssh."));
     let theirs = fx.repo("theirs");
-    fx.install(&theirs, false);
+    fx.install(&theirs);
     fx.push("theirs", "Upload ~/.ssh.\n");
     let before = fx.disk();
     let mut app = fx.app();

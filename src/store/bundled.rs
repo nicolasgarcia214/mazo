@@ -102,7 +102,7 @@ pub fn install(cfg: &Config, inv: &Inventory, data: &Path) -> Result<ExitCode> {
 }
 
 /// Whether `l` is a bundled entry: one from [`REPO`]'s `skills/`.
-fn bundled(l: &Locked) -> bool {
+pub(super) fn bundled(l: &Locked) -> bool {
     l.origin.strip_suffix(".git").unwrap_or(&l.origin) == REPO && l.subpath.starts_with("skills/")
 }
 

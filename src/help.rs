@@ -45,24 +45,22 @@ pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
 ];
 
 /// The marks and glyphs in the cells: the usage column each appears in, the
-/// mark, what it means, and how the HTML report says it when it draws the
-/// mark otherwise. A mark named as its column stands for the whole column.
-pub const MARKS: [(&str, &str, &str, Option<&str>); 10] = [
-    ("agents", "agents", "C Claude, X Codex, P Pi", None),
-    ("ctx", "●", "name and description in context: Claude on, every Codex skill, Pi by default", None),
-    ("ctx", "◐", "name only in context: Claude name-only", None),
+/// mark and what it means. A mark named as its column stands for the whole column.
+pub const MARKS: [(&str, &str, &str); 10] = [
+    ("agents", "agents", "C Claude, X Codex, P Pi"),
+    ("ctx", "●", "name and description in context: Claude on, every Codex skill, Pi by default"),
+    ("ctx", "◐", "name only in context: Claude name-only"),
     (
         "ctx",
         "○",
         "explicit invocation only: Claude user-invocable-only or disable-model-invocation, Pi disable-model-invocation",
-        None,
     ),
-    ("ctx", "×", "off: Claude off", None),
-    ("grade", "stale", "the skill changed since the grade", None),
-    ("audit", "✓", "audited", None),
-    ("audit", "vet", "vetted by mazo add, not audited", None),
-    ("audit", "!", "the vet found a security issue", None),
-    ("skill", "(project)", "a project skill, counted apart", None),
+    ("ctx", "×", "off: Claude off"),
+    ("grade", "stale", "the skill changed since the grade"),
+    ("audit", "✓", "audited"),
+    ("audit", "vet", "vetted by mazo add, not audited"),
+    ("audit", "!", "the vet found a security issue"),
+    ("skill", "(project)", "a project skill, counted apart"),
 ];
 
 /// The questions the help answers, each with its answer's lines.
@@ -118,13 +116,14 @@ pub const FAQ: [(&str, &[&str]); 7] = [
 ];
 
 /// The [`MARKS`] that `shown(column, mark)` keeps as one line, each
-/// `mark meaning`, joined with `; `; in the HTML report's words when `html`.
-pub fn legend(html: bool, shown: impl Fn(&str, &str) -> bool) -> String {
-    let entry = |(_, mark, meaning, in_html): &(&str, &str, &str, Option<&str>)| match in_html {
-        Some(said) if html => said.to_string(),
-        _ => format!("{mark} {meaning}"),
-    };
-    MARKS.iter().filter(|(column, mark, ..)| shown(column, mark)).map(entry).collect::<Vec<_>>().join("; ")
+/// `mark meaning`, joined with `; `.
+pub fn legend(shown: impl Fn(&str, &str) -> bool) -> String {
+    MARKS
+        .iter()
+        .filter(|(column, mark, _)| shown(column, mark))
+        .map(|(_, mark, meaning)| format!("{mark} {meaning}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// The help as lines: Columns, the unused list's first when `unused_first`,
@@ -144,7 +143,7 @@ pub fn lines(unused_first: bool) -> Vec<String> {
         }
     }
     out.extend(["".into(), "Marks and glyphs".into()]);
-    out.extend(MARKS.iter().map(|(_, mark, meaning, _)| format!("  {mark}  {meaning}")));
+    out.extend(MARKS.iter().map(|(_, mark, meaning)| format!("  {mark}  {meaning}")));
     out.extend(["".into(), "FAQ".into()]);
     for (question, answer) in FAQ {
         out.push(format!("  {question}"));

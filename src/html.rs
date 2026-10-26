@@ -7,12 +7,12 @@ use std::process::Command;
 
 use jiff::tz::TimeZone;
 
-use crate::audit::SkillRecord;
 use crate::examples::Examples;
 use crate::help;
+use crate::inventory::Scope;
 use crate::ledger::name;
 use crate::render::{self, Align, DAY, MINUTE};
-use crate::report::{self, AUDIT_IMPROVEMENTS, Card, Day, GradeOut, Link, Report, Trend, tilde};
+use crate::report::{self, Card, Day, GradeOut, Link, Report, tilde};
 
 const CSS: &str = "
 :root { color-scheme: light dark; --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de;
@@ -61,11 +61,15 @@ fn anchor(skill: &str) -> String {
     format!("skill-{}", esc(skill))
 }
 
-/// The score as written, then ` stale` for a stale grade.
-fn grade(g: Option<&GradeOut>) -> String {
-    let Some(g) = g else { return "-".into() };
-    let score = esc(g.grade.eval.score.as_deref().unwrap_or("?"));
-    if g.grade.stale { format!("<span class=\"warn\">{score} {}</span>", g.mark) } else { score }
+/// Markup in the warning colour.
+fn warn(html: String) -> String {
+    format!("<span class=\"warn\">{html}</span>")
+}
+
+/// A grade's cell, in the warning colour when stale.
+fn grade(g: &GradeOut) -> String {
+    let cell = esc(&g.cell(false));
+    if g.grade.stale { warn(cell) } else { cell }
 }
 
 /// The card histogram: one column per day with events, strong below weak.
@@ -110,45 +114,38 @@ fn table(header: &[&str], rows: &[Vec<String>]) -> String {
     format!("<div class=\"wrap\"><table><tr>{head}</tr>{body}</table></div>")
 }
 
+/// The usage table: the cells `mazo usage` prints, its last load a day, a
+/// global skill's name a link to its card.
 fn usage(model: &Report) -> String {
-    let card = |skill: &str| model.cards.iter().find(|c| c.skill == skill);
-    let n = |v: usize| format!("<td class=\"n\">{v}</td>");
+    let class = |h: &str, a: &Align| match (h, a) {
+        (_, Align::Right) => " class=\"n\"",
+        ("agents" | "ctx", _) => " class=\"mono\"",
+        _ => "",
+    };
     let rows: String = model
         .usage
         .rows
         .iter()
         .map(|r| {
-            let name = if card(&r.skill).is_some() {
-                format!("<a href=\"#{}\">{}</a>", anchor(&r.skill), esc(&r.skill))
-            } else {
-                esc(&r.skill)
-            };
-            format!(
-                "<tr><td>{name}</td>{}{}{}<td>{}</td>{}{}{}{}{}<td class=\"mono\">{}</td><td class=\"mono\">{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
-                n(r.sess),
-                n(r.sessions_7d),
-                n(r.sessions_30d),
-                Trend::glyph(r.trend),
-                n(r.slash),
-                n(r.tool),
-                n(r.typed),
-                n(r.read),
-                n(r.ref_),
-                esc(&r.agents),
-                esc(&r.ctx.cell()),
-                local(r.last.as_deref(), &model.tz, DAY),
-                grade(r.grade.as_ref()),
-                if r.mark == "!" { "<span class=\"warn\">!</span>" } else { r.mark },
-            )
+            let carded = r.scope == Scope::Global && model.cards.iter().any(|c| c.skill == r.skill);
+            let cells: String = report::USAGE_HEADER
+                .iter()
+                .zip(r.cells(r.last.as_deref().map_or("-".into(), |t| render::local(t, &model.tz, DAY)), false))
+                .map(|((h, a), cell)| {
+                    let cell = esc(&cell);
+                    let cell = match *h {
+                        "skill" if carded => format!("<a href=\"#{}\">{cell}</a>", anchor(&r.skill)),
+                        "grade" if r.grade.as_ref().is_some_and(|g| g.grade.stale) => warn(cell),
+                        "audit" if r.mark == "!" => warn(cell),
+                        _ => cell,
+                    };
+                    format!("<td{}>{cell}</td>", class(h, a))
+                })
+                .collect();
+            format!("<tr>{cells}</tr>")
         })
         .collect();
-    let head: String = report::USAGE_HEADER
-        .iter()
-        .map(|(h, a)| match a {
-            Align::Right => format!("<th class=\"n\">{h}</th>"),
-            Align::Left => format!("<th>{h}</th>"),
-        })
-        .collect();
+    let head: String = report::USAGE_HEADER.iter().map(|(h, a)| format!("<th{}>{h}</th>", class("", a))).collect();
     format!("<h2>Usage</h2><div class=\"wrap\"><table><tr>{head}</tr>{rows}</table></div>")
 }
 
@@ -156,7 +153,7 @@ fn coverage(model: &Report) -> String {
     format!(
         "<p class=\"muted\">{}</p><p class=\"muted\">legend: {}</p>",
         esc(&report::coverage_note("coverage", &model.usage.coverage)),
-        esc(&help::legend(true, |_, _| true))
+        esc(&help::legend(|_, _| true))
     )
 }
 
@@ -223,25 +220,20 @@ fn examples(ex: &Examples, tz: &TimeZone) -> String {
     out
 }
 
-/// The latest audit: its date and session count, verdict, the
-/// rates mazo computed and the top three improvements.
-fn audit(a: Option<&SkillRecord>, tz: &TimeZone) -> String {
-    let Some(a) = a else { return "<dt>audit</dt><dd>none</dd>".into() };
-    let rates: Vec<String> = a.rates.labeled().iter().map(|(l, r)| format!("{l} {}", r.of())).collect();
+/// The latest audit: when and how it ran, its verdict, the rates and the
+/// top improvements.
+fn audit(c: &Card, tz: &TimeZone) -> String {
+    let Some(a) = c.audit_lines(tz) else { return "<dt>audit</dt><dd>none</dd>".into() };
     let improvements: String = a
-        .result
         .improvements
         .iter()
-        .take(AUDIT_IMPROVEMENTS)
         .map(|i| format!("<li>{} <span class=\"muted\">{}</span></li>", esc(&i.change), esc(&i.reason)))
         .collect();
     format!(
-        "<dt>audit</dt><dd><span class=\"muted\">{}, {}, {} billing</span> {}<br>{}<ol>{improvements}</ol></dd>",
-        local(Some(&a.audited_at), tz, DAY),
-        render::count(a.sessions.len(), "session"),
-        esc(&a.judge.billing.map_or("unknown".into(), name)),
-        esc(&a.result.verdict),
-        rates.join(", "),
+        "<dt>audit</dt><dd><span class=\"muted\">{}</span> {}<br>{}<ol>{improvements}</ol></dd>",
+        esc(&a.run),
+        esc(a.verdict),
+        esc(&a.rates),
     )
 }
 
@@ -267,7 +259,7 @@ fn card(c: &Card, tz: &TimeZone) -> String {
         })
         .collect();
     let history = c.history_line().map_or(String::new(), |line| format!("<dt>history</dt><dd>{}</dd>", esc(&line)));
-    let grades: Vec<Vec<String>> = c.grades.iter().map(|g| vec![esc(&g.grade.eval.date), grade(Some(g))]).collect();
+    let grades: Vec<Vec<String>> = c.grades.iter().map(|g| vec![esc(&g.grade.eval.date), grade(g)]).collect();
     let retros: Vec<Vec<String>> = c
         .retros
         .iter()
@@ -299,7 +291,7 @@ fn card(c: &Card, tz: &TimeZone) -> String {
         skipped = c.skipped.iter().map(|s| format!("<dt>skipped</dt><dd>{}</dd>", esc(s))).collect::<String>(),
         examples = examples(&c.examples, tz),
         vet = c.vet.map_or(String::new(), |v| format!("<dt>vet</dt><dd>{}</dd>", esc(&v.line()))),
-        audit = audit(c.audit, tz),
+        audit = audit(c, tz),
     )
 }
 

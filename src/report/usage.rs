@@ -32,16 +32,16 @@ impl From<Grade> for GradeOut {
     }
 }
 
-fn grade_out(evals: &Evals) -> Option<GradeOut> {
-    evals.grades.last().cloned().map(GradeOut::from)
+impl GradeOut {
+    /// The score as written, then ` stale` for a stale grade, the mark painted when `colour`.
+    pub fn cell(&self, colour: bool) -> String {
+        let score = self.grade.eval.score.as_deref().unwrap_or("?");
+        if self.mark.is_empty() { score.into() } else { format!("{score} {}", render::paint(self.mark, colour)) }
+    }
 }
 
-/// The score as written, then ` stale` for a stale grade, painted when `colour`.
-fn grade_cell(g: &Option<GradeOut>, colour: bool) -> String {
-    g.as_ref().map_or("-".into(), |g| {
-        let score = g.grade.eval.score.as_deref().unwrap_or("?");
-        if g.mark.is_empty() { score.into() } else { format!("{score} {}", render::paint(g.mark, colour)) }
-    })
+fn grade_out(evals: &Evals) -> Option<GradeOut> {
+    evals.grades.last().cloned().map(GradeOut::from)
 }
 
 #[derive(Serialize)]
@@ -254,25 +254,34 @@ pub const USAGE_HEADER: [(&str, Align); 15] = [
     ("audit", Align::Left),
 ];
 
-/// `r`'s cells under [`USAGE_HEADER`], the grade and audit marks painted when `tty`.
+/// `r`'s cells under [`USAGE_HEADER`], its last load relative to `input.now`,
+/// the grade and audit marks painted when `tty`.
 pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
-    vec![
-        format!("{}{}", r.skill, r.scope.suffix()),
-        r.sess.to_string(),
-        r.sessions_7d.to_string(),
-        r.sessions_30d.to_string(),
-        Trend::glyph(r.trend).into(),
-        r.slash.to_string(),
-        r.tool.to_string(),
-        r.typed.to_string(),
-        r.read.to_string(),
-        r.ref_.to_string(),
-        r.agents.clone(),
-        r.ctx.cell(),
-        r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)),
-        grade_cell(&r.grade, tty),
-        render::paint(r.mark, tty),
-    ]
+    r.cells(r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)), tty)
+}
+
+impl UsageRow {
+    /// The cells under [`USAGE_HEADER`], `last` the last-load cell, the grade
+    /// and audit marks painted when `tty`.
+    pub fn cells(&self, last: String, tty: bool) -> Vec<String> {
+        vec![
+            format!("{}{}", self.skill, self.scope.suffix()),
+            self.sess.to_string(),
+            self.sessions_7d.to_string(),
+            self.sessions_30d.to_string(),
+            Trend::glyph(self.trend).into(),
+            self.slash.to_string(),
+            self.tool.to_string(),
+            self.typed.to_string(),
+            self.read.to_string(),
+            self.ref_.to_string(),
+            self.agents.clone(),
+            self.ctx.cell(),
+            last,
+            self.grade.as_ref().map_or("-".into(), |g| g.cell(tty)),
+            render::paint(self.mark, tty),
+        ]
+    }
 }
 
 /// Rendered `mazo usage` output (text, or JSON when `json`).

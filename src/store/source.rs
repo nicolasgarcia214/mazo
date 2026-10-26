@@ -216,8 +216,16 @@ impl Remote {
         self.subpath.file_name().map_or_else(|| self.path[self.path.len() - 1].clone(), |n| n.to_string_lossy().into())
     }
 
-    /// Shallow-clones the repository at its ref into `into` and returns the commit.
-    pub(super) fn clone_into(&self, into: &Path, cancel: &dyn Fn() -> bool) -> Result<String> {
+    /// Shallow-clones the repository at its ref into a [`Scratch`]
+    /// `<data>/.clone-<pid>`: the clone and its commit.
+    pub(super) fn clone_in(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<(Scratch, String)> {
+        fs::create_dir_all(data).map_err(crate::at(data))?;
+        let clone = Scratch::new(data, ".clone");
+        let commit = self.clone_into(&clone.0, cancel)?;
+        Ok((clone, commit))
+    }
+
+    fn clone_into(&self, into: &Path, cancel: &dyn Fn() -> bool) -> Result<String> {
         if let Some(sha) = self.r#ref.as_ref().filter(|r| is_commit(r)) {
             // `clone --branch` takes no commit, and `--revision` needs git
             // 2.49, so a commit is fetched alone into an empty repository.
@@ -277,8 +285,32 @@ const PROTOCOLS: &str = "https:ssh:git:file";
 /// How long a clone or ls-remote may run before it is killed.
 const CLONE_LIMIT: Duration = Duration::from_secs(10 * 60);
 
-/// A directory removed when dropped.
+/// A directory named for this process, removed when dropped.
 pub(super) struct Scratch(pub(super) PathBuf);
+
+impl Scratch {
+    /// `<dir>/<prefix>-<pid>`, not yet made, once it and every `<prefix>-<pid>`
+    /// of a process since gone are removed: a run interrupted at the judge,
+    /// the prompt or a clone leaves its own, which no later run reuses.
+    pub(super) fn new(dir: &Path, prefix: &str) -> Scratch {
+        let path = dir.join(format!("{prefix}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let pid = entry.file_name().to_str().and_then(|n| n.strip_prefix(prefix)?.strip_prefix('-')?.parse().ok());
+            if pid.is_some_and(gone) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+        Scratch(path)
+    }
+}
+
+/// Whether no process `pid` exists.
+fn gone(pid: u32) -> bool {
+    // SAFETY: kill(2) with signal 0 only probes; it takes no pointers.
+    let signalled = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    signalled != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
 
 impl Drop for Scratch {
     fn drop(&mut self) {

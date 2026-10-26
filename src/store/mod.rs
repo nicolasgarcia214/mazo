@@ -32,7 +32,7 @@ use crate::{ledger, links};
 pub use ask::{Io, Terminal};
 pub use bundled::{install as install_bundled, missing as missing_bundled};
 pub use lock::{Lock, Locked, content_hash};
-pub use project::{Project, project_dir, project_hint, project_inventory, project_root};
+pub use project::{Project, project_dir, project_hint, project_root, scoped_inventory};
 pub use source::github_repo;
 pub use update::{Update, update};
 
@@ -177,10 +177,8 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
         }
         Source::Git(mut remote) => {
             remote.resolve(&|| out.cancelled())?;
-            fs::create_dir_all(data).map_err(crate::at(data))?;
-            let clone = &scratch.insert(Scratch(data.join(format!(".clone-{}", std::process::id())))).0;
-            let _ = fs::remove_dir_all(clone);
-            let commit = Some(remote.clone_into(clone, &|| out.cancelled())?);
+            let (clone, commit) = remote.clone_in(data, &|| out.cancelled())?;
+            let (clone, commit) = (&scratch.insert(clone).0, Some(commit));
             let own = remote.name();
             let Remote { url: origin, subpath, r#ref, .. } = remote;
             Fetched { root: clone.join(&subpath), origin, subpath, r#ref, commit, own, clone: Some(clone), trusted }
@@ -193,10 +191,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
     if caller.is_some() && !children.is_empty() && (args.all || out.confirms_calls()) {
         confirm_calls(children.len(), args.consent())?;
     }
-    let mut inv = match &project {
-        Some(p) => project_inventory(inv, p)?,
-        None => inv.clone(),
-    };
+    let mut inv = scoped_inventory(inv.clone(), project.as_deref())?;
     let target = Target { data, project: project.as_deref() };
     let mut outcome = Outcome::Done;
     for child in children {
@@ -323,8 +318,7 @@ fn install(
     // so that the judge and the y/N prompt run without the data lock. Declared
     // first, the store's new directories are dropped last.
     let _fresh = Fresh(store.ancestors().take_while(|d| !d.exists()).map(Path::to_path_buf).collect());
-    let (staged, content_hash) =
-        stage(&src, &files, &skill_md, store.join(format!(".add-{name}-{}", std::process::id())))?;
+    let (staged, content_hash) = stage(&src, &files, &skill_md, Scratch::new(&store, &format!(".add-{name}")))?;
     let vetted = match caller {
         Some(c) => Some((gate(c, inv, args.consent(), &name, contents(&staged.0, &files)?, None)?, now()?)),
         None => None,
@@ -336,11 +330,7 @@ fn install(
     let _lock = ledger::lock(data)?;
     unclaimed(claimed())?;
     // Read under the lock, so a concurrent `retire` or `add` cannot stale the plan.
-    let fresh = inventory(cfg.source.as_deref(), data)?;
-    let mut with = match project {
-        Some(p) => project_inventory(&fresh, p)?,
-        None => fresh,
-    };
+    let mut with = scoped_inventory(inventory(cfg.source.as_deref(), data)?, project)?;
     fs::rename(&staged.0, &to).map_err(crate::at(&to))?;
 
     // From here until the lockfile is written, `store/<name>` has no lock

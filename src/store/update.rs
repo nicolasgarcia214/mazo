@@ -6,7 +6,7 @@ use super::bundled;
 use super::lock::{checked, now, resolved, stage};
 use super::source::{Remote, Scratch};
 use super::vet::{gate, no_judge};
-use super::{Lock, Locked, Outcome, Target, content_hash, inventory, project_hint, project_inventory, project_root};
+use super::{Lock, Locked, Outcome, Target, content_hash, inventory, project_hint, project_root, scoped_inventory};
 use crate::audit::{self, Backend, Caller, Vet};
 use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
@@ -33,7 +33,8 @@ pub struct Update<'a> {
 /// `mazo update [names…] [--yes] [--force]`: re-clones each git-sourced
 /// store skill (every one when `names` is empty) and, when the copy at its
 /// subpath hashes differently, swaps it into the store and records the new
-/// commit and hash. A skill whose source is not trusted is first re-vetted
+/// commit and hash. A skill whose source is neither on the `trusted` list
+/// nor [`bundled::bundled`], whatever its lock entry says, is first re-vetted
 /// by the judge on the diff from the installed copy ([`gate`]), and refused
 /// (exit 2, with [`no_judge`] once) when no judge is configured; a local-path one is
 /// not updatable. A skill that fails or is refused is left as it was and the
@@ -47,14 +48,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
     let (names, out) = (args.names, args.io);
     let project = if args.project { Some(project_root("update")?) } else { None };
     let target = Target { data, project: project.as_deref() };
-    let with_project;
-    let inv = match &project {
-        Some(p) => {
-            with_project = project_inventory(inv, p)?;
-            &with_project
-        }
-        None => inv,
-    };
+    let inv = &scoped_inventory(inv.clone(), project.as_deref())?;
     let lock = Lock::load(&target.lock_dir())?;
     if let Some(n) = names.iter().find(|n| !lock.skills.iter().any(|l| &l.name == *n)) {
         return Err(Error::Usage(match project {
@@ -98,7 +92,9 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             remote.r#ref = Some(bundled::tag());
         }
         let vet = match &revet {
-            _ if repin || l.trusted || remote.trusted_by(&cfg.trusted) => None,
+            // Re-derived on each run: a lockfile, a project's anyone's commit, grants nothing,
+            // and no project holds a bundled skill.
+            _ if (project.is_none() && bundled::bundled(l)) || remote.trusted_by(&cfg.trusted) => None,
             None => {
                 out.error(&format!(
                     "ERROR: update {}: update refused: {} is not trusted and re-vetting it needs a [judge], \
@@ -171,16 +167,14 @@ fn refresh(
         let _lock = ledger::lock(data)?;
         recover(&to, &old).map_err(crate::at(&old))?;
     }
-    let scratch = Scratch(data.join(format!(".clone-{}", std::process::id())));
+    let (scratch, commit) = remote.clone_in(data, &|| out.cancelled())?;
     let clone = scratch.0.as_path();
-    let _ = fs::remove_dir_all(clone);
-    let commit = remote.clone_into(clone, &|| out.cancelled())?;
     let src = resolved(&clone.join(&remote.subpath), Some(clone))?;
     let (skill_md, files) = checked(&src, &l.name, l.name != remote.name())?;
 
     // Staged under a name of this process's own, so that the judge and the
     // y/N prompt run without the data lock.
-    let staged = store.join(format!(".update-{}-{}", l.name, std::process::id()));
+    let staged = Scratch::new(&store, &format!(".update-{}", l.name));
     let (staged, content_hash) = stage(&src, &files, &skill_md, staged)?;
     if content_hash == l.content_hash && remote.r#ref == l.r#ref {
         return Ok(None);

@@ -107,6 +107,27 @@ fn object(fields: Vec<(&str, Value)>) -> Value {
     json!({"type": "object", "additionalProperties": false, "required": required, "properties": properties})
 }
 
+const FOR_CHARS: usize = 300;
+const TRY_CHARS: usize = 200;
+const TRIES: usize = 3;
+
+/// The `for` and `try` fields both answer schemas end with.
+fn for_try() -> [(&'static str, Value); 2] {
+    [("for", text(FOR_CHARS)), ("try", list(text(TRY_CHARS), TRIES))]
+}
+
+/// The checks on an answer's `for` and `try`. The error says what failed.
+fn check_for_try(r#for: &str, r#try: &[String]) -> std::result::Result<(), String> {
+    let over = |s: &str, max: usize| s.chars().count() > max;
+    if r#for.trim().is_empty() || over(r#for, FOR_CHARS) {
+        return Err(format!("for is empty or over {FOR_CHARS} characters"));
+    }
+    if r#try.len() > TRIES || r#try.iter().any(|t| t.trim().is_empty() || over(t, TRY_CHARS)) {
+        return Err(format!("more than {TRIES} try items, or one empty or over {TRY_CHARS} characters"));
+    }
+    Ok(())
+}
+
 /// A stage's shipped prompt and the JSON schema of its answer.
 pub struct Stage {
     pub prompt: &'static str,

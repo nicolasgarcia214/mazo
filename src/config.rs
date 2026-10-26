@@ -93,9 +93,9 @@ fn cleartext(url: &str) -> bool {
 
 /// The agent mazo audit calls: one of the homes' agents, any CLI that
 /// reads a prompt on stdin and prints its answer, or an OpenAI-compatible
-/// chat completions endpoint.
+/// chat completions endpoint. Config and JSON spell each by its [`name`](Self::name).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(try_from = "String", into = "&'static str")]
 pub enum JudgeAgent {
     #[default]
     Claude,
@@ -103,6 +103,45 @@ pub enum JudgeAgent {
     Pi,
     Command,
     Http,
+}
+
+impl JudgeAgent {
+    /// Every judge agent, in the order `init` tries them.
+    const ALL: [Self; 5] = [Self::Claude, Self::Codex, Self::Pi, Self::Command, Self::Http];
+
+    /// The agent's config name.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Pi => "pi",
+            Self::Command => "command",
+            Self::Http => "http",
+        }
+    }
+
+    /// Whether the agent is one of the homes' agents: a binary of its name,
+    /// so `init` can look for it on `PATH`, configured by `agent` alone.
+    fn home(self) -> bool {
+        !matches!(self, Self::Command | Self::Http)
+    }
+}
+
+impl TryFrom<String> for JudgeAgent {
+    type Error = String;
+
+    fn try_from(name: String) -> std::result::Result<Self, String> {
+        Self::ALL.into_iter().find(|a| a.name() == name).ok_or_else(|| {
+            let names: Vec<String> = Self::ALL.iter().map(|a| format!("`{}`", a.name())).collect();
+            format!("unknown judge agent `{name}`, expected one of {}", names.join(", "))
+        })
+    }
+}
+
+impl From<JudgeAgent> for &'static str {
+    fn from(agent: JudgeAgent) -> Self {
+        agent.name()
+    }
 }
 
 /// Who pays for the judge's calls. Under `Subscription` every call runs
@@ -396,37 +435,27 @@ pub enum InitJudge {
 /// The line `init` prints after the config path: the judge it wrote and
 /// what is left to do before `mazo audit` can use it.
 pub fn init_note(judge: Option<InitJudge>) -> String {
-    let name = |a: JudgeAgent| JUDGE_AGENTS.iter().find(|(_, b)| *b == a).map_or("", |(name, _)| *name);
     match judge {
         Some(InitJudge::Chosen(a @ (JudgeAgent::Command | JudgeAgent::Http))) => format!(
             "the [judge] table for agent = \"{}\" is commented out: fill in its placeholders and uncomment it",
-            name(a)
+            a.name()
         ),
         Some(InitJudge::Chosen(a)) => {
             format!(
                 "judge: {0}, which was not found on PATH or not logged in; log in to {0} before mazo audit",
-                name(a)
+                a.name()
             )
         }
         Some(InitJudge::Detected(JudgeAgent::Pi)) => {
             "judge: pi, found on PATH; mazo cannot check Pi's login, so check that pi -p answers before mazo audit"
                 .into()
         }
-        Some(InitJudge::Detected(a)) => format!("judge: {}", name(a)),
+        Some(InitJudge::Detected(a)) => format!("judge: {}", a.name()),
         None => "no judge: log in to claude, codex or pi and add [judge] agent = \"<agent>\" to the config, \
                  or a command or http judge (see the README)"
             .into(),
     }
 }
-
-/// Each judge agent by its config name, in the order `init` tries them.
-pub const JUDGE_AGENTS: [(&str, JudgeAgent); 5] = [
-    ("claude", JudgeAgent::Claude),
-    ("codex", JudgeAgent::Codex),
-    ("pi", JudgeAgent::Pi),
-    ("command", JudgeAgent::Command),
-    ("http", JudgeAgent::Http),
-];
 
 /// The `[judge]` tables `init` writes commented out, since they are invalid
 /// until filled in.
@@ -447,12 +476,12 @@ fn detect_judge() -> Result<Option<JudgeAgent>> {
         jiff::Timestamp::now().as_nanosecond()
     ));
     DirBuilder::new().mode(0o700).create(&scratch).map_err(crate::at(&scratch))?;
-    let detected = JUDGE_AGENTS[..3].iter().find_map(|&(name, agent)| {
-        let found = std::env::split_paths(&path)
-            .any(|dir| dir.join(name).metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0));
+    let detected = JudgeAgent::ALL.into_iter().filter(|a| a.home()).find(|&agent| {
+        let found = std::env::split_paths(&path).any(|dir| {
+            dir.join(agent.name()).metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        });
         let judge = Judge { agent, ..Judge::default() };
-        (found && crate::audit::backend(&judge, &[]).and_then(|b| b.login(&scratch, &|| false)).is_ok())
-            .then_some(agent)
+        found && crate::audit::backend(&judge, &[]).and_then(|b| b.login(&scratch, &|| false)).is_ok()
     });
     fs::remove_dir_all(&scratch).map_err(crate::at(&scratch))?;
     Ok(detected)
@@ -460,8 +489,8 @@ fn detect_judge() -> Result<Option<JudgeAgent>> {
 
 /// The judge agent named on a line of `input`, asked for on `prompt` until
 /// one is; `None` when `input` ends first.
-pub fn choose_judge(input: &mut dyn BufRead, prompt: &mut dyn Write) -> Result<Option<JudgeAgent>> {
-    let names: Vec<&str> = JUDGE_AGENTS.iter().map(|(name, _)| *name).collect();
+fn choose_judge(input: &mut dyn BufRead, prompt: &mut dyn Write) -> Result<Option<JudgeAgent>> {
+    let names: Vec<&str> = JudgeAgent::ALL.map(JudgeAgent::name).to_vec();
     let ask = |prompt: &mut dyn Write| {
         write!(prompt, "no claude, codex or pi login found; judge for mazo audit [{}]: ", names.join("/"))
             .and_then(|()| prompt.flush())
@@ -473,8 +502,8 @@ pub fn choose_judge(input: &mut dyn BufRead, prompt: &mut dyn Write) -> Result<O
         if input.read_line(&mut answer).map_err(|e| format!("stdin: {e}"))? == 0 {
             return Ok(None);
         }
-        if let Some((_, agent)) = JUDGE_AGENTS.iter().find(|(name, _)| *name == answer.trim()) {
-            return Ok(Some(*agent));
+        if let Ok(agent) = JudgeAgent::try_from(answer.trim().to_string()) {
+            return Ok(Some(agent));
         }
     }
 }
@@ -482,9 +511,7 @@ pub fn choose_judge(input: &mut dyn BufRead, prompt: &mut dyn Write) -> Result<O
 /// The config `init` writes: `judge` as a `[judge]` table, or for `command`
 /// and `http` as a commented-out one to fill in.
 fn config_text(source: Option<String>, homes: Vec<RawHome>, judge: Option<JudgeAgent>) -> Result<String> {
-    let table = judge
-        .filter(|a| !matches!(a, JudgeAgent::Command | JudgeAgent::Http))
-        .map(|agent| Judge { agent, ..Judge::default() });
+    let table = judge.filter(|a| a.home()).map(|agent| Judge { agent, ..Judge::default() });
     let raw = RawConfig {
         source,
         loose: Vec::new(),
@@ -648,7 +675,26 @@ mod tests {
         assert_eq!(judge("[judge]\nagent = \"pi\"\n").unwrap().agent, JudgeAgent::Pi);
         let err = judge("[judge]\nmodel = \"sonnet\"\ntemperature = 1\n").unwrap_err();
         assert!(err.contains("unknown field `temperature`"), "{err}");
-        assert!(judge("[judge]\nagent = \"gemini\"\n").is_err());
+        let err = judge("[judge]\nagent = \"gemini\"\n").unwrap_err();
+        assert!(
+            err.contains("unknown judge agent `gemini`, expected one of `claude`, `codex`, `pi`, `command`, `http`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn judge_agents_read_and_write_by_name() {
+        for agent in JudgeAgent::ALL {
+            let name = agent.name();
+            let toml = format!("agent = \"{name}\"\n");
+            let table = Judge { agent, ..Judge::default() };
+            assert!(toml::to_string(&table).unwrap().starts_with(&toml), "{name}");
+            assert_eq!(toml::from_str::<Judge>(&toml).unwrap().agent, agent, "{name}");
+            assert!(toml::from_str::<Judge>(&toml.replace(name, &name.to_uppercase())).is_err(), "{name}");
+            assert_eq!(serde_json::to_value(agent).unwrap(), name, "{name}");
+        }
+        let homes = JudgeAgent::ALL.into_iter().filter(|a| a.home()).map(JudgeAgent::name);
+        assert!(homes.eq(AGENT_HOMES.map(|(name, _, _)| name)));
     }
 
     #[test]
@@ -822,7 +868,8 @@ mod tests {
 
     #[test]
     fn choose_judge_asks_until_a_line_names_an_agent() {
-        for (name, agent) in JUDGE_AGENTS {
+        for agent in JudgeAgent::ALL {
+            let name = agent.name();
             let mut prompt = Vec::new();
             let chosen = choose_judge(&mut format!("gpt\n\n {name} \n").as_bytes(), &mut prompt).unwrap();
             assert_eq!(chosen, Some(agent), "{name}");
@@ -836,12 +883,11 @@ mod tests {
     fn init_writes_command_and_http_judges_commented_out_until_filled_in() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        for (_, agent) in JUDGE_AGENTS {
+        for agent in JudgeAgent::ALL {
             let text = config_text(None, Vec::new(), Some(agent)).unwrap();
             fs::write(&path, &text).unwrap();
             let judge = load(&path).unwrap().unwrap().judge;
-            let placeholder = matches!(agent, JudgeAgent::Command | JudgeAgent::Http);
-            assert_eq!(judge.map(|j| j.agent), (!placeholder).then_some(agent), "{text}");
+            assert_eq!(judge.map(|j| j.agent), agent.home().then_some(agent), "{text}");
             let commented = text.lines().filter(|l| l.starts_with("# ")).count();
             assert_eq!(commented, [0, 0, 0, 3, 5][agent as usize], "{text}");
             // Uncommented, the placeholders make a valid table of that agent.

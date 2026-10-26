@@ -228,6 +228,36 @@ fn retention_of_seven_days_or_less_always_warns() {
 }
 
 #[test]
+fn settings_local_json_wins_for_the_name_only_rule_and_retention_as_for_ctx() {
+    let fx = fixture();
+    fx.mazo(&["sync"]).assert_ok();
+    let work = fx.home.join(".claude-work");
+    let local = work.join("settings.local.json");
+    fs::write(work.join("settings.json"), "{}").unwrap();
+    let mut settings: serde_json::Value = serde_json::from_str(&fx.valid_settings()).unwrap();
+    settings["cleanupPeriodDays"] = 60.into();
+    fs::write(&local, settings.to_string()).unwrap();
+    write_coverage(&fx, &[("claude", 0), ("claude-work", 40)]);
+    let r = fx.mazo(&["status"]);
+    r.assert_ok();
+    assert_eq!(r.stderr(), "", "name-only and 60 days come from settings.local.json");
+    let usage: serde_json::Value = serde_json::from_str(&fx.mazo(&["usage", "--all", "--json"]).stdout()).unwrap();
+    let row = usage["rows"].as_array().unwrap().iter().find(|r| r["skill"] == fx.skills[0].as_str()).unwrap();
+    assert_eq!(row["ctx"]["claude"], "name-only", "{row}");
+
+    settings["skillOverrides"][&fx.skills[0]] = "on".into();
+    fs::write(&local, settings.to_string()).unwrap();
+    let r = fx.mazo(&["status"]);
+    assert_eq!(r.code(), 1);
+    let needle = format!(
+        "ERROR: {}: skillOverrides must set every skill to name-only:\n  \"{}\": \"name-only\"\n",
+        local.display(),
+        fx.skills[0]
+    );
+    assert!(r.stderr().contains(&needle), "the file to edit is the one whose value wins: {}", r.stderr());
+}
+
+#[test]
 fn a_description_of_only_python_whitespace_is_rejected() {
     let fx = fixture();
     let skill = fx.source.join(&fx.skills[0]).join("SKILL.md");

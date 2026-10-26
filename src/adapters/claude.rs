@@ -18,7 +18,8 @@ use crate::tail::Chunk;
 
 pub struct Claude;
 
-const BASE_DIR: &str = "Base directory for this skill: ";
+/// The line opening a loaded skill's body, before `: DIR`.
+pub const MARKER: &str = "Base directory for this skill";
 const TOOLS: ToolNames =
     ToolNames { block: "tool_use", input: "input", read: "Read", path: "file_path", shell: "Bash" };
 
@@ -163,7 +164,7 @@ fn base_dir(content: &Value) -> Option<&str> {
         _ => Box::new(blocks(content).filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str())),
     };
     texts
-        .filter_map(|t| t.strip_prefix(BASE_DIR))
+        .filter_map(|t| t.strip_prefix(MARKER)?.strip_prefix(": "))
         .map(|rest| rest.split('\n').next().unwrap_or_default().trim())
         .find(|d| !d.is_empty())
 }

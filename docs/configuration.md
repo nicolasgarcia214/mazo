@@ -107,8 +107,9 @@ One table per agent home, with a `name`, an `agent` (`claude`, `codex` or
 
 Lists the owners (`owner`, meaning every repository of that owner) and
 repositories (`owner/repo`) whose skills `mazo add` installs without
-[vetting](installing-skills.md#vetting-a-skill). A config without `trusted`
-trusts no source other than `source`.
+[vetting](installing-skills.md#vetting-a-skill), and `mazo update` updates
+without re-vetting. A config without `trusted` trusts no source other than
+`source`.
 
 - An entry whose first segment has no `.` is on GitHub: `me` trusts
   `https://github.com/Me/skills.git` and no other host.
@@ -157,7 +158,7 @@ them. `authoring_skills` is empty by default.
 |---|---|
 | `no_disable_model_invocation` | When on, a `SKILL.md` must omit `disable-model-invocation`. |
 | `codex_manifest` | When on, each skill needs `agents/openai.yaml` with `policy.allow_implicit_invocation: false`, and `mazo new` writes one. |
-| `claude_name_only` | When on, each Claude home's `settings.json` must set every skill to `name-only` in `skillOverrides`, and `mazo new` prints the line to add. |
+| `claude_name_only` | When on, each Claude home must set every skill to `name-only` in `skillOverrides`, `settings.local.json` winning over `settings.json` per skill, and `mazo new` prints the line to add. |
 | `authoring_skills` | A list of skills. mazo tags a read in a session that loaded one as authoring (see [how accurate the counts are](usage-tracking.md#how-accurate-the-counts-are)). |
 
 ## `[judge]`
@@ -244,7 +245,7 @@ subpath = "skills/theirs"         # its directory inside origin; "." for origin 
 ref = "main"                      # the branch, tag or commit cloned; none for the default branch
 commit = "9fceb02…"               # the commit cloned; local paths have none
 content_hash = "3f2a…"            # SHA-1 of its sorted relative paths and file contents
-trusted = true
+trusted = true                    # installed without vetting; update ignores it
 installed_at = "2026-10-21T12:00:00Z"
 ```
 

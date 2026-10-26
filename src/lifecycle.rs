@@ -318,8 +318,10 @@ pub fn retire(
     // The homes' settings name only global skills.
     if cfg.policy.claude_name_only && project.is_none() {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
-            if let Some(v) = policy::settings(h).ok().and_then(|s| s["skillOverrides"].get(name).cloned()) {
-                out.push(format!("{} can drop:\n  \"{name}\": {v}", h.settings().display()));
+            for (path, settings) in policy::settings(h) {
+                if let Some(v) = settings.ok().and_then(|s| s.get("skillOverrides")?.get(name).cloned()) {
+                    out.push(format!("{} can drop:\n  \"{name}\": {v}", path.display()));
+                }
             }
         }
     }
@@ -329,11 +331,10 @@ pub fn retire(
 /// The inventory `retire` reads, with the project's skills under `project`,
 /// and the root of the skill `name` in it.
 fn located(cfg: &Config, data: &Path, name: &str, project: Option<&Path>) -> Result<(Inventory, PathBuf)> {
-    let mut inv = store::inventory(cfg.source.as_deref(), data)?;
+    let inv = store::scoped_inventory(store::inventory(cfg.source.as_deref(), data)?, project)?;
     let root = match project {
         // The global store may hold a skill of the same name, ahead of it.
         Some(p) => {
-            inv = store::project_inventory(&inv, p)?;
             let store = store::project_dir(p);
             let roots = inv.origins.get(name).into_iter().flatten();
             let Some(root) = roots.into_iter().find(|r| **r == store) else {

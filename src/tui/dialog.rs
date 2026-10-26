@@ -34,8 +34,9 @@ pub(super) enum Ask {
     Audit(String),
     /// Starts the job: one store skill, or every one.
     Update(Option<String>),
-    /// Stops the running job and quits.
-    Quit,
+    /// Stops the running job and quits; any other key reopens the dialog
+    /// it interrupted, still unanswered.
+    Quit(Option<Box<Dialog>>),
     /// The add source typed so far; Enter starts the job, Esc cancels.
     Source(String),
     /// The add job's picker; its selection, none when cancelled, is the reply.
@@ -192,7 +193,7 @@ impl Dialog {
             Some(Ask::Act(Act::Sync(_))) => ("sync", theme::ACCENT),
             Some(Ask::Audit(_)) => ("audit", theme::ACCENT),
             Some(Ask::Update(_)) => ("update", theme::ACCENT),
-            Some(Ask::Quit) => ("quit", theme::BAD),
+            Some(Ask::Quit(_)) => ("quit", theme::BAD),
             Some(Ask::Source(_) | Ask::Pick(..)) => ("add", theme::ACCENT),
             Some(Ask::Answer(..)) => ("confirm", theme::WARN),
             Some(Ask::Help(_)) => ("help", theme::ACCENT),
