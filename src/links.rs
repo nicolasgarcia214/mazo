@@ -236,7 +236,13 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         if !exists {
             continue;
         }
-        let Ok(dir) = fs::read_dir(&t.dir) else { continue };
+        let dir = match fs::read_dir(&t.dir) {
+            Ok(dir) => dir,
+            Err(e) => {
+                plan.conflicts.push((t.home.clone(), format!("ERROR: {}", crate::at(&t.dir)(e))));
+                continue;
+            }
+        };
         let mut others: Vec<PathBuf> = dir
             .flatten()
             .map(|e| e.path())

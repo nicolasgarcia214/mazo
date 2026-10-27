@@ -4,6 +4,7 @@
 mod common;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
 use common::sync::*;
 
@@ -354,4 +355,21 @@ fn sync_waits_for_the_data_lock_but_a_dry_run_does_not() {
     drop(held);
     assert!(sync.wait().unwrap().success());
     assert_eq!(names(&fx.target), fx.skills);
+}
+
+/// A skills dir that cannot be listed is an error, never a clean home.
+#[test]
+fn an_unlistable_skills_dir_fails_status() {
+    let fx = fixture();
+    fx.mazo(&["sync"]).assert_ok();
+    let skills = fx.home.join(".claude/skills");
+    fs::set_permissions(&skills, fs::Permissions::from_mode(0o311)).unwrap();
+    let listable = fs::read_dir(&skills).is_ok(); // true when running as root
+    let r = fx.mazo(&["status"]);
+    fs::set_permissions(&skills, fs::Permissions::from_mode(0o755)).unwrap();
+    if !listable {
+        assert_eq!(r.code(), 1, "{}", r.stdout());
+        assert!(r.stderr().contains(&format!("ERROR: {}: ", skills.display())), "{}", r.stderr());
+        assert!(!r.stdout().starts_with("claude: in sync"), "{}", r.stdout());
+    }
 }
