@@ -521,7 +521,7 @@ fn cmd_status(
     if json {
         let row = |e: &links::Entry| {
             let (state, error) = (e.state.label(), e.state.is_error());
-            serde_json::json!({"home": e.home, "path": e.path, "state": state, "error": error, "scope": e.scope})
+            serde_json::json!({"home": e.home, "path": e.path.to_string_lossy(), "state": state, "error": error, "scope": e.scope})
         };
         let entries: Vec<serde_json::Value> = drift.iter().map(|e| row(e)).collect();
         let bare = |e: &String| render::unprefixed(e).to_string();

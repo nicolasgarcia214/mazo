@@ -4,6 +4,7 @@
 mod common;
 
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 
 use common::sync::*;
@@ -372,4 +373,15 @@ fn an_unlistable_skills_dir_fails_status() {
         assert!(r.stderr().contains(&format!("ERROR: {}: ", skills.display())), "{}", r.stderr());
         assert!(!r.stdout().starts_with("claude: in sync"), "{}", r.stdout());
     }
+}
+
+/// A foreign name that is not UTF-8 does not break `status --json`.
+#[test]
+fn status_json_reports_a_name_that_is_not_utf8() {
+    let fx = fixture();
+    fx.mazo(&["sync"]).assert_ok();
+    fs::create_dir(fx.home.join(std::ffi::OsStr::from_bytes(b".claude/skills/bad\xff"))).unwrap();
+    let r = fx.mazo(&["status", "--json"]);
+    r.assert_ok();
+    assert!(r.stdout().contains("bad\u{fffd}"), "{}", r.stdout());
 }
