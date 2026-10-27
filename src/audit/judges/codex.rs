@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use super::{RESULT_FILE, Reply, SCHEMA_FILE, Subprocess, exited};
 use crate::audit::Stage;
+use crate::render::PathExt;
 use crate::{Error, Result};
 
 pub struct Codex {
@@ -60,7 +61,7 @@ impl Subprocess for Codex {
 
     /// The user's `auth.json` must hold a ChatGPT login.
     fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
-        let path = self.auth.display();
+        let path = self.auth.inert();
         let unread = |why: String| {
             Error::Usage(format!(
                 "{path}: {why}; the Codex judge needs a ChatGPT login: run codex login, or set billing = \"api\" under [judge]"
@@ -81,7 +82,7 @@ impl Subprocess for Codex {
     fn scratch(&self, data: &Path) -> Result<Option<(&'static str, PathBuf)>> {
         let home = home(data);
         if !self.auth.exists() {
-            return Err(format!("{}: no Codex login for the Codex judge", self.auth.display()).into());
+            return Err(format!("{}: no Codex login for the Codex judge", self.auth.inert()).into());
         }
         fs::remove_dir_all(&home)
             .or_else(|e| if e.kind() == ErrorKind::NotFound { Ok(()) } else { Err(e) })
@@ -97,6 +98,6 @@ impl Subprocess for Codex {
     }
 
     fn shown(&self, data: &Path, argv: &str) -> String {
-        format!("CODEX_HOME={} {argv} < <prompt + input>", home(data).display())
+        format!("CODEX_HOME={} {argv} < <prompt + input>", home(data).inert())
     }
 }

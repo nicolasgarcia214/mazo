@@ -9,6 +9,7 @@ use std::process::{Command, ExitCode, Stdio};
 use crate::config::Config;
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent};
+use crate::render::PathExt;
 use crate::{Error, Result, outln};
 use crate::{links, policy, report, scan, store, yaml};
 
@@ -30,12 +31,12 @@ pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Resu
     checked.map_err(|e| Error::Usage(format!("new {name}: {e}")))?;
     let source = cfg.need_source("new")?;
     if let Some(root) = inv.root(name).filter(|r| *r != source) {
-        return Err(format!("new refused: {} already exists", root.join(name).display()).into());
+        return Err(format!("new refused: {} already exists", root.join(name).inert()).into());
     }
     let dir = source.join(name);
     match std::fs::create_dir(&dir) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(format!("new refused: {} already exists", dir.display()).into());
+            return Err(format!("new refused: {} already exists", dir.inert()).into());
         }
         r => r.map_err(crate::at(&dir))?,
     }
@@ -50,11 +51,11 @@ pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Resu
         let parent = path.parent().unwrap_or(&dir);
         std::fs::create_dir_all(parent).map_err(crate::at(parent))?;
         std::fs::write(&path, text).map_err(crate::at(&path))?;
-        outln!("wrote {}", path.display());
+        outln!("wrote {}", path.inert());
     }
     if cfg.policy.claude_name_only {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
-            outln!("{}: add to skillOverrides: \"{name}\": \"name-only\"", h.settings().display());
+            outln!("{}: add to skillOverrides: \"{name}\": \"name-only\"", h.settings().inert());
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -87,27 +88,27 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
     let archive = source.join(".archive");
     let names = match name {
         Some(n) if is_entry(&archive, n) => vec![n.to_string()],
-        Some(n) => return Err(Error::Usage(format!("{n} is not in {}", archive.display()))),
+        Some(n) => return Err(Error::Usage(format!("{n} is not in {}", archive.inert()))),
         None => entries(&archive),
     };
     if !yes && !tty {
         return Err(Error::Usage("prune deletes permanently; pass --yes when stdin is not a terminal".into()));
     }
     if names.is_empty() {
-        outln!("nothing to prune in {}", archive.display());
+        outln!("nothing to prune in {}", archive.inert());
         return Ok(ExitCode::SUCCESS);
     }
     if !force {
         let unsaved = unsaved(source, &names)?;
         if !unsaved.is_empty() {
             for f in &unsaved {
-                eprintln!("{f}: content is in no HEAD path");
+                eprintln!("{}: content is in no HEAD path", crate::render::inert_line(f));
             }
             return Err("prune refused: that work exists nowhere else; commit it or pass --force".into());
         }
     }
     for n in &names {
-        outln!("delete {}", archive.join(n).display());
+        outln!("delete {}", archive.join(n).inert());
     }
     if !yes {
         eprint!("delete {} permanently? [y/N] ", crate::render::count(names.len(), "archived skill"));
@@ -311,7 +312,7 @@ pub fn retire(
             } else {
                 std::fs::rename(&from, to).map_err(crate::at(&from))?;
             }
-            links::apply_after(vec![format!("archived  {} -> {}", from.display(), to.display())], &plan)?
+            links::apply_after(vec![format!("archived  {} -> {}", from.inert(), to.inert())], &plan)?
         }
         None => target.remove(&from, name, &plan)?,
     };
@@ -320,7 +321,7 @@ pub fn retire(
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
             for (path, settings) in policy::settings(h) {
                 if let Some(v) = settings.ok().and_then(|s| s.get("skillOverrides")?.get(name).cloned()) {
-                    out.push(format!("{} can drop:\n  \"{name}\": {v}", path.display()));
+                    out.push(format!("{} can drop:\n  \"{name}\": {v}", path.inert()));
                 }
             }
         }
@@ -362,7 +363,7 @@ fn located(cfg: &Config, data: &Path, name: &str, project: Option<&Path>) -> Res
 fn archive(cfg: &Config, root: &Path, name: &str) -> Result<Option<PathBuf>> {
     let to = (cfg.source.as_deref() == Some(root)).then(|| root.join(".archive").join(name));
     if let Some(to) = to.as_ref().filter(|t| t.symlink_metadata().is_ok()) {
-        return Err(format!("retire refused: {} already exists", to.display()).into());
+        return Err(format!("retire refused: {} already exists", to.inert()).into());
     }
     Ok(to)
 }

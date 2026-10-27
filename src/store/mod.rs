@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use crate::audit::{self, Caller};
 use crate::config::{self, Config, Home};
 use crate::inventory::Inventory;
+use crate::render::PathExt;
 use crate::{Error, Result};
 use crate::{ledger, links};
 
@@ -240,7 +241,7 @@ impl Target<'_> {
         }
         Lock::remove(&self.lock_dir(), name)?;
         fs::remove_dir_all(from).map_err(crate::at(from))?;
-        out.push(format!("removed   {}", from.display()));
+        out.push(format!("removed   {}", from.inert()));
         Ok(out)
     }
 
@@ -259,7 +260,7 @@ fn unclaimed(paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
     match paths.into_iter().find(|p| p.symlink_metadata().is_ok()) {
         Some(p) => Err(Error::Usage(format!(
             "add refused: {} already exists; pass --as <name> to install it under another name",
-            p.display()
+            p.inert()
         ))),
         None => Ok(()),
     }
@@ -398,9 +399,9 @@ fn install(
     }
     // Recorded: the next skill of this add is vetted beside this one.
     *inv = with;
-    out.line(&format!("installed {}", to.display()));
+    out.line(&format!("installed {}", to.inert()));
     for link in made {
-        out.line(&format!("linked    {}", link.display()));
+        out.line(&format!("linked    {}", link.inert()));
     }
     for line in links::apply(&plan)? {
         out.line(&line);

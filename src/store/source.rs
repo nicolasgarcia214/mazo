@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use crate::render::PathExt;
 use crate::{Error, Result};
 use crate::{audit, config};
 
@@ -163,7 +164,7 @@ impl Remote {
         let r#ref = match found {
             Some(name) => name.to_string(),
             None if is_commit(guess) => guess.clone(),
-            None => return Err(format!("{}: no branch or tag starts {}", self.url, tail.display()).into()),
+            None => return Err(format!("{}: no branch or tag starts {}", self.url, tail.inert()).into()),
         };
         self.subpath = tail.strip_prefix(&r#ref).expect("the ref starts the tail").to_path_buf();
         (self.r#ref, self.browsed) = (Some(r#ref), false);

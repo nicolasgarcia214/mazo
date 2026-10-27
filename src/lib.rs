@@ -11,6 +11,8 @@
 //!
 //! The TUI draws the read path's report and runs the CLI's own code for its actions.
 
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 pub mod adapters;
 pub mod audit;
 pub mod classify;
@@ -81,7 +83,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// The error of a step on `p`: `<p>: <error>`. The path is
 /// [`inert`](render::inert), since a skill's author or a transcript may name it.
 pub fn at<E: std::fmt::Display>(p: &std::path::Path) -> impl Fn(E) -> String + Copy {
-    move |e| format!("{}: {e}", render::inert(&p.display().to_string()))
+    move |e| format!("{}: {e}", render::PathExt::inert(p))
 }
 
 /// Writes `args` to stdout. A reader that closed it early, as `head` does,

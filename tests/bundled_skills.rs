@@ -2,6 +2,8 @@
 //! checks and keep their reports under `evals_dir`, never in dot directories
 //! of a skills root.
 
+#![allow(clippy::disallowed_methods)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

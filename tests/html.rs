@@ -1,5 +1,7 @@
 //! The self-contained HTML report.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::BTreeSet;

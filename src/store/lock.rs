@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::source::{Remote, Scratch, Source};
 use crate::Result;
 use crate::audit::VetVerdict;
+use crate::render::PathExt;
 use crate::{ledger, policy, yaml};
 
 /// `<data dir>/mazo.lock`, or a project's: one `[[skill]]` per installed skill.
@@ -126,7 +127,7 @@ pub(super) fn resolved(src: &Path, clone: Option<&Path>) -> std::result::Result<
     if let Some(clone) = clone
         && !src.starts_with(fs::canonicalize(clone).map_err(crate::at(clone))?)
     {
-        return Err(format!("{} leaves the repository", crate::render::inert(&src.display().to_string())));
+        return Err(format!("{} leaves the repository", src.inert()));
     }
     Ok(src)
 }
@@ -160,7 +161,7 @@ pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: Scrat
         if ft.is_dir() {
             fs::create_dir(&dest).map_err(crate::at(&dest))
         } else if !ft.is_file() {
-            Err(format!("{} is not a regular file or directory", crate::render::inert(&from.display().to_string())))
+            Err(format!("{} is not a regular file or directory", from.inert()))
         } else if rel == Path::new("SKILL.md") {
             fs::write(&dest, skill_md).map_err(crate::at(&dest))
         } else {
@@ -239,7 +240,7 @@ fn tree(root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
             if ft.is_dir() {
                 stack.push(path.clone());
             } else if !ft.is_file() {
-                let path = crate::render::inert(&e.path().display().to_string());
+                let path = e.path().inert().to_string();
                 return Err(format!("{path} is not a regular file or directory"));
             }
             out.push(path);

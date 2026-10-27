@@ -1,5 +1,7 @@
 //! Lifecycle commands end to end: `new`, `retire`, `prune`.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::fs;

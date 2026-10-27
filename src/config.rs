@@ -10,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::ledger::Agent;
+use crate::render::PathExt;
 use crate::{Error, Result};
 
 /// The `context_window` of a config that sets none.
@@ -371,14 +372,14 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
 /// Refuses to overwrite, before detecting or asking, and warns on stderr
 /// when it finds no home.
 pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -> Result<Option<InitJudge>> {
-    let exists = || format!("{} exists; not overwriting it", path.display());
+    let exists = || format!("{} exists; not overwriting it", path.inert());
     if path.symlink_metadata().is_ok() {
         return Err(exists().into());
     }
     let source = match source {
         Some(source) => {
             let abs = source_dir(source).map_err(|e| Error::Usage(format!("--source {e}")))?;
-            Some(abs.to_str().ok_or_else(|| format!("{}: not UTF-8", abs.display()))?.to_string())
+            Some(abs.to_str().ok_or_else(|| format!("{}: not UTF-8", abs.inert()))?.to_string())
         }
         None => None,
     };
@@ -421,7 +422,7 @@ const AGENT_HOMES: [(&str, Agent, &str); 3] =
 
 /// How to give the config at `path` a home.
 pub fn add_home(path: &Path) -> String {
-    format!("add a [[home]] table with name, agent and path to {}", path.display())
+    format!("add a [[home]] table with name, agent and path to {}", path.inert())
 }
 
 /// The judge `init` wrote: one it found on `PATH` and, but for Pi, logged in;

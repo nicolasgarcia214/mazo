@@ -202,7 +202,7 @@ impl Classifier<'_> {
             path: inert(raw.path),
             cwd: inert(cwd),
             authoring,
-            src: crate::render::inert(&format!("{}:{}", file.display(), raw.line)),
+            src: crate::render::inert(&format!("{}:{}", file.to_string_lossy(), raw.line)),
         })
     }
 

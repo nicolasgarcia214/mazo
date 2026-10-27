@@ -3,6 +3,8 @@
 //! `update` of git-sourced store skills, re-vetted when untrusted,
 //! `retire` of a store skill, and each of them with `--project`.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::fs;
@@ -182,6 +184,20 @@ fn as_installs_under_another_name_and_rewrites_the_name() {
     let r = add(&fx, &[&s(&dir), "--as", "Bad_Name", "--trust"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
     assert_eq!(fx.snapshot(), before);
+}
+
+/// A source's author names its skill directories, so a newline in one forges
+/// no line of the usage error that lists them.
+#[test]
+fn a_skill_directory_name_forges_no_line_of_the_usage_error() {
+    let (fx, _) = fixture();
+    let pack = fx.root.join("pack");
+    for name in ["a", "b\nforged: line"] {
+        common::write(&pack.join(name).join("SKILL.md"), "---\nname: x\ndescription: X.\n---\n");
+    }
+    let r = add(&fx, &[pack.to_str().unwrap(), "--skill", "nope", "--trust"]);
+    assert_eq!(r.code(), 2, "{}", r.stderr());
+    assert!(r.stderr().contains("the skills here are: a, b\u{fffd}forged: line"), "{}", r.stderr());
 }
 
 /// The no-judge refusal names the two judges any setup can configure and

@@ -1,6 +1,8 @@
 //! Ingest properties, run against temporary
 //! Claude homes built from the real fixtures in `tests/fixtures/claude`.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -902,19 +904,54 @@ fn transcript_controls_reach_no_text_report() {
         .to_string()
     };
     let unslop = env.cfg.homes[0].skills_dir().join("unslop");
+    let command = format!("awk 'NR<5' {}/SKILL.md; echo \x1b]0;pwned\x07\u{202e}\nforged: line", unslop.display());
+    let unparsed = serde_json::json!({
+        "type": "assistant", "uuid": "a3", "timestamp": ts, "sessionId": "c0de0000-0000-4000-8000-000000000002",
+        "cwd": "/home/u/proj", "version": "2.1.292", "isSidechain": false, "entrypoint": "cli",
+        "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": command}}
+        ]}
+    });
+    // The prompt behind a load is shown as the skill's example.
+    let prompt = serde_json::json!({
+        "type": "user", "uuid": "p1", "timestamp": ts, "sessionId": "c0de0000-0000-4000-8000-000000000002",
+        "cwd": "/home/u/proj", "version": "2.1.292", "isSidechain": false, "entrypoint": "cli",
+        "message": {"role": "user", "content": "please run the unslop skill \x1b]0;pwned\x07 \u{202e}on this draft"}
+    });
     let lines = [
         meta("u1", "/home/u/proj", "/evil/\x1b[31mred"),
-        meta("u2", "/home/u/\x1b]0;pwned\x07proj", unslop.to_str().unwrap()),
+        prompt.to_string(),
+        meta("u2", "/home/u/\x1b]0;pwned\x07proj\nforged: line", unslop.to_str().unwrap()),
+        unparsed.to_string(),
     ];
-    env.put("controls.jsonl", format!("{}\n", lines.join("\n")).as_bytes());
+    env.put("controls\nforged: line.jsonl", format!("{}\n", lines.join("\n")).as_bytes());
+    // A transcript's own name: one trips the canary, one cannot be read.
+    env.put("canary\x1b]0;pwned\x07\u{202e}\nforged: line.jsonl", b"{\"text\": \"Base directory for this skill\"}\n");
+    let unreadable = env.transcript("io\x1b]0;pwned\x07\u{202e}\nforged: line.jsonl");
+    fs::write(&unreadable, "").unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
     let xdg = env.tmp.path().join("xdg");
-    for args in [&["usage", "--all"][..], &["show", "unslop"]] {
+    for args in [&["scan", "--report"][..], &["usage", "--all"], &["show", "unslop"]] {
         let out = env.cli(&xdg).args(args).output().unwrap();
         assert!(out.status.success(), "{args:?}: {}", stderr(&out));
-        let stdout = String::from_utf8(out.stdout).unwrap();
+        let (stdout, stderr) = (common::stdout(&out), stderr(&out));
         assert!(stdout.contains('\u{fffd}'), "{args:?} shows no transcript field: {stdout}");
-        assert!(!stdout.contains('\x1b') && !stdout.contains('\x07'), "{args:?}: {stdout:?}");
+        for text in [&stdout, &stderr] {
+            assert!(!text.contains(['\x1b', '\x07', '\u{202e}']), "{args:?}: {text:?}");
+            assert!(!text.lines().any(|l| l.starts_with("forged")), "{args:?}: {text:?}");
+        }
+        if args[0] == "scan" {
+            assert!(stdout.contains("canary: 1 file"), "{stdout}");
+        }
+        if args[0] == "show" {
+            assert!(stdout.contains("please run the unslop skill \u{fffd}]0;pwned"), "{stdout}");
+        }
     }
+    // JSON keeps a sample's newline, escaped, and replaces only the controls.
+    let out = env.cli(&xdg).args(["scan", "--reparse", "--json"]).output().unwrap();
+    let json = common::stdout(&out);
+    assert!(json.contains("echo \u{fffd}]0;pwned\u{fffd}\u{fffd}\\nforged: line"), "{json}");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
 }
 
 /// The session of every event read from a chain's child transcript.

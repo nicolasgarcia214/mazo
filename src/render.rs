@@ -2,6 +2,7 @@
 //! timestamps and status colours.
 
 use std::ffi::OsStr;
+use std::path::Path;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -130,6 +131,34 @@ pub fn inert(text: &str) -> String {
         .collect()
 }
 
+/// `text` [`inert`] and on one line: newline and tab go too, so a name cannot
+/// forge a line of the output it is shown in.
+pub fn inert_line(text: &str) -> String {
+    inert(text).replace(['\n', '\t'], "\u{fffd}")
+}
+
+/// A path as shown to a person: [`inert_line`], since a skill, a transcript or
+/// another installer may name it. `Path::display` is banned (`clippy.toml`)
+/// so that every shown path goes through here.
+pub struct InertPath<'a>(&'a Path);
+
+impl std::fmt::Display for InertPath<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.pad(&inert_line(&self.0.to_string_lossy()))
+    }
+}
+
+/// [`InertPath`] as a method, in place of `display`.
+pub trait PathExt {
+    fn inert(&self) -> InertPath<'_>;
+}
+
+impl PathExt for Path {
+    fn inert(&self) -> InertPath<'_> {
+        InertPath(self)
+    }
+}
+
 /// `value` with every string in it, keys too, [`inert`]: a judge's answer, or
 /// a lockfile anyone can commit.
 pub fn inert_value(value: serde_json::Value) -> serde_json::Value {
@@ -180,6 +209,12 @@ mod tests {
             "evil\u{fffd}gpj.sh\u{fffd}\u{fffd}\u{fffd}x\u{fffd}\u{fffd}"
         );
         assert_eq!(inert("👨\u{200d}👩 خانه\u{200c}ها"), "👨\u{200d}👩 خانه\u{200c}ها");
+    }
+
+    #[test]
+    fn inert_line_and_a_shown_path_keep_to_one_line() {
+        assert_eq!(inert_line("a\tb\nc\x1b\u{202e}é"), "a\u{fffd}b\u{fffd}c\u{fffd}\u{fffd}é");
+        assert_eq!(format!("[{:<6}]", Path::new("x\ny").inert()), "[x\u{fffd}y   ]");
     }
 
     #[test]

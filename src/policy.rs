@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{Config, Home, Policy};
 use crate::inventory::Inventory;
 use crate::ledger::{Agent, Coverage};
+use crate::render::PathExt;
 use crate::yaml::{self, Yaml};
 
 /// Per-skill rules, always-on then the configured ones: run on every `sync`
@@ -14,13 +15,13 @@ use crate::yaml::{self, Yaml};
 pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
     // Without a source the user's own skill set is empty by design.
     if let (true, Some(source)) = (inv.skills.is_empty(), &cfg.source) {
-        return vec![format!("ERROR: no canonical skills found in {}", source.display())];
+        return vec![format!("ERROR: no canonical skills found in {}", source.inert())];
     }
     inv.origins
         .iter()
         .filter_map(|(name, roots)| {
             let dir = roots[0].join(name);
-            check_skill(&cfg.policy, &dir, name).err().map(|e| format!("ERROR: {}: {e}", dir.display()))
+            check_skill(&cfg.policy, &dir, name).err().map(|e| format!("ERROR: {}: {e}", dir.inert()))
         })
         .collect()
 }
@@ -93,7 +94,7 @@ fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
     }
     let profile = home.settings();
     if !profile.exists() {
-        return vec![format!("ERROR: {}: no Claude settings profile", home.path.display())];
+        return vec![format!("ERROR: {}: no Claude settings profile", home.path.inert())];
     }
     let (overrides, errors) = overrides(home);
     if !errors.is_empty() {
@@ -109,7 +110,7 @@ fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
     }
     let error = |(path, skills): (&Path, Vec<&String>)| {
         let entries: Vec<String> = skills.iter().map(|s| format!("  \"{s}\": \"name-only\"")).collect();
-        format!("ERROR: {}: skillOverrides must set every skill to name-only:\n{}", path.display(), entries.join(",\n"))
+        format!("ERROR: {}: skillOverrides must set every skill to name-only:\n{}", path.inert(), entries.join(",\n"))
     };
     missing.into_iter().map(error).collect()
 }
@@ -146,7 +147,7 @@ pub fn overrides(home: &Home) -> (BTreeMap<String, (PathBuf, serde_json::Value)>
         };
         match set {
             Ok(set) => values.extend(set.into_iter().map(|(skill, v)| (skill, (path.clone(), v)))),
-            Err(e) => errors.push(format!("ERROR: {}: {e}", path.display())),
+            Err(e) => errors.push(format!("ERROR: {}: {e}", path.inert())),
         }
     }
     (values, errors)

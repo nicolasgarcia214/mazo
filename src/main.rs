@@ -8,6 +8,7 @@ use mazo::config::{self, Config, Home};
 use mazo::inventory::{Inventory, Scope};
 use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::lifecycle::{self, Retired};
+use mazo::render::PathExt;
 use mazo::report::{self, Since, UsageArgs};
 use mazo::{Error, audit, evals, html, links, out, outln, policy, render, scan, store, tui};
 
@@ -255,7 +256,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             let ask = stdin.is_terminal().then_some(&mut stdin as &mut dyn std::io::BufRead);
             config::init(&path, source.as_deref(), ask)?
         };
-        outln!("wrote {}", path.display());
+        outln!("wrote {}", path.inert());
         outln!("{}", config::init_note(judge));
         if *no_skills {
             return Ok(ExitCode::SUCCESS);
@@ -267,7 +268,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let Some(cfg) = config::load(&path)? else {
         return Err(Error::Usage(format!(
             "no config at {}; run mazo init (--source <skills dir> for your own skills)",
-            path.display()
+            path.inert()
         )));
     };
     let data = config::data_dir()?;
@@ -281,7 +282,7 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let no_color = std::env::var_os("NO_COLOR");
     let tty = render::colour(std::io::stdout().is_terminal(), no_color.as_deref());
     if matches!(cmd, Cmd::Status { .. } | Cmd::Sync { .. }) && cfg.homes.is_empty() {
-        return Err(Error::Failed(format!("{} names no home; {}", path.display(), config::add_home(&path))));
+        return Err(Error::Failed(format!("{} names no home; {}", path.inert(), config::add_home(&path))));
     }
     match cmd {
         Cmd::Scan { reparse, report, json } => cmd_scan(&cfg, &inv, &data, reparse, report, json),
@@ -301,7 +302,10 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
         Cmd::Evals { cmd: EvalsCmd::Dir { skill } } => {
             report::check_skill(&inv, &skill)?;
             let [grades, retros] = evals::dirs(&cfg.evals_dir, &skill);
-            outln!("grades\t{}\nretros\t{}", grades.display(), retros.display());
+            // Skills read these lines as the directories to write into, so they stay raw.
+            #[allow(clippy::disallowed_methods)]
+            let (grades, retros) = (grades.display(), retros.display());
+            outln!("grades\t{grades}\nretros\t{retros}");
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, &data, since, out, open),
@@ -419,10 +423,10 @@ fn cmd_report(
     let code = with_scanned(cfg, inv, data, |input| {
         let page = html::render(&report::report(input, since));
         html::write(&path, &page)?;
-        Ok(format!("wrote {}\n", path.display()))
+        Ok(format!("wrote {}\n", path.inert()))
     })?;
     if out.is_some() && html::in_worktree(&path) {
-        eprintln!("warning: {} is inside a git worktree; the report shows cwds and prompt excerpts", path.display());
+        eprintln!("warning: {} is inside a git worktree; the report shows cwds and prompt excerpts", path.inert());
     }
     if open {
         html::open(&path)?;
@@ -470,12 +474,12 @@ fn cmd_scan(
             outln!("  lines that are not JSON in this scan: {}", h.malformed);
             outln!("  skill loads with a bad timestamp in this scan: {}", h.bad_timestamps);
             for s in &h.unparsed_samples {
-                outln!("    {s}");
+                outln!("    {}", render::inert_line(s));
             }
             if !h.canary.is_empty() {
                 outln!("  canary: {} with a skill marker and no event", render::count(h.canary.len(), "file"));
                 for f in h.canary.iter().take(5) {
-                    outln!("    {f}");
+                    outln!("    {}", render::inert_line(f));
                 }
             }
         }
@@ -544,7 +548,7 @@ fn cmd_status(
                 outln!("{}: in sync ({}{foreign})", h.name, render::count(inv.skills.len(), "skill"));
             }
             for e in errors.into_iter().chain(info) {
-                outln!("{}: {} {}", e.home, name(e), e.state.finding());
+                outln!("{}: {} {}", e.home, render::inert_line(&name(e)), e.state.finding());
             }
         }
         for skill in inv.project.iter().flat_map(|p| &p.skills) {

@@ -1,0 +1,4 @@
+disallowed-methods = [
+    { path = "std::path::Path::display", reason = "a path may be anyone's text; show it with render::PathExt::inert" },
+    { path = "std::ffi::OsStr::display", reason = "a name may be anyone's text; show it with render::inert_line" },
+]

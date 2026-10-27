@@ -12,6 +12,7 @@ use serde_json::Value;
 use super::{INPUT_FILE, Reply, Subprocess, exited};
 use crate::Result;
 use crate::audit::Stage;
+use crate::render::PathExt;
 
 pub struct Pi {
     pub model: Option<String>,
@@ -59,7 +60,7 @@ impl Subprocess for Pi {
             fs::read(&self.settings).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         Some(match (settings["defaultProvider"].as_str(), settings["defaultModel"].as_str()) {
             (Some(provider), Some(model)) => format!("{provider}/{model}"),
-            _ => format!("unknown; {} names no defaultProvider and defaultModel", self.settings.display()),
+            _ => format!("unknown; {} names no defaultProvider and defaultModel", self.settings.inert()),
         })
     }
 }

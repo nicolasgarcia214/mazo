@@ -3,6 +3,8 @@
 //! `guardian.jsonl` line 2 and the `compacted` record in `excluded.jsonl` are
 //! composed from real records, as each test notes.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

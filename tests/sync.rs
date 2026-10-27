@@ -1,6 +1,8 @@
 //! The sync and status tests beyond the linking and policy cases of
 //! `tests/sync_port.rs`.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::fs;
@@ -181,6 +183,43 @@ fn status_prints_one_plain_line_per_finding() {
         in_sync(&fx, &["claude-work", "codex", "pi"]),
     );
     assert_eq!(r.stdout(), expected);
+}
+
+/// Another installer names a foreign entry, so it reaches the terminal inert.
+#[test]
+fn status_prints_a_foreign_entry_name_inert() {
+    let fx = fixture();
+    fx.mazo(&["sync"]).assert_ok();
+    fs::create_dir(fx.home.join(".claude/skills/evil\x1b]0;pwned\x07\u{202e}")).unwrap();
+    let r = fx.mazo(&["status"]);
+    r.assert_ok();
+    let line = "claude: evil\u{fffd}]0;pwned\u{fffd}\u{fffd} is not from the source; left alone (foreign)\n";
+    assert!(r.stdout().contains(line), "{:?}", r.stdout());
+
+    // A newline in a name forges no line of its own.
+    fs::remove_dir(fx.home.join(".claude/skills/evil\x1b]0;pwned\x07\u{202e}")).unwrap();
+    fs::create_dir(fx.home.join(".claude/skills/x\nclaude: in sync")).unwrap();
+    let r = fx.mazo(&["status"]);
+    assert!(r.stdout().contains("claude: x\u{fffd}claude: in sync is not from the source"), "{:?}", r.stdout());
+}
+
+/// A dangling link mazo pruned is named inert, in the plan and in the deed.
+#[test]
+fn sync_prints_a_pruned_link_name_inert() {
+    let fx = fixture();
+    fx.mazo(&["sync"]).assert_ok();
+    let name = "evil\x1b]0;pwned\x07\u{202e}\nforged: line";
+    std::os::unix::fs::symlink(fx.source.join(name), fx.home.join(".claude/skills").join(name)).unwrap();
+    for args in [&["sync", "--dry-run"][..], &["sync"]] {
+        let r = fx.mazo(args);
+        r.assert_ok();
+        assert!(
+            r.stdout().contains("evil\u{fffd}]0;pwned\u{fffd}\u{fffd}\u{fffd}forged: line"),
+            "{args:?}: {:?}",
+            r.stdout()
+        );
+        assert!(!r.stdout().contains(['\x1b', '\x07', '\u{202e}']), "{args:?}: {:?}", r.stdout());
+    }
 }
 
 #[test]

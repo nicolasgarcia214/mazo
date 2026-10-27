@@ -1,6 +1,8 @@
 //! Fan-in, held and evals, plus the report rules (filters,
 //! collapse, sess, authoring) on small fixture ledgers.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

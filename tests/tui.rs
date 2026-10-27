@@ -3,6 +3,8 @@
 //! events against a temp config and a stub judge, and the binary opening and
 //! quitting it on a pseudo-terminal.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::path::{Path, PathBuf};

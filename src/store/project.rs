@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use super::{Lock, Locked};
 use crate::inventory::{Inventory, Scope};
 use crate::links;
+use crate::render::PathExt;
 use crate::{Error, Result};
 
 /// A project's store, under its git root; committed with the project.
@@ -38,8 +39,7 @@ fn git_root(cwd: &Path) -> Option<PathBuf> {
 /// --project` acts on.
 pub fn project_root(verb: &str) -> Result<PathBuf> {
     let cwd = current_dir()?;
-    git_root(&cwd)
-        .ok_or_else(|| Error::Usage(format!("{verb} --project: {} is not in a git repository", cwd.display())))
+    git_root(&cwd).ok_or_else(|| Error::Usage(format!("{verb} --project: {} is not in a git repository", cwd.inert())))
 }
 
 /// `inv`, under `project` with the project's store as a further root, and
@@ -76,7 +76,7 @@ pub(super) fn unlink_project(project: &Path, name: &str) -> Result<Vec<String>> 
     for (link, target) in project_links(project, name) {
         if fs::read_link(&link).is_ok_and(|t| t == target) {
             fs::remove_file(&link).map_err(crate::at(&link))?;
-            out.push(format!("pruned    {}", link.display()));
+            out.push(format!("pruned    {}", link.inert()));
         }
     }
     Ok(out)

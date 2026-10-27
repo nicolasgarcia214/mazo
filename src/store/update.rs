@@ -10,6 +10,7 @@ use super::{Lock, Locked, Outcome, Target, content_hash, inventory, project_hint
 use crate::audit::{self, Backend, Caller, Vet};
 use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
+use crate::render::PathExt;
 use crate::{Error, Result};
 use crate::{ledger, links};
 use std::cell::OnceCell;
@@ -110,7 +111,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         match refresh(cfg, inv, target, l, &remote, vet, out) {
             Ok(Some(commit)) => {
                 let at = if repin { format!("{} ({commit})", bundled::tag()) } else { commit };
-                out.line(&format!("updated {} to {at}", target.store().join(&l.name).display()));
+                out.line(&format!("updated {} to {at}", target.store().join(&l.name).inert()));
                 updated = true;
             }
             Ok(None) => out.line(&format!("{}: up to date", l.name)),
@@ -191,7 +192,7 @@ fn refresh(
     {
         return Err(format!(
             "update refused: {} changed while it was vetted; the skill was left as it was",
-            to.display()
+            to.inert()
         )
         .into());
     }

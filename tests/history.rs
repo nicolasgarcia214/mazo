@@ -1,6 +1,8 @@
 //! Cost and not a repository: one `git log` and one `git status` per
 //! report give every skill's first and last commit and its uncommitted changes.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::fs;

@@ -104,7 +104,7 @@ fn real<'e>(skill: &str, events: impl IntoIterator<Item = &'e Event>) -> Vec<Rea
                     ts: e.ts,
                     agent: e.agent,
                     cwd: e.cwd.clone(),
-                    text: text.chars().take(MAX_CHARS).collect(),
+                    text: crate::render::inert(&text).chars().take(MAX_CHARS).collect(),
                 })
         })
         .collect()

@@ -17,6 +17,7 @@ use crate::ledger::{self, name};
 use crate::lifecycle::{self, Retired};
 use crate::links::{self, Plan};
 use crate::pick::Picker;
+use crate::render::PathExt;
 use crate::store;
 use crate::theme;
 
@@ -151,7 +152,7 @@ impl App {
         }
         let what = match self.data.cfg.source.as_deref() {
             Some(source) if self.data.inv.root(&skill) == Some(source) => {
-                format!("move it to {}", source.join(".archive").join(&skill).display())
+                format!("move it to {}", source.join(".archive").join(&skill).inert())
             }
             _ => "remove it from the store".into(),
         };

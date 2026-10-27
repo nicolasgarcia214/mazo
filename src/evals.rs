@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::inventory::Inventory;
+use crate::render::PathExt;
 use crate::store::content_hash;
 use crate::yaml;
 
@@ -90,7 +91,7 @@ fn read_dir(dir: &Path, skipped: &mut Vec<String>) -> Vec<(Eval, Option<String>)
             continue; // no frontmatter: not an evaluation artifact
         }
         // A file's name and YAML error are anyone's text.
-        let skip = |why: &str| crate::render::inert(&format!("{}: {why}", file.display()));
+        let skip = |why: &str| format!("{}: {}", file.inert(), crate::render::inert(why));
         let fm = match yaml::frontmatter(&text) {
             Ok(fm) => fm,
             Err(e) => {

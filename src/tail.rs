@@ -11,6 +11,7 @@ use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters;
+use crate::render::PathExt;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cursor {
@@ -137,7 +138,7 @@ fn window(file: &File, offset: u64) -> io::Result<u64> {
 fn open(path: &Path) -> io::Result<File> {
     let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
     if !file.metadata()?.is_file() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a regular file", path.display())));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a regular file", path.inert())));
     }
     Ok(file)
 }

@@ -1,5 +1,7 @@
 //! The binary's surface: help text and colour through pipes.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::fs;

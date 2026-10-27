@@ -1,6 +1,8 @@
 //! Pi adapter fixtures. Each fixture is real session records,
 //! trimmed to the lines that matter, with prose scrubbed.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::BTreeSet;

@@ -2,6 +2,8 @@
 //! rule off, and a fresh `HOME` from config discovery
 //! through `init` to `sync`.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::ffi::OsStr;

@@ -1,6 +1,8 @@
 //! `mazo audit`: selection, judge input, `--dry-run`, the session records
 //! of stage 1 and the skill record of stage 2.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::HashSet;

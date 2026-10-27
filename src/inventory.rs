@@ -115,12 +115,13 @@ pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
         if e.file_name().as_encoded_bytes().starts_with(b".") || !path.join("SKILL.md").is_file() {
             continue;
         }
+        // A project's store is anyone's commit, so a name that is not
+        // already inert is skipped; Debug escapes it in the warning.
         match e.file_name().into_string() {
-            Ok(name) => {
+            Ok(name) if crate::render::inert_line(&name) == name => {
                 out.insert(name);
             }
-            // Debug escapes the invalid bytes, so none reach the terminal raw.
-            Err(_) => eprintln!("warning: {path:?}: skill directory name is not UTF-8; skipped"),
+            _ => eprintln!("warning: {path:?}: skill directory name is not UTF-8 or holds a control; skipped"),
         }
     }
     Ok(out)
@@ -212,11 +213,18 @@ mod tests {
     use super::{Inventory, canonical_skills, fan_in, mentions, names};
 
     #[test]
-    fn a_skill_directory_name_that_is_not_utf8_is_skipped() {
+    fn a_skill_directory_name_that_is_not_utf8_or_holds_a_control_is_skipped() {
         use std::os::unix::ffi::OsStrExt;
         let tmp = tempfile::tempdir().unwrap();
         let dir = |name: &[u8]| tmp.path().join(std::ffi::OsStr::from_bytes(name));
-        for name in [&b"ok"[..], b".hidden\xff", b"bad\xff\x1b"] {
+        for name in [
+            &b"ok"[..],
+            b".hidden\xff",
+            b"bad\xff\x1b",
+            b"esc\x1b]0;t\x07",
+            "rlo\u{202e}".as_bytes(),
+            b"nl\nclaude: in sync",
+        ] {
             std::fs::create_dir(dir(name)).unwrap();
             std::fs::write(dir(name).join("SKILL.md"), "").unwrap();
         }

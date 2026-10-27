@@ -143,7 +143,7 @@ pub fn scan_with<'a>(
             let chunk = match tail::read(&path, cursors.get(&key), &filter) {
                 Ok(c) => c,
                 Err(e) => {
-                    hr.io_errors.push(format!("{key}: {e}"));
+                    hr.io_errors.push(crate::at(&path)(e));
                     if reparse {
                         // An unreadable transcript is not parsed: its events are kept.
                         for event in ledger.events().iter().filter(|ev| ev.src_file() == key) {
@@ -178,7 +178,7 @@ pub fn scan_with<'a>(
             hr.unparsed += parsed.unparsed.len();
             for s in parsed.unparsed {
                 if hr.unparsed_samples.len() < 5 {
-                    hr.unparsed_samples.push(s.chars().take(200).collect());
+                    hr.unparsed_samples.push(crate::render::inert(&s.chars().take(200).collect::<String>()));
                 }
             }
             if parsed.raws.is_empty() && !parsed.skipped && has_canary(&chunk) {

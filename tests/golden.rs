@@ -2,6 +2,8 @@
 //! UTC, and the judge's answer schemas, compared byte for byte with `tests/golden/`. `UPDATE_GOLDEN=1`
 //! rewrites the files instead, so a renderer change shows up as their diff.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::fs;

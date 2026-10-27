@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{Config, Home};
 use crate::inventory::{Inventory, Scope};
 use crate::policy;
+use crate::render::PathExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -87,9 +88,9 @@ impl Target {
             Some((_, other)) if *other == src => None,
             Some((_, other)) => Some(format!(
                 "ERROR: {} is claimed by two sources: {} and {}",
-                self.dir.join(&name).display(),
-                other.display(),
-                src.display()
+                self.dir.join(&name).inert(),
+                other.inert(),
+                src.inert()
             )),
             None => {
                 self.entries.push((name, src));
@@ -119,18 +120,18 @@ fn targets(
     let mut out = Vec::new();
     for home in homes {
         for (name, roots) in &shared {
-            let roots: Vec<String> = roots.iter().map(|r| r.display().to_string()).collect();
+            let roots: Vec<String> = roots.iter().map(|r| r.inert().to_string()).collect();
             let path = home.skills_dir().join(name);
             conflicts.push((
                 home.name.clone(),
-                format!("ERROR: {} is claimed by several roots: {}", path.display(), roots.join(", ")),
+                format!("ERROR: {} is claimed by several roots: {}", path.inert(), roots.join(", ")),
             ));
         }
         out.push(Target { home: home.name.clone(), dir: home.skills_dir(), entries: common.clone() });
         for (key, src) in cfg.source.iter().flat_map(|s| home.links.iter().map(move |(k, v)| (k, s.join(v)))) {
             let path = home.path.join(key);
             if !present(&src) {
-                conflicts.push((home.name.clone(), format!("ERROR: {} is missing", src.display())));
+                conflicts.push((home.name.clone(), format!("ERROR: {} is missing", src.inert())));
                 continue;
             }
             let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { continue };
@@ -194,12 +195,12 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         if let Some(root) = inv.roots.iter().find(|r| *r == physical) {
             plan.conflicts.push((
                 t.home.clone(),
-                format!("ERROR: {} resolves to {}; replace it with a directory", t.dir.display(), root.display()),
+                format!("ERROR: {} resolves to {}; replace it with a directory", t.dir.inert(), root.inert()),
             ));
             continue;
         }
         if let Err(bad) = check_dir(&t.dir) {
-            plan.conflicts.push((t.home.clone(), format!("ERROR: {} is not a directory", bad.display())));
+            plan.conflicts.push((t.home.clone(), format!("ERROR: {} is not a directory", bad.inert())));
             continue;
         }
         let exists = fs::symlink_metadata(&t.dir).is_ok();
@@ -224,7 +225,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
                         t.home.clone(),
                         format!(
                             "ERROR: {} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
-                            path.display(),
+                            path.inert(),
                             hint(&path, state)
                         ),
                     ));
@@ -303,11 +304,11 @@ fn check_dir(dir: &Path) -> Result<(), PathBuf> {
 }
 
 fn hint(path: &Path, state: State) -> String {
-    let q = shell_quote(&path.to_string_lossy());
+    let q = shell_quote(&path.inert().to_string());
     if state == State::WrongLink {
         format!("rm {q}")
     } else {
-        format!("mv {q} {}", shell_quote(&format!("{}.local", path.to_string_lossy())))
+        format!("mv {q} {}", shell_quote(&format!("{}.local", path.inert())))
     }
 }
 
@@ -336,9 +337,9 @@ pub fn planned(plan: &Plan) -> Vec<String> {
     plan.actions
         .iter()
         .map(|a| match a {
-            Action::Mkdir(d) => format!("would create {}", d.display()),
-            Action::Link { path, .. } => format!("would link  {}", path.display()),
-            Action::Remove(p) => format!("would prune {}", p.display()),
+            Action::Mkdir(d) => format!("would create {}", d.inert()),
+            Action::Link { path, .. } => format!("would link  {}", path.inert()),
+            Action::Remove(p) => format!("would prune {}", p.inert()),
         })
         .collect()
 }
@@ -357,11 +358,9 @@ pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> crate::Result<Vec<Strin
         let (path, done) = match a {
             Action::Mkdir(d) => (d, fs::create_dir_all(d).map(|()| None)),
             Action::Link { source, path } => {
-                (path, std::os::unix::fs::symlink(source, path).map(|()| Some(format!("linked    {}", path.display()))))
+                (path, std::os::unix::fs::symlink(source, path).map(|()| Some(format!("linked    {}", path.inert()))))
             }
-            Action::Remove(p) => {
-                (p, fs::remove_file(p).map(|()| Some(format!("pruned    {} (dangling)", p.display()))))
-            }
+            Action::Remove(p) => (p, fs::remove_file(p).map(|()| Some(format!("pruned    {} (dangling)", p.inert())))),
         };
         if let Err(e) = done.map(|line| out.extend(line)) {
             let done = if out.is_empty() {

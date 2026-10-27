@@ -141,7 +141,7 @@ pub(super) fn confirm_calls(n: usize, consent: Consent) -> Result<()> {
 /// error listing them.
 pub(super) fn skills_in(root: &Path, own: &str, args: &Add) -> Result<Vec<Option<String>>> {
     // Inert: the skill paths it lists are directories the source's author named.
-    let usage = |e: String| Error::Usage(crate::render::inert(&format!("add {}: {e}", args.source)));
+    let usage = |e: String| Error::Usage(crate::render::inert_line(&format!("add {}: {e}", args.source)));
     if root.join("SKILL.md").is_file() {
         return match args.pick {
             Some(p) if p != own => Err(usage(format!("no skill named {p}; the only skill here is {own}"))),

@@ -11,7 +11,7 @@ use crate::examples::Examples;
 use crate::help;
 use crate::inventory::Scope;
 use crate::ledger::name;
-use crate::render::{self, Align, DAY, MINUTE};
+use crate::render::{self, Align, DAY, MINUTE, PathExt};
 use crate::report::{self, Card, Day, GradeOut, Link, Report, tilde};
 
 const CSS: &str = "
@@ -333,5 +333,5 @@ pub fn in_worktree(path: &Path) -> bool {
 pub fn open(path: &Path) -> crate::Result<()> {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     let status = Command::new(opener).arg(path).status().map_err(|e| format!("{opener}: {e}"))?;
-    if status.success() { Ok(()) } else { Err(format!("{opener} {}: {status}", path.display()).into()) }
+    if status.success() { Ok(()) } else { Err(format!("{opener} {}: {status}", path.inert()).into()) }
 }

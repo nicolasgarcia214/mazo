@@ -8,6 +8,8 @@
 //! each tries up to three times and reports `skipped` when the model never
 //! acted, but fails when it acted and mazo recorded no event or the wrong one.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};

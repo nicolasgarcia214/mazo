@@ -1,6 +1,8 @@
 //! Claude fixtures. Each fixture is a real record from this machine,
 //! trimmed to the fields the adapter reads, with prompt and tool text scrubbed.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::collections::BTreeSet;

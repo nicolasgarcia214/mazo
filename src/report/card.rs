@@ -483,20 +483,19 @@ pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
     serde_json::to_value(card_usage(&view, &Filter::default(), skill, view.start(SINCE))).expect("usage serialises")
 }
 
-/// `$HOME` as `~`.
+/// `$HOME` as `~`, [`inert_line`](crate::render::inert_line): a transcript
+/// names its cwd.
 pub fn tilde(path: &str) -> String {
-    let Ok(home) = crate::config::home_dir() else { return path.to_string() };
-    match path.strip_prefix(home.as_str()) {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
-        _ => path.to_string(),
-    }
+    let home = crate::config::home_dir().ok();
+    let rest = home.as_deref().and_then(|h| path.strip_prefix(h)).filter(|r| r.is_empty() || r.starts_with('/'));
+    crate::render::inert_line(&rest.map_or_else(|| path.to_string(), |r| format!("~{r}")))
 }
 
 /// A transcript locator as `<agent>:<file name>:<line>`.
 fn locator(e: &ShownEvent) -> String {
     let (file, line) = e.src.rsplit_once(':').unwrap_or((e.src, ""));
     let file = Path::new(file).file_name().map_or(file.into(), |n| n.to_string_lossy());
-    format!("{}:{file}:{line}", name(e.agent))
+    format!("{}:{}:{line}", name(e.agent), crate::render::inert_line(&file))
 }
 
 /// Rendered `mazo show <skill>` output; Err for an unknown skill.

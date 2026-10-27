@@ -1,6 +1,8 @@
 //! `mazo sync`'s linking and policy cases: discovery, frontmatter and profile
 //! checks, conflicts, pruning and failing before any write.
 
+#![allow(clippy::disallowed_methods)]
+
 mod common;
 
 use std::fs;

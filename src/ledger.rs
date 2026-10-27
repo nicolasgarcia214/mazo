@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
+use crate::render::PathExt;
 
 #[derive(
     Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, clap::ValueEnum,
@@ -134,7 +135,7 @@ impl Ledger {
                 Some(event) => ledger.keep(event),
                 None => {
                     ledger.unreadable = true;
-                    eprintln!("warning: {}:{n}: unreadable ledger line skipped", path.display());
+                    eprintln!("warning: {}:{n}: unreadable ledger line skipped", path.inert());
                 }
             }
         }
@@ -255,7 +256,7 @@ pub fn save_coverage(dir: &Path, coverage: &BTreeMap<String, Coverage>) -> Resul
 /// `None` when the file is missing or, with a warning, does not parse.
 pub(crate) fn read_derived<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
     Ok(read(path)?.and_then(|bytes| {
-        serde_json::from_slice(&bytes).map_err(|e| eprintln!("warning: {}: {e}; rebuilding it", path.display())).ok()
+        serde_json::from_slice(&bytes).map_err(|e| eprintln!("warning: {}: {e}; rebuilding it", path.inert())).ok()
     }))
 }
 
