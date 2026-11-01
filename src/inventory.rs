@@ -225,7 +225,11 @@ mod tests {
             "rlo\u{202e}".as_bytes(),
             b"nl\nclaude: in sync",
         ] {
-            std::fs::create_dir(dir(name)).unwrap();
+            match std::fs::create_dir(dir(name)) {
+                // APFS refuses a name that is not UTF-8, so macOS never lists one.
+                Err(e) if e.raw_os_error() == Some(libc::EILSEQ) => continue,
+                r => r.unwrap(),
+            }
             std::fs::write(dir(name).join("SKILL.md"), "").unwrap();
         }
         assert_eq!(canonical_skills(tmp.path()).unwrap(), ["ok".to_string()].into());

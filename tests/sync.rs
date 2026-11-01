@@ -419,7 +419,11 @@ fn an_unlistable_skills_dir_fails_status() {
 fn status_json_reports_a_name_that_is_not_utf8() {
     let fx = fixture();
     fx.mazo(&["sync"]).assert_ok();
-    fs::create_dir(fx.home.join(std::ffi::OsStr::from_bytes(b".claude/skills/bad\xff"))).unwrap();
+    match fs::create_dir(fx.home.join(std::ffi::OsStr::from_bytes(b".claude/skills/bad\xff"))) {
+        // APFS refuses a name that is not UTF-8, so macOS never lists one.
+        Err(e) if e.raw_os_error() == Some(libc::EILSEQ) => return,
+        r => r.unwrap(),
+    }
     let r = fx.mazo(&["status", "--json"]);
     r.assert_ok();
     assert!(r.stdout().contains("bad\u{fffd}"), "{}", r.stdout());
