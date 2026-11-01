@@ -2,7 +2,6 @@
 //! schema and the input on stdin, its stdout the answer, and no dollar cost.
 //! It is a program mazo knows nothing of, so no login is checked.
 
-use std::path::Path;
 use std::process::Output;
 
 use super::{Reply, Subprocess, exited, prompted};
@@ -27,7 +26,7 @@ impl Subprocess for Command {
         Ok(Reply { cost: None, answer: exited(out, answer) })
     }
 
-    fn shown(&self, _data: &Path, argv: &str) -> String {
+    fn shown(&self, argv: &str) -> String {
         format!("{argv} < <prompt + schema + input>")
     }
 }

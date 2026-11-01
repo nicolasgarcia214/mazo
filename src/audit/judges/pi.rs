@@ -4,7 +4,7 @@
 //! is checked.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Output;
 
 use serde_json::Value;
@@ -46,7 +46,7 @@ impl Subprocess for Pi {
         Ok(Reply { cost: None, answer: exited(out, answer(&out.stdout)) })
     }
 
-    fn shown(&self, _data: &Path, argv: &str) -> String {
+    fn shown(&self, argv: &str) -> String {
         argv.to_string()
     }
 
