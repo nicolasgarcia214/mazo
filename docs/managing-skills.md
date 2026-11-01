@@ -8,13 +8,16 @@ This guide covers linking skills into the homes and managing the skills of
 
 Reports drift and policy for every home and, inside a project, its skills'
 links (see [project skills](project-skills.md#status-and-usage-in-a-project)).
-Writes nothing.
+Writes nothing, and exits 1 on any error. `--agent <claude|codex|pi>` checks
+only that agent's homes. `--json` prints the `drift`, `policy`, `conflicts` and
+`warnings` lists.
 
 ## `mazo sync`
 
 Links every skill, from `source` and the store, into every home. It checks
 everything first and writes nothing if any check fails. `--dry-run` prints the
-actions without taking them.
+actions without taking them, and `--agent <claude|codex|pi>` syncs only that
+agent's homes.
 
 A link to the same-named skill directory of `source` or the store, whose
 target is gone, is mazo's own, so `sync` removes it. When another root now
@@ -37,7 +40,9 @@ sync.
 
 `mazo retire <name>` moves a skill of `source` to `.archive/` (`git mv` when
 tracked) and prunes its links. A store skill is removed instead: mazo deletes
-its links, its `mazo.lock` entry and its store directory.
+its links, its `mazo.lock` entry and its store directory. When
+`claude_name_only` is on, either kind then prints the `skillOverrides` entry
+each Claude home's settings can now drop.
 
 It refuses a skill used in the last 30 days, or one held or named by a skill
 used in that time, unless `--force`. It holds the data lock while it writes. It
@@ -48,5 +53,6 @@ writes nothing if the resulting sync would fail, and it never commits.
 ## `mazo prune`
 
 `mazo prune [<name>]` permanently deletes archived skills from `.archive/`. It
-asks first, or takes `--yes`. In a git repository it refuses a file whose
+asks first, and a declined prompt exits 1. `--yes` skips the prompt and is
+required when stdin is not a terminal. In a git repository it refuses a file whose
 content is in no `HEAD` path unless `--force`.

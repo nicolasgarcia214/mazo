@@ -66,6 +66,8 @@ fn under_top(screen: &[String]) -> &[String] {
     &screen[if screen[1].ends_with(" not installed, press i") { 2 } else { 1 }..]
 }
 
+const TAGLINE: &str = "Make every skill earn its place.";
+
 /// The table rows on `screen`: the lines after the top bar and the table
 /// header, up to the blank line or the coverage note, without the gutter.
 fn rows(screen: &[String]) -> Vec<String> {
@@ -172,7 +174,7 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     assert_eq!(app.screen(), Screen::Card);
     let screen = text(&mut app, 200, 100);
     // The card opens with the manual, as `show` prints it.
-    let card: Vec<String> = screen[1..].iter().map(|l| body(l)).collect();
+    let card: Vec<String> = under_top(&screen).iter().map(|l| body(l)).collect();
     assert_eq!(card[..3], ["for:      Removes slop from prose.", "your use: - Tighten the release notes.", ""]);
     assert_eq!(card[3], format!("unslop: since {}", common::ago(30).get(..10).unwrap()));
 
@@ -214,8 +216,8 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert!(lines[0].contains(" unused ") && lines[0].contains("window 60d"), "{lines:#?}");
     // The tabs in the top bar, a divider between them, show the active one in the accent.
     assert!(lines[0].contains(" usage │ unused "), "{lines:#?}");
-    assert_eq!(colour_of(&screen, "♠ mazo", "unused"), mazo::theme::ACCENT);
-    assert_eq!(colour_of(&screen, "♠ mazo", "usage"), mazo::theme::MUTED);
+    assert_eq!(colour_of(&screen, "█ mazo", "unused"), mazo::theme::ACCENT);
+    assert_eq!(colour_of(&screen, "█ mazo", "usage"), mazo::theme::MUTED);
 
     // From the last row of 30d, the shorter 60d list keeps a row selected.
     press(&mut app, KeyCode::Char('w'));
@@ -673,8 +675,11 @@ fn help(app: &mut App, width: u16, height: u16) -> Option<Vec<String>> {
         .take_while(|l| !l.contains('╰'))
         .map(|l| l.trim_matches(['│', '┃', ' ']).to_string())
         .collect();
-    // Less the padding rows.
-    Some(lines[1..lines.len() - 1].to_vec())
+    // Less the padding rows, and on a tall screen the logo and its tagline
+    // over a blank row.
+    let lines = &lines[1..lines.len() - 1];
+    let head = lines.iter().position(|l| l.ends_with(TAGLINE)).map_or(0, |at| at + 2);
+    Some(lines[head..].to_vec())
 }
 
 /// AC1, AC8: `H` opens the help on any screen; `j`/`k` and `PgUp`/`PgDn`
@@ -724,7 +729,7 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
     let input = golden.world.input(&golden.events);
     let mut app = app(&input);
     press(&mut app, KeyCode::Char('H'));
-    let usage = help(&mut app, 200, 80).unwrap();
+    let usage = help(&mut app, 200, 100).unwrap();
     let usage: Vec<String> = usage.into_iter().filter(|l| !l.is_empty()).collect();
     assert_eq!(usage[..3], ["Columns", "usage", "skill  the skill's name; (project) marks a project skill"]);
     assert!(
@@ -734,7 +739,7 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Char('H'));
-    let unused = help(&mut app, 200, 80).unwrap();
+    let unused = help(&mut app, 200, 100).unwrap();
     assert_eq!(unused[..2], ["Columns", "unused"]);
 
     let at = |heading: &str| unused.iter().position(|l| l == heading).unwrap_or_else(|| panic!("no {heading}"));
@@ -753,7 +758,6 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
         "Probe sessions",
         "Project rows",
         "Why does a skill show - under audit?",
-        "C is Claude, X is Codex and P is Pi.",
         "grade is a static review of the SKILL.md",
         "retro judges one run in context, right after it ran.",
         "audit judges many past runs offline and takes the retros as input",
@@ -1886,7 +1890,10 @@ fn i_with_no_judge_shows_the_refusal_and_starts_nothing() {
     add(&mut app, &url);
     assert!(!app.busy());
     let screen = text(&mut app, 200, 60);
-    assert!(screen.iter().any(|l| l.contains("vetting it needs a [judge], which the config lacks")), "{screen:#?}");
+    // The dialog wraps at spaces, and a long origin path, as macOS temp dirs
+    // give, pushes the refusal onto two lines: read it as one.
+    let said = screen.iter().map(|l| l.trim_matches(['│', ' '])).collect::<Vec<_>>().join(" ");
+    assert!(said.contains("vetting it needs a [judge], which the config lacks"), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains("agent = \"command\"")), "{screen:#?}");
     assert!(screen.iter().any(|l| l == "any key closes"), "{screen:#?}");
     // Esc cancels the source dialog.
@@ -1982,4 +1989,31 @@ fn capital_y_accepts_the_verdict_and_a_ctrl_or_alt_chord_answers_nothing() {
     app.key(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT));
     until(&mut app, |app| !app.busy());
     assert!(fx.locked("theirs").is_some());
+}
+
+/// The logo takes the bottom left of the list's pane once the rows leave it
+/// room, the version and tagline beside it when they fit, and the top bar
+/// leads with the one-line mark.
+#[test]
+fn the_logo_fills_the_room_under_a_short_list() {
+    let golden = Golden::new();
+    let input = golden.world.input(&golden.events);
+    let mut app = app(&input);
+    // The logo's cells: its pixels' colours in the first columns past the gutter.
+    let logo = |screen: &[(String, Vec<Color>)]| {
+        let note = screen.iter().position(|(l, _)| l.trim_start().starts_with("coverage:")).unwrap();
+        let rows = &screen[note - 7..note];
+        rows.iter().all(|(_, c)| c[2..58].iter().any(|c| matches!(c, Color::Rgb(..)) || *c == Color::Reset))
+            && rows.iter().any(|(_, c)| c[2..58].iter().any(|c| matches!(c, Color::Rgb(..))))
+    };
+    let screen = draw(&mut app, 120, 40);
+    assert!(screen[0].0.starts_with("▍▍█ mazo  usage │ unused "), "{}", screen[0].0);
+    assert!(logo(&screen), "{:#?}", screen.iter().map(|(l, _)| l).collect::<Vec<_>>());
+    let note = screen.iter().position(|(l, _)| l.trim_start().starts_with("coverage:")).unwrap();
+    assert!(screen[note - 1].0.ends_with(TAGLINE), "{}", screen[note - 1].0);
+    assert_eq!(rows(&text(&mut app, 120, 40)), rows(&text(&mut app, 120, 15)), "the logo takes no row");
+
+    // On a short screen the rows leave no room.
+    let short = draw(&mut app, 120, 15);
+    assert!(!short[1..].iter().any(|(_, c)| c.iter().any(|c| matches!(c, Color::Rgb(..)))));
 }

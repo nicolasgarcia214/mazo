@@ -533,10 +533,12 @@ fn add_in_picker(fx: &Fixture, args: &[&str], steps: &[(&str, &str)]) -> (i32, S
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::sync::{Arc, Mutex};
     let (mut controller, mut terminal) = (0, 0);
-    let size = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+    // A `*mut` pointer: Apple's openpty takes `*mut winsize`, Linux's `*const`.
+    let mut size = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
     // SAFETY: openpty writes two new descriptors, owned below.
-    let rc =
-        unsafe { libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null_mut(), &size) };
+    let rc = unsafe {
+        libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null_mut(), &raw mut size)
+    };
     assert_eq!(rc, 0, "openpty");
     let (controller, terminal) = unsafe { (OwnedFd::from_raw_fd(controller), OwnedFd::from_raw_fd(terminal)) };
     let mut child = fx

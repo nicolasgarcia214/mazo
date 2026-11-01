@@ -15,6 +15,8 @@ mod dialog;
 mod draw;
 mod job;
 mod keys;
+mod logo;
+mod logo_art;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

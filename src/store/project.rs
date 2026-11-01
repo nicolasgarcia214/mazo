@@ -116,7 +116,9 @@ impl Project {
     /// The project skill whose directory, in the store or a project skill
     /// dir, holds `path`, as written or resolved through symlinks; `None` for
     /// a path of no project skill. Only a path naming a project skill is
-    /// resolved.
+    /// resolved, through its deepest ancestor that still exists, so a link
+    /// since removed under a symlinked root, as `/var` is on macOS, still
+    /// counts.
     pub fn skill_of(&self, path: &str) -> Option<&str> {
         let of = |path: &Path| {
             let rest = path.strip_prefix(&self.root).ok()?;
@@ -126,7 +128,9 @@ impl Project {
         };
         let path = Path::new(path);
         let named = || path.iter().any(|c| c.to_str().is_some_and(|c| self.skills.contains(c)));
-        of(path).or_else(|| named().then(|| fs::canonicalize(path).ok()).flatten().and_then(|p| of(&p)))
+        let resolved =
+            || path.ancestors().find_map(|a| Some(fs::canonicalize(a).ok()?.join(path.strip_prefix(a).ok()?)));
+        of(path).or_else(|| named().then(resolved).flatten().and_then(|p| of(&p)))
     }
 
     /// Each skill's link in each project skill dir, as `status` checks it;

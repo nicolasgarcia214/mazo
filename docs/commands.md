@@ -13,7 +13,7 @@
 | [`mazo sync`](managing-skills.md#mazo-sync) | Link every skill into every home. |
 | [`mazo new <name>`](managing-skills.md#mazo-new) | Create a skill in `source`. |
 | [`mazo add <source>`](installing-skills.md#mazo-add) | Install a skill into the store, vetting an untrusted one. |
-| [`mazo update [names...]`](installing-skills.md#mazo-update) | Re-fetch store skills from their origins. |
+| [`mazo update [names...]`](installing-skills.md#mazo-update) | Re-clone git-sourced store skills, re-vetting an untrusted change. |
 | [`mazo retire <name>`](managing-skills.md#mazo-retire) | Archive a skill of `source`, or remove a store skill. |
 | [`mazo prune [<name>]`](managing-skills.md#mazo-prune) | Delete archived skills from `.archive/`. |
 | [`mazo audit <skill>`](audit.md) | Have an agent judge how the skill performs in real sessions. |

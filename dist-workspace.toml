@@ -4,7 +4,7 @@ members = ["cargo:."]
 # Config for 'dist'
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.33.0"
+cargo-dist-version = "0.33.1"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
@@ -19,7 +19,11 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-da
 install-path = "CARGO_HOME"
 # Where to host releases
 hosting = "github"
-# Release only on version tags; pull requests run no dist jobs
+# Pull requests run no dist jobs
 pr-run-mode = "skip"
+# release-please tags the release; its workflow dispatches this one on the tag
+dispatch-releases = true
+# Upload into release-please's draft release, keep its notes, then publish it
+create-release = false
 # Whether to install an updater program
 install-updater = false

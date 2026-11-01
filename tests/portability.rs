@@ -367,7 +367,7 @@ fn init_without_a_judge_or_a_terminal_writes_no_judge_and_says_how_to_add_one() 
         stdout(&o).lines().nth(1),
         Some(
             "no judge: log in to claude, codex or pi and add [judge] agent = \"<agent>\" to the config, \
-             or a command or http judge (see the README)"
+             or a command or http judge (see docs/configuration.md#judge)"
         )
     );
 }

@@ -4,12 +4,13 @@
 use std::sync::mpsc;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Margin, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
 use super::draw::{scrollbar, status_line};
+use super::logo::{self, Logo};
 use super::{App, Data};
 use crate::audit;
 use crate::config::Home;
@@ -227,12 +228,14 @@ pub(super) fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
         wide = wide.max(source.chars().count() + 3);
     }
     let width = (wide as u16 + 6).clamp(area.width.min(48), area.width);
-    let mut lines: Vec<Line> = raw.iter().map(|l| status_line(l)).collect();
-    // A question's first line is its headline.
-    if dialog.ask.is_some()
-        && let Some(first) = lines.first_mut()
-    {
-        *first = first.clone().bold();
+    // A line wider than the screen wraps rather than losing its end; a
+    // question's first line, its headline, is bold.
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, line) in raw.iter().enumerate() {
+        for piece in wrap(line, width.saturating_sub(6).into()) {
+            let piece = status_line(&piece);
+            lines.push(if i == 0 && dialog.ask.is_some() { piece.bold() } else { piece });
+        }
     }
     if let Some(Ask::Source(source)) = &dialog.ask {
         let typed = typed_line(source, width.saturating_sub(6).into());
@@ -266,7 +269,22 @@ pub(super) fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize,
         .border_style(Style::new().fg(theme::ACCENT))
         .title(Span::raw(" help ").fg(theme::ACCENT).bold())
         .padding(Padding::new(2, 2, 1, 1));
-    let inner = block.inner(modal);
+    frame.render_widget(Clear, modal);
+    let mut inner = block.inner(modal);
+    frame.render_widget(block, modal);
+    // On a tall screen the logo heads the help, the version and tagline under it.
+    if inner.height >= 4 * (Logo::HEIGHT + 2) && inner.width >= Logo::WIDTH {
+        let [art, at, _, rest] = Layout::vertical([
+            Constraint::Length(Logo::HEIGHT),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
+        frame.render_widget(Logo, art.centered_horizontally(Constraint::Length(Logo::WIDTH)));
+        frame.render_widget(logo::about().centered(), at);
+        inner = rest;
+    }
     let mut text: Vec<Line> = Vec::new();
     for line in lines {
         let indent = line.len() - line.trim_start().len();
@@ -286,8 +304,6 @@ pub(super) fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize,
     }
     let page = usize::from(inner.height).max(1);
     *scroll = (*scroll).min(text.len().saturating_sub(page));
-    frame.render_widget(Clear, modal);
-    frame.render_widget(block, modal);
     let total = text.len();
     frame.render_widget(Paragraph::new(text.into_iter().skip(*scroll).collect::<Vec<_>>()), inner);
     scrollbar(frame, modal.inner(Margin::new(0, 1)), total, *scroll, page);

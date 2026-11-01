@@ -5,7 +5,7 @@ agent. Back to the [README](README.md).
 
 ## Checks
 
-CI runs these on Linux and macOS:
+CI runs these on Linux and macOS with Rust 1.98.1:
 
 ```sh
 cargo fmt --check
@@ -21,14 +21,46 @@ properties such as "a fresh scan equals an incremental one". The tests read the 
 skills tree in `tests/fixtures/skills`. Set `MAZO_TEST_SKILLS` to run them
 against a real skills directory instead.
 
+## Releases
+
+[release-please](https://github.com/googleapis/release-please) versions mazo
+from conventional commit titles on `master`: `fix` bumps the patch version,
+`feat` the minor one, and a `!` or `BREAKING CHANGE` the major one. It keeps a
+release PR open that bumps `Cargo.toml` and `Cargo.lock` and writes
+`CHANGELOG.md` with the Features, Bug Fixes, Performance, Refactoring and
+Documentation sections. `chore`, `ci`, `test`, `style` and `build` commits are
+left out of the changelog.
+
+Merging the release PR tags `vX.Y.Z` and opens a draft GitHub release with the
+changelog. The release-please workflow then dispatches `release.yml`, where
+dist builds the binaries and installers on the tag, uploads them to the draft
+and publishes it. `release.yml` is generated: after changing
+`dist-workspace.toml`, run `dist generate`.
+
+The release PR comes from `GITHUB_TOKEN`, so CI does not run on it; its diff is
+only the version and the changelog.
+
+## Assets
+
+`src/tui/logo_art.rs` is generated: after changing `docs/assets/logo-dark.png`,
+run `python docs/assets/bake-logo.py` (needs ImageMagick). After a change to
+the TUI's look, run `python docs/assets/capture-tui.py` (needs `rsvg-convert`
+and the JetBrains Mono font) to redraw the README's `docs/assets/tui.png`.
+
 ## Adding an agent
 
 Each agent is:
 
-- one module in `src/adapters/` implementing `Adapter`;
+- one module in `src/adapters/` implementing `Adapter`, with its arm in
+  `adapters::for_agent` and its `MARKER` in `adapters::MARKERS` (the scan's
+  prefilter drops every line that holds no marker);
 - one module in `src/audit/judges/` implementing `Backend`, with its arm in
   `judges::backend`;
-- one `Agent` variant and one `JudgeAgent` variant.
+- one `Agent` variant and one `JudgeAgent` variant, with a `JudgeAgent::ALL`
+  entry and an `AGENT_HOMES` entry in `src/config.rs` so `init` finds its
+  judge and its home.
+
+The compiler checks the match arms but not those three arrays.
 
 Adapters only turn transcript records into events, prompts and condensed
 sessions. `classify.rs` computes identity, actor, root session and authoring

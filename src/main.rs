@@ -17,7 +17,7 @@ use mazo::{Error, audit, evals, html, links, out, outln, policy, render, scan, s
     name = "mazo",
     version,
     about = "Skill usage from agent transcripts, and sync of skill links",
-    after_help = "Bare `mazo` at a terminal opens a TUI: usage, unused and skill cards, with retire, sync and audit.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
+    after_help = "Bare `mazo` at a terminal opens a TUI: usage, unused and skill cards, with retire, sync, update, add and audit.\nExit codes: 0 success, 1 failure or finding, 2 usage error (a bad argument or config)."
 )]
 struct Cli {
     #[command(subcommand)]

@@ -23,7 +23,8 @@ projects. It sends at most `--limit` sessions (default 20), or every one with
 
 - Claude and Pi run with tools off.
 - Codex runs without its shell, image viewer or web search, in a read-only
-  sandbox with a scratch `CODEX_HOME`. Its subagents stay, with the same tools.
+  sandbox with a scratch `CODEX_HOME`. Its v1 subagents are off too; a model
+  on v2 keeps its own subagents, with the same tools off.
 - A command judge gets the prompt, the answer schema and the input on stdin,
   and its stdout must be the answer as JSON.
 - An http judge gets the same text as one user message, and its reply's
@@ -87,8 +88,9 @@ a judge failure names `billing = "api"` as the way to use an API key instead.
 
 Under `"api"` the environment passes unchanged and nothing is checked.
 
-Each record in `audits.jsonl` names its billing. One written before mazo
-recorded it shows `unknown`.
+Each record in `audits.jsonl` names its billing under `judge.billing`. A
+record written before mazo recorded it has none, and the card's audit line
+shows its billing as `unknown`.
 
 ## Dry run
 
