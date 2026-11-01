@@ -228,12 +228,14 @@ pub(super) fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
         wide = wide.max(source.chars().count() + 3);
     }
     let width = (wide as u16 + 6).clamp(area.width.min(48), area.width);
-    let mut lines: Vec<Line> = raw.iter().map(|l| status_line(l)).collect();
-    // A question's first line is its headline.
-    if dialog.ask.is_some()
-        && let Some(first) = lines.first_mut()
-    {
-        *first = first.clone().bold();
+    // A line wider than the screen wraps rather than losing its end; a
+    // question's first line, its headline, is bold.
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, line) in raw.iter().enumerate() {
+        for piece in wrap(line, width.saturating_sub(6).into()) {
+            let piece = status_line(&piece);
+            lines.push(if i == 0 && dialog.ask.is_some() { piece.bold() } else { piece });
+        }
     }
     if let Some(Ask::Source(source)) = &dialog.ask {
         let typed = typed_line(source, width.saturating_sub(6).into());

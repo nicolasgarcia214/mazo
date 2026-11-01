@@ -1890,7 +1890,10 @@ fn i_with_no_judge_shows_the_refusal_and_starts_nothing() {
     add(&mut app, &url);
     assert!(!app.busy());
     let screen = text(&mut app, 200, 60);
-    assert!(screen.iter().any(|l| l.contains("vetting it needs a [judge], which the config lacks")), "{screen:#?}");
+    // The dialog wraps at spaces, and a long origin path, as macOS temp dirs
+    // give, pushes the refusal onto two lines: read it as one.
+    let said = screen.iter().map(|l| l.trim_matches(['│', ' '])).collect::<Vec<_>>().join(" ");
+    assert!(said.contains("vetting it needs a [judge], which the config lacks"), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains("agent = \"command\"")), "{screen:#?}");
     assert!(screen.iter().any(|l| l == "any key closes"), "{screen:#?}");
     // Esc cancels the source dialog.
