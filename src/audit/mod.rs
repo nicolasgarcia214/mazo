@@ -601,7 +601,7 @@ pub fn dry_run(a: &Audit, candidates: &[Candidate], tty: bool) -> Result<String>
         ("chars", Align::Right),
         ("session", Align::Left),
     ];
-    let judge = a.backend.dry_run(a.data);
+    let judge = a.backend.dry_run();
     let total: usize = candidates.iter().map(chars).sum();
     let model = a.backend.model().map(|m| format!("model: {m}\n")).unwrap_or_default();
     let mut out = format!(

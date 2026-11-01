@@ -99,7 +99,7 @@ impl Subprocess for Claude {
         Some(BUDGET_FLAG)
     }
 
-    fn shown(&self, _data: &Path, argv: &str) -> String {
+    fn shown(&self, argv: &str) -> String {
         format!("{argv} {BUDGET_FLAG} <cap> < <input>")
     }
 }

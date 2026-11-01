@@ -3,7 +3,6 @@
 //! on stdin, the answer in its `-o` file, and no dollar cost.
 
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -18,11 +17,6 @@ pub struct Codex {
     pub model: Option<String>,
     /// The user's `auth.json`, which the scratch home links to.
     pub auth: PathBuf,
-}
-
-/// The scratch home under the data directory.
-fn home(data: &Path) -> PathBuf {
-    data.join("codex-judge-home")
 }
 
 impl Subprocess for Codex {
@@ -77,19 +71,17 @@ impl Subprocess for Codex {
         )))
     }
 
-    /// `<data>/codex-judge-home` holding only a symlink to the user's
-    /// `auth.json`, made afresh so nothing an earlier call left there survives.
-    fn scratch(&self, data: &Path) -> Result<Option<(&'static str, PathBuf)>> {
-        let home = home(data);
+    /// `home` holding only a symlink to the user's `auth.json`. It is kept
+    /// out of the system temporary directory, where Codex refuses to make its
+    /// helper binaries and says so on stderr.
+    fn scratch(&self, home: &Path) -> Result<Option<&'static str>> {
         if !self.auth.exists() {
             return Err(format!("{}: no Codex login for the Codex judge", self.auth.inert()).into());
         }
-        fs::remove_dir_all(&home)
-            .or_else(|e| if e.kind() == ErrorKind::NotFound { Ok(()) } else { Err(e) })
-            .and_then(|()| fs::create_dir_all(&home))
+        fs::create_dir(home)
             .and_then(|()| std::os::unix::fs::symlink(&self.auth, home.join("auth.json")))
-            .map_err(crate::at(&home))?;
-        Ok(Some(("CODEX_HOME", home)))
+            .map_err(crate::at(home))?;
+        Ok(Some("CODEX_HOME"))
     }
 
     fn reply(&self, out: &Output, written: Option<Vec<u8>>, _cap: Option<u64>) -> Result<Reply> {
@@ -97,7 +89,7 @@ impl Subprocess for Codex {
         Ok(Reply { cost: None, answer: exited(out, written.ok_or_else(|| "no answer in the -o file".into())) })
     }
 
-    fn shown(&self, data: &Path, argv: &str) -> String {
-        format!("CODEX_HOME={} {argv} < <prompt + input>", home(data).inert())
+    fn shown(&self, argv: &str) -> String {
+        format!("CODEX_HOME=<scratch home> {argv} < <prompt + input>")
     }
 }

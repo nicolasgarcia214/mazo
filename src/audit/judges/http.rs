@@ -79,7 +79,7 @@ impl super::Backend for Http {
         Ok(Reply { cost: None, answer })
     }
 
-    fn dry_run(&self, _data: &Path) -> String {
+    fn dry_run(&self) -> String {
         let auth = match &self.key {
             Some((var, _)) => format!("a Bearer token from ${var}"),
             None => "no Authorization header".into(),

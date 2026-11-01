@@ -951,23 +951,33 @@ fn an_http_judge_whose_api_key_env_is_unset_or_empty_is_a_usage_error_naming_it(
 }
 
 #[test]
+fn a_codex_judge_without_its_auth_json_leaves_no_run_directory() {
+    let fx = Fixture::new("[judge]\nagent = \"codex\"\nbilling = \"api\"\n", three_agents);
+    fs::remove_file(fx.root.join("home/.codex/auth.json")).unwrap();
+    let out = fx.mazo(&["audit", "unslop", "--limit", "1"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let want = format!("{}: no Codex login for the Codex judge", fx.root.join("home/.codex/auth.json").display());
+    assert!(stderr(&out).contains(&want), "{}", stderr(&out));
+    assert!(fx.calls().is_empty());
+    let left: Vec<_> = fs::read_dir(fx.data().join("audit-runs")).unwrap().collect();
+    assert!(left.is_empty(), "the failed call left {left:?}");
+}
+
+#[test]
 fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
     let fx = Fixture::new("[judge]\nagent = \"codex\"\nmodel = \"gpt-5\"\n", three_agents);
     fx.raw_reply("default", &answer("LINE").to_string());
     fx.raw_reply("skill", &skill_answer("SESSION").to_string());
     let homes = agent_homes(&fx);
-    let scratch = fx.data().join("codex-judge-home");
+    let runs = fx.data().join("audit-runs");
 
     let dry = stdout(&fx.mazo(&["audit", "unslop", "--dry-run"]));
-    let judge = format!(
-        "judge: CODEX_HOME={} codex exec --ephemeral --skip-git-repo-check --disable shell_tool \
-         --disable view_image --disable multi_agent -c web_search=disabled --sandbox read-only \
-         --output-schema <schema file> -o <result file> --json -m gpt-5 - < <prompt + input>\n",
-        scratch.display()
-    );
-    assert!(dry.contains(&judge), "{dry}");
+    let judge = "judge: CODEX_HOME=<scratch home> codex exec --ephemeral --skip-git-repo-check --disable shell_tool \
+                 --disable view_image --disable multi_agent -c web_search=disabled --sandbox read-only \
+                 --output-schema <schema file> -o <result file> --json -m gpt-5 - < <prompt + input>\n";
+    assert!(dry.contains(judge), "{dry}");
     assert!(!dry.contains("cost:"), "{dry}");
-    assert!(!scratch.exists(), "--dry-run made the scratch home");
+    assert!(!runs.exists(), "--dry-run made a run directory or scratch home");
 
     let out = fx.mazo(&["audit", "unslop", "--limit", "2"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
@@ -993,8 +1003,10 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
         );
         assert_eq!(call.ls, "", "the call's directory was not empty");
         assert!(Path::new(&call.pwd).starts_with(fx.data().join("audit-runs")), "{}", call.pwd);
-        // What the first call wrote into the scratch home is gone by the second.
-        assert_eq!(fx.left(call, "codex_home").unwrap(), scratch.display().to_string());
+        // Each call has a scratch home of its own beside its run directory.
+        let home = fx.left(call, "codex_home").unwrap();
+        assert_eq!(home, format!("{}-home", call.pwd));
+        assert!(!Path::new(&home).exists(), "the call's scratch home is left");
         assert_eq!(fx.left(call, "codex_home_ls").unwrap(), "auth.json\n");
         assert_eq!(fx.left(call, "auth").unwrap().trim_end(), auth.display().to_string());
     }
@@ -1022,9 +1034,8 @@ fn the_codex_judge_runs_in_a_scratch_home_and_answers_in_its_result_file() {
         serde_json::from_str(&stdout(&fx.mazo(&["audit", "unslop", "--resynth", "--json"]))).unwrap();
     assert_eq!(json["spent_usd"], serde_json::Value::Null, "Codex reports no cost");
     assert_eq!(json["record"]["judge"]["cost_usd"], serde_json::Value::Null);
-    let left: Vec<_> = fs::read_dir(&scratch).unwrap().map(|e| e.unwrap().file_name()).collect();
-    assert_eq!(left, ["auth.json"]);
-    assert_eq!(fs::read_link(scratch.join("auth.json")).unwrap(), auth);
+    let left: Vec<_> = fs::read_dir(&runs).unwrap().collect();
+    assert!(left.is_empty(), "the run left {left:?}");
     assert_eq!(agent_homes(&fx), homes, "the audit wrote into ~/.codex or ~/.pi");
 
     // A call that writes no result file is retried, then dropped; a run that
@@ -1105,7 +1116,6 @@ fn the_pi_judge_reads_its_input_file_and_its_final_message_is_validated() {
         );
         assert_eq!(r["result"]["outcome"], "achieved");
     }
-    assert!(!fx.data().join("codex-judge-home").exists());
     assert_eq!(agent_homes(&fx), homes, "the audit wrote into ~/.codex or ~/.pi");
 }
 
@@ -1904,7 +1914,6 @@ fn a_codex_judge_without_a_chatgpt_login_in_the_configured_home_is_never_started
     );
     assert_eq!(stderr(&out), want);
     assert!(fx.calls().is_empty());
-    assert!(!fx.data().join("codex-judge-home").exists());
 
     // An unreadable or malformed `auth.json` refuses too, and says why.
     let needs = "; the Codex judge needs a ChatGPT login: run codex login, or set billing = \"api\" under [judge]\n";

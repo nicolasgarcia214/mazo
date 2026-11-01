@@ -12,9 +12,8 @@ The input has three parts, four for an update:
 - `<existing-skills>`: the skills already installed, one per line as
   `- <name>: <description>`.
 - `<recent-work>`: a summary of the user's last 30 days of skill use: the
-  projects worked in and the skills used, each with its event count, and
-  the latest prompts the user wrote, or a line saying no history is
-  available.
+  projects worked in and the skills used, each with its event count, or a
+  line saying no history is available.
 
 In the input, every frame's tag name ends in a random token mazo picks,
 as in `<candidate-3f9c…>` and `</candidate-3f9c…>`. Only a tag with that token

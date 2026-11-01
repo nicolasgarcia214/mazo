@@ -97,14 +97,14 @@ pub trait Subprocess {
     fn stdin(&self, stage: &Stage, input: &str) -> Option<String>;
     /// Under `subscription`, the login check made once before the first call.
     fn login(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<()>;
-    /// A variable naming a scratch home, made afresh before and after each call.
-    fn scratch(&self, data: &Path) -> Result<Option<(&'static str, PathBuf)>>;
+    /// A scratch home made at `home`, the call's own fresh path, and the variable naming it.
+    fn scratch(&self, home: &Path) -> Result<Option<&'static str>>;
     /// What a finished call returned: its cost and its answer, or why there is none.
     fn reply(&self, out: &Output, written: Option<Vec<u8>>, cap: Option<u64>) -> Result<Reply>;
     /// The flag that caps a call's dollar cost, for an agent that reports one.
     fn budget_flag(&self) -> Option<&'static str>;
     /// The judge line and model `--dry-run` prints.
-    fn shown(&self, data: &Path, argv: &str) -> String;
+    fn shown(&self, argv: &str) -> String;
     fn model(&self) -> Option<String>;
 }
 ```

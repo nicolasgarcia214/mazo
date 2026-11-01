@@ -48,8 +48,8 @@ pub trait Backend {
     fn budget_flag(&self) -> Option<&'static str> {
         None
     }
-    /// The judge line `--dry-run` prints, with `data` for a scratch home.
-    fn dry_run(&self, data: &Path) -> String;
+    /// The judge line `--dry-run` prints.
+    fn dry_run(&self) -> String;
     /// The model `--dry-run` names, where the judge line may not.
     fn model(&self) -> Option<String> {
         None
@@ -68,9 +68,10 @@ pub trait Subprocess {
     fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
         Ok(())
     }
-    /// A variable naming a scratch home under `data`, made afresh before and
-    /// after each call.
-    fn scratch(&self, _data: &Path) -> Result<Option<(&'static str, PathBuf)>> {
+    /// For an agent that needs a scratch home: that home made at `home`, a
+    /// path of the call's own that does not exist yet, and the variable
+    /// naming it.
+    fn scratch(&self, _home: &Path) -> Result<Option<&'static str>> {
         Ok(None)
     }
     /// What a finished call returned, from its output and the result file it
@@ -81,7 +82,7 @@ pub trait Subprocess {
         None
     }
     /// The judge line `--dry-run` prints for the quoted argv.
-    fn shown(&self, data: &Path, argv: &str) -> String;
+    fn shown(&self, argv: &str) -> String;
     /// As [`Backend::model`].
     fn model(&self) -> Option<String> {
         None
@@ -111,7 +112,7 @@ impl<T: Subprocess> Backend for T {
 
     /// The stage-1 argv, with its prompt, schema and empty arguments quoted
     /// for a shell.
-    fn dry_run(&self, data: &Path) -> String {
+    fn dry_run(&self) -> String {
         let quoted: Vec<String> = self
             .argv(&SESSION)
             .iter()
@@ -122,7 +123,7 @@ impl<T: Subprocess> Backend for T {
                 s => s.into(),
             })
             .collect();
-        self.shown(data, &quoted.join(" "))
+        self.shown(&quoted.join(" "))
     }
 
     fn model(&self) -> Option<String> {
@@ -253,7 +254,8 @@ fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
 
 /// One subprocess judge call: `backend`'s argv run in a fresh empty directory under
 /// `<data>/audit-runs/`, with the files it names in a fresh temporary
-/// directory, both removed after, and its scratch home made afresh before and
+/// directory and its scratch home, if any, beside that run directory: all
+/// three the call's own, so concurrent calls never share one, and removed
 /// after. A capped call of an agent with a [`Subprocess::budget_flag`] gets that
 /// flag, and is counted at its cap when killed past its time, the most it
 /// could have spent. A call killed once `cancel` turned true fails the run.
@@ -268,7 +270,12 @@ fn spawn(
 ) -> Result<Reply> {
     let argv = backend.argv(stage);
     let (unique, dir) = run_dir(data)?;
-    let scratch = backend.scratch(data)?;
+    let home = dir.with_file_name(format!("{unique}-home"));
+    let scratch = backend.scratch(&home).inspect_err(|_| {
+        // Best effort: the scratch error is the one worth reporting.
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&home);
+    })?;
     let files = std::env::temp_dir().join(format!("mazo-judge-{unique}"));
     let result = files.join("result.json");
     let output = DirBuilder::new().mode(0o700).create(&files).and_then(|()| {
@@ -297,8 +304,8 @@ fn spawn(
         if let (Some(cap), Some(flag)) = (cap, backend.budget_flag()) {
             cmd.args([flag, &cents(cap)]);
         }
-        if let Some((var, home)) = &scratch {
-            cmd.env(var, home);
+        if let Some(var) = scratch {
+            cmd.env(var, &home);
         }
         scrub(&mut cmd, billing);
         wait(cmd.spawn()?, stdin, JUDGE_TIMEOUT, cancel)
@@ -306,12 +313,11 @@ fn spawn(
     let written = fs::read(&result);
     let removed = fs::remove_dir_all(&dir);
     let cleaned = fs::remove_dir_all(&files);
+    let homed = scratch.map(|_| fs::remove_dir_all(&home)).transpose();
     let output = output.map_err(|e| format!("{}: {e}", argv[0]))?;
     removed.map_err(crate::at(&dir))?;
     cleaned.map_err(crate::at(&files))?;
-    if scratch.is_some() {
-        backend.scratch(data)?;
-    }
+    homed.map_err(crate::at(&home))?;
     let Some(output) = output else {
         if cancel() {
             return Err(CANCELLED.into());
@@ -415,7 +421,7 @@ mod tests {
         ) -> Result<Reply> {
             Ok(Reply { cost: cap, answer: Ok(Value::from(input)) })
         }
-        fn dry_run(&self, _: &Path) -> String {
+        fn dry_run(&self) -> String {
             "canned".into()
         }
     }
