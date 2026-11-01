@@ -471,11 +471,7 @@ const HTTP_PLACEHOLDER: &str = "\n# [judge]\n# agent = \"http\"\n# url = \"<base
 /// after, so detection leaves nothing behind.
 fn detect_judge() -> Result<Option<JudgeAgent>> {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let scratch = std::env::temp_dir().join(format!(
-        "mazo-init-{}-{}",
-        std::process::id(),
-        jiff::Timestamp::now().as_nanosecond()
-    ));
+    let scratch = std::env::temp_dir().join(format!("mazo-init-{}", crate::unique()));
     DirBuilder::new().mode(0o700).create(&scratch).map_err(crate::at(&scratch))?;
     let detected = JudgeAgent::ALL.into_iter().filter(|a| a.home()).find(|&agent| {
         let found = std::env::split_paths(&path).any(|dir| {

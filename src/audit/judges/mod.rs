@@ -16,7 +16,6 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use jiff::Timestamp;
 use serde_json::Value;
 
 use super::session::{SESSION, SESSION_PROMPT, SESSION_SCHEMA};
@@ -245,7 +244,7 @@ fn scrub(cmd: &mut Command, billing: Billing) {
 
 /// A fresh empty directory under `<data>/audit-runs/`, and its unique name.
 fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
-    let unique = format!("{}-{}", std::process::id(), Timestamp::now().as_nanosecond());
+    let unique = crate::unique();
     let runs = data.join("audit-runs");
     let dir = runs.join(&unique);
     fs::create_dir_all(&runs).and_then(|()| fs::create_dir(&dir)).map_err(crate::at(&dir))?;

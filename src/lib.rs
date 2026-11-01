@@ -86,6 +86,15 @@ pub fn at<E: std::fmt::Display>(p: &std::path::Path) -> impl Fn(E) -> String + C
     move |e| format!("{}: {e}", render::PathExt::inert(p))
 }
 
+/// A name no other call makes, in this process or any other: the pid, the
+/// time, and a count, since the clock repeats across threads where it ticks
+/// in microseconds, as on macOS.
+pub fn unique() -> String {
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{}-{call}", std::process::id(), jiff::Timestamp::now().as_nanosecond())
+}
+
 /// Writes `args` to stdout. A reader that closed it early, as `head` does,
 /// ends mazo quietly with 0; any other write error ends it with 1.
 pub fn stdout(args: std::fmt::Arguments) {
@@ -110,4 +119,17 @@ macro_rules! out {
 #[macro_export]
 macro_rules! outln {
     ($($arg:tt)*) => { $crate::stdout(format_args!("{}\n", format_args!($($arg)*))) };
+}
+
+#[cfg(test)]
+mod tests {
+    /// Threads that ask at once, inside one clock tick, still get names apart.
+    #[test]
+    fn unique_names_differ_across_threads() {
+        let threads: Vec<_> =
+            (0..8).map(|_| std::thread::spawn(|| (0..500).map(|_| super::unique()).collect::<Vec<_>>())).collect();
+        let names: Vec<String> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
+        let distinct: std::collections::BTreeSet<_> = names.iter().collect();
+        assert_eq!(distinct.len(), names.len());
+    }
 }
