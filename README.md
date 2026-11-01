@@ -48,12 +48,10 @@ explains what each count means.
 Mazo runs on **Linux and macOS**, on x86_64 and ARM64, with at least one of Claude
 Code, Codex, or Pi. You need Git and a Rust toolchain to build it.
 
-Releases are not published yet. Build from source with credentials that can read
-this currently private repository:
+Releases are not published yet, so build from source:
 
 ```sh
-CARGO_NET_GIT_FETCH_WITH_CLI=true \
-  cargo install --locked --git https://github.com/nicolasgarcia214/mazo
+cargo install --locked --git https://github.com/nicolasgarcia214/mazo
 ```
 
 ## Quick start
