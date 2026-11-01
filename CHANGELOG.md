@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1](https://github.com/nicolasgarcia214/mazo/compare/v0.1.0...v0.1.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* 🔒️ harden the vet judge and give each Codex call its own home ([#209](https://github.com/nicolasgarcia214/mazo/issues/209)) ([ea46321](https://github.com/nicolasgarcia214/mazo/commit/ea463211bafd0b612bd459b934f31f0973f9f5e5))
+
+
+### Documentation
+
+* **explainer:** 🍱 add an animated explainer drawn on Canvas 2D ([b56817c](https://github.com/nicolasgarcia214/mazo/commit/b56817cb79cd57ae21c548e0f0e505abdad54f58))
+
 ## 0.1.0 (2026-11-01)
 
 
