@@ -6,7 +6,15 @@ and its background jobs. Back to the [README](../README.md).
 Bare `mazo` at a terminal opens a TUI over the same data as `usage`, `unused`
 and `show`: the usage table, the unused list and a skill's card. Off a
 terminal, bare `mazo` prints the help. The TUI scans first and writes nothing
-but what an action writes, and it re-reads the data after each action.
+but what an action writes, and it re-reads the data after each action. It
+lists global skills only; run `mazo usage` inside a project to see its project
+skills. On a terminal at least 140 columns wide, the usage view shows the
+selected skill's card beside the table.
+
+The top bar starts with mazo's one-line mark. When a list leaves seven or
+more rows empty under it, the full logo fills the bottom left of the list's
+pane, with the version and tagline beside it where they fit. The logo also
+tops the help when it has room. It needs a truecolor terminal.
 
 The top bar shows the view, the number of listed skills, the name filter, the
 window, any agent, channel or authoring filter that is set, and the
@@ -23,17 +31,16 @@ lists the dialog's keys instead.
 
 `H` opens the help over any screen: what each column means, the current
 screen's first, the marks and glyphs, and a FAQ on why counts look low, what
-`-` under audit and the agent letters mean, and how grade, retro and audit
-differ, and what the tokens in context cost. `j`/`k` and `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it. In
-the `/` filter and the add source, `H` is a literal `H`. The HTML report's
-legend is its marks and glyphs; the legend under `mazo usage` and `mazo
-unused` keeps only those its table shows, and a table with none has no legend.
+`-` under audit means, how grade, retro and audit differ, and what the tokens
+in context cost. `j`/`k` and `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes
+it. In the `/` filter and the add source, `H` is a literal `H`.
 
 ## Keys
 
 | Key | Action |
 |---|---|
-| arrows, `hjkl` | Move. |
+| up/down, `k`/`j` | Move one row, or scroll a card one line. |
+| left/right, `h`/`l` | Move, or scroll a card, one page. |
 | `Enter` | Open a card. On the unused list, a store skill whose status is `unused` (its `new` window since install has ended) asks to retire it instead. |
 | `Esc` | Go back. On a list, close the job pane once the job ends. |
 | `Tab` | Switch between usage and unused. |
@@ -48,12 +55,14 @@ unused` keeps only those its table shows, and a table with none has no legend.
 | `i` | Add a source. |
 | `x` | Audit the selected skill, or the card's. |
 | `H` | Open the help. |
-| `q` | Quit. |
+| `q`, Ctrl-C | Quit. |
 
 ## Retire
 
-`r` retires as [`mazo retire`](managing-skills.md#mazo-retire) does. When
-`retire` would refuse a skill, the dialog lists its blockers. There is no
+`r` retires as [`mazo retire`](managing-skills.md#mazo-retire) does. The
+dialog says whether the skill moves to the source's `.archive` or leaves the
+store. If `retire` would refuse the skill, pressing `y` shows
+`retire <skill> refused:` and its blockers, and nothing changes. There is no
 `--force`.
 
 ## Update
@@ -62,10 +71,13 @@ unused` keeps only those its table shows, and a table with none has no legend.
 A source skill, or one installed from a local path, shows that it is not
 updatable.
 
-The dialog names the judge and its cap and asks "update and ask about each
-judge verdict?". The update runs in the background pane. Each re-vet of an
-untrusted skill that changed opens the y/N dialog an add uses. Enter takes the
-prompt's default, and Esc or `q` answers No.
+With a `[judge]`, the dialog names the judge and its cap per call (or says it
+reports no cost) and asks "update <skill> and ask about each judge verdict?"
+(`U` says "every store skill"). Without one, it asks "update <skill> in the
+background?" and warns that untrusted skills are skipped. The update runs in
+the background pane. Each re-vet of an untrusted skill that changed opens the
+y/N dialog an add uses. Enter takes the prompt's default, `y` and `n` answer,
+and Esc or `q` is No (`q` then asks to quit).
 
 There is no `--force`, so a security finding still refuses that skill's
 update. mazo reports an up-to-date skill without a judge call.

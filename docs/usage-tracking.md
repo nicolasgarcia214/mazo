@@ -42,16 +42,22 @@ numbers are current. Every report prints how far back each home's logs go:
 "unused since 2026-09-10" is not "never used".
 
 On a terminal, `usage`, `unused` and `status` colour their status tokens:
-`unused` and `ERROR:` in red; `held`, `new`, the `named by` note, `warning:`
+`unused`, `ERROR:` and the audit column's `!` in red; `held`, `new`, the `named by` note, `warning:`
 and a stale grade's `stale` mark in yellow. Piped output, or any output with
 `NO_COLOR` set to a non-empty value, has no colour.
+
+Under the table, `usage` and `unused` print a legend of only the marks and
+glyphs their table shows, and none when it shows none. The HTML report's
+legend lists them all.
 
 ### Actors
 
 The actor is who ran the session: `main` (you), `subagent`, `headless` (Claude
 `sdk-cli` or `codex exec`) or `probe` (any other Claude entrypoint). `usage`
-leaves out `probe` unless `--all`, and `report`'s usage table always includes
-it. `unused`, `show` and the report's cards always leave it out.
+leaves out `probe` sessions and `other`-origin loads (from outside mazo's
+skill roots, or of a name mazo does not know) unless `--all`, and leaves out
+authoring reads unless `--authoring`. `report`'s usage table is `usage --all`,
+so it includes probe sessions. `unused`, `show` and the report's cards always leave it out.
 
 ## `mazo scan`
 
@@ -61,6 +67,12 @@ from the logs on disk. See [how accurate the counts are](#how-accurate-the-count
 for what a scan can miss.
 
 ## `mazo usage`
+
+The window is `--since <N>d` or `--since all`. It defaults to 30 days for
+`usage`, `show` and `report`, and to 60 days for `unused`. `usage` also takes
+`--agent claude|codex|pi` and `--channel slash|tool|typed|read|ref` to keep
+only those events, `--authoring` to count authoring reads, and `--json`.
+`show --limit <N>` sets how many recent events the card lists (default 20).
 
 One row per skill: sessions in the window, sessions over the last 7 and 30
 local days whatever the window, the trend of the last 30 days against the 30
@@ -91,10 +103,9 @@ that holds:
 4. `-`: neither.
 
 The card (`mazo show`) prints the vet verdict and the latest audit's.
-`--json` carries the `verdict`, the audit's when there is one, else the vet's
+`usage --json` carries the `verdict`, the audit's when there is one, else the vet's
 led by any security finding, and its `verdict_source` (`audit`, `vet`, or null
-when not judged). `usage` leaves out `probe` sessions unless `--all`
-(see [actors](#actors)). Project skills get their own rows; see
+when not judged). Project skills get their own rows; see
 [project skills](project-skills.md#status-and-usage-in-a-project).
 
 A grade cell in `usage` is the score as written, then ` stale` when the
@@ -111,7 +122,7 @@ any of the notes below.
 |---|---|
 | `unused` | Nothing holds it. |
 | `held` | A skill that cites it was used in the window; the note names the holders. |
-| `new` | Its first commit is inside the window, or it is not committed yet. Outside a git repository no skill is new. |
+| `new` | It arrived inside the window: a source skill's first commit is in the window or it is not committed yet (outside a git repository no source skill is new), and a store skill was installed in the window. |
 
 | Note | Meaning |
 |---|---|

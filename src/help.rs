@@ -64,7 +64,7 @@ pub const MARKS: [(&str, &str, &str); 10] = [
 ];
 
 /// The questions the help answers, each with its answer's lines.
-pub const FAQ: [(&str, &[&str]); 7] = [
+pub const FAQ: [(&str, &[&str]); 6] = [
     (
         "Why are the counts lower than I expected?",
         &[
@@ -90,7 +90,6 @@ pub const FAQ: [(&str, &[&str]); 7] = [
             "x audits it.",
         ],
     ),
-    ("What do the agent letters mean?", &["C is Claude, X is Codex and P is Pi."]),
     (
         "Grade, retro or audit?",
         &[

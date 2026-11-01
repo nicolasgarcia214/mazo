@@ -100,8 +100,12 @@ links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 
 ## `[[home]]`
 
-One table per agent home, with a `name`, an `agent` (`claude`, `codex` or
-`pi`) and a `path`.
+One table per agent home, with a unique `name`, an `agent` (`claude`, `codex`
+or `pi`) and a `path`. `sync` links skills into `<path>/skills`, and a leading
+`~` is your home directory. For a `pi` home, a non-empty `PI_CODING_AGENT_DIR`
+replaces `path`, as it does for Pi itself, and mazo resolves it against the
+current directory. Either one may be a `file://` URL. A value mazo cannot use
+is the usage error `invalid PI_CODING_AGENT_DIR`.
 
 ## `trusted`
 
@@ -234,7 +238,7 @@ Claude deletes a session log, the ledger holds the only record of its loads.
 
 Skills installed with `mazo add` live in the store, `store/<name>/` in the same
 directory. Every command reads them beside the skills in `source`: `sync`
-links both, and a name in both is a conflict. `mazo.lock` there records one
+links both, and a name in both is a conflict. `<data dir>/mazo.lock` records one
 `[[skill]]` per installed skill:
 
 ```toml

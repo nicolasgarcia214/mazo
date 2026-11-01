@@ -5,7 +5,7 @@ agent. Back to the [README](README.md).
 
 ## Checks
 
-CI runs these on Linux and macOS:
+CI runs these on Linux and macOS with Rust 1.98.1:
 
 ```sh
 cargo fmt --check
@@ -32,10 +32,16 @@ and the JetBrains Mono font) to redraw the README's `docs/assets/tui.png`.
 
 Each agent is:
 
-- one module in `src/adapters/` implementing `Adapter`;
+- one module in `src/adapters/` implementing `Adapter`, with its arm in
+  `adapters::for_agent` and its `MARKER` in `adapters::MARKERS` (the scan's
+  prefilter drops every line that holds no marker);
 - one module in `src/audit/judges/` implementing `Backend`, with its arm in
   `judges::backend`;
-- one `Agent` variant and one `JudgeAgent` variant.
+- one `Agent` variant and one `JudgeAgent` variant, with a `JudgeAgent::ALL`
+  entry and an `AGENT_HOMES` entry in `src/config.rs` so `init` finds its
+  judge and its home.
+
+The compiler checks the match arms but not those three arrays.
 
 Adapters only turn transcript records into events, prompts and condensed
 sessions. `classify.rs` computes identity, actor, root session and authoring

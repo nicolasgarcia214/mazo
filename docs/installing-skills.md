@@ -107,14 +107,20 @@ refused.
 
 ### Names
 
+`mazo add` refuses (exit 2) a skill whose `SKILL.md` frontmatter is not a
+mapping, has no nonempty `description` or one over 1024 characters, or does
+not declare `name:` as the name it installs under (`--as` rewrites it). That
+name must be at most 64 characters of lowercase ASCII letters and digits
+joined by single hyphens.
+
 mazo refuses a name already in `source` or the store (exit 2, writing
 nothing). `--as <name>` installs the skill under another name and rewrites the
 `name:` in its `SKILL.md`.
 
 ### Symlinks
 
-mazo refuses a skill that contains a symlink, or a symlink that points outside
-the clone.
+mazo refuses a skill that contains any symlink, and a skill path that
+resolves, through a symlink, outside the clone.
 
 ### Trust
 
@@ -140,11 +146,12 @@ subpath.
 - **Unchanged.** mazo reports the skill up to date and leaves its `mazo.lock`
   entry as it was.
 - **Untrusted and changed.** When the skill's source is not on the `trusted`
-  list and is not mazo's own repository, mazo re-vets it before replacing it
+  list and is not a [bundled skill](#the-bundled-skills), mazo re-vets it before replacing it
   (see [re-vetting an update](#re-vetting-an-update)). The entry's `trusted`
   value plays no part, so a skill added with `--trust`, or a source dropped
   from the list, is re-vetted. mazo does not vet a trusted one. With no
-  `[judge]`, mazo refuses the untrusted skill. It prints one line
+  `[judge]`, mazo refuses every untrusted skill before cloning it, changed
+  or not. It prints one line
   per such skill, then the judge tables and issue link of
   [the add refusal](#no-judge) once, and exits 2.
 - **Not updatable.** A local-path skill. A name that is not a store skill is a
@@ -243,16 +250,17 @@ in its `mazo.lock` entry.
 
 ### Re-vetting an update
 
-`mazo update` re-vets a store skill when its content changed, its `mazo.lock`
-entry has `trusted = false`, and its source is not on the `trusted` list. An
-unchanged skill, or a trusted one, makes no judge call.
+`mazo update` re-vets a store skill when its content changed and its source is
+neither on the `trusted` list nor a [bundled skill](#the-bundled-skills); the
+entry's `trusted` value plays no part. An unchanged skill, or a trusted one,
+makes no judge call.
 
 The one call sends the new `SKILL.md` and the output of `git diff --no-index`
 from the installed copy to the new one, with binary files diffed as text. It
 also sends the other skills and the work summary, as for `add`.
 
-The same rules as `add` decide the update, with `update <name>? [Y/n]` as the
-prompt and `--yes` and `--force` on `update`:
+The same rules as `add` decide the update, with `update <name>?` as the prompt
+(`[Y/n]` or `[y/N]` by the verdict, as in the table above) and `--yes` and `--force` on `update`:
 
 - a security finding refuses it unless `--force`;
 - a diff mazo did not send in full (not text, or over the caps) is a security

@@ -758,7 +758,6 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
         "Probe sessions",
         "Project rows",
         "Why does a skill show - under audit?",
-        "C is Claude, X is Codex and P is Pi.",
         "grade is a static review of the SKILL.md",
         "retro judges one run in context, right after it ran.",
         "audit judges many past runs offline and takes the retros as input",

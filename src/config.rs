@@ -453,7 +453,7 @@ pub fn init_note(judge: Option<InitJudge>) -> String {
         }
         Some(InitJudge::Detected(a)) => format!("judge: {}", a.name()),
         None => "no judge: log in to claude, codex or pi and add [judge] agent = \"<agent>\" to the config, \
-                 or a command or http judge (see the README)"
+                 or a command or http judge (see docs/configuration.md#judge)"
             .into(),
     }
 }
