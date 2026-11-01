@@ -21,6 +21,13 @@ properties such as "a fresh scan equals an incremental one". The tests read the 
 skills tree in `tests/fixtures/skills`. Set `MAZO_TEST_SKILLS` to run them
 against a real skills directory instead.
 
+## Assets
+
+`src/tui/logo_art.rs` is generated: after changing `docs/assets/logo-dark.png`,
+run `python docs/assets/bake-logo.py` (needs ImageMagick). After a change to
+the TUI's look, run `python docs/assets/capture-tui.py` (needs `rsvg-convert`
+and the JetBrains Mono font) to redraw the README's `docs/assets/tui.png`.
+
 ## Adding an agent
 
 Each agent is:

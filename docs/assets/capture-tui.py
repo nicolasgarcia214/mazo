@@ -56,6 +56,13 @@ fn capture() {
 '''
 
 
+def colour(name):
+    """The hex of a ratatui colour's Debug name: a named one, or `Rgb(r, g, b)`."""
+    if name.startswith("Rgb("):
+        return "#%02x%02x%02x" % tuple(int(n) for n in name[4:-1].split(","))
+    return PALETTE[name]
+
+
 def capture():
     with tempfile.TemporaryDirectory(prefix="mazo-readme-") as scratch:
         data = Path(scratch) / "cells.json"
@@ -83,14 +90,23 @@ def capture():
             x, y = PAD + cell["x"] * CELL_W, TOP + cell["y"] * CELL_H
             if cell["bg"] != "Reset":
                 svg.append(f'<rect x="{x}" y="{y}" width="{CELL_W}" height="{CELL_H}" '
-                           f'fill="{PALETTE[cell["bg"]]}"/>')
+                           f'fill="{colour(cell["bg"])}"/>')
         svg.append('<g font-family="JetBrains Mono, JetBrainsMono Nerd Font Mono, monospace" font-size="15">')
+        # A block element fills its share of the cell, as a terminal draws it;
+        # as text it would leave the font's gaps.
+        blocks = {"█": (0, 0, 1, 1), "▀": (0, 0, 1, .5), "▄": (0, .5, 1, .5), "▍": (0, 0, 3 / 8, 1)}
         for cell in cells:
-            if not cell["text"].strip():
+            if cell["text"] in blocks:
+                bx, by, bw, bh = blocks[cell["text"]]
+                x, y = PAD + cell["x"] * CELL_W, TOP + cell["y"] * CELL_H
+                svg.append(f'<rect x="{x + bx * CELL_W}" y="{y + by * CELL_H}" width="{bw * CELL_W}" '
+                           f'height="{bh * CELL_H}" fill="{colour(cell["fg"])}"/>')
+        for cell in cells:
+            if not cell["text"].strip() or cell["text"] in blocks:
                 continue
             x, y = PAD + cell["x"] * CELL_W, TOP + cell["y"] * CELL_H + 16
             weight = ' font-weight="700"' if cell["bold"] else ""
-            svg.append(f'<text x="{x}" y="{y}" fill="{PALETTE[cell["fg"]]}"{weight}>'
+            svg.append(f'<text x="{x}" y="{y}" fill="{colour(cell["fg"])}"{weight}>'
                        f'{html.escape(cell["text"])}</text>')
         svg.append('</g></svg>')
         vector = Path(scratch) / "tui.svg"

@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
@@ -13,6 +13,7 @@ use ratatui::widgets::{
 use super::card::draw_card;
 use super::dialog::{Ask, Dialog, draw_dialog, draw_help};
 use super::job::{PANE_LINES, draw_job};
+use super::logo::{self, Logo};
 use super::{App, Screen};
 use crate::ctx;
 use crate::ledger::name;
@@ -74,11 +75,6 @@ fn keys(screen: Screen, width: usize) -> Vec<Line<'static>> {
 
 /// The top bar's tabs.
 const TABS: [&str; 2] = ["usage", "unused"];
-
-/// The top bar's name.
-fn logo() -> Line<'static> {
-    Line::from(vec![Span::raw(" ♠ mazo ").fg(Color::Black).bg(theme::ACCENT).bold(), Span::raw(" ")])
-}
 
 /// `s` in the muted colour.
 fn muted(s: &str) -> Span<'static> {
@@ -256,10 +252,10 @@ impl App {
         Some(Line::from(vec![muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]))
     }
 
-    /// The columns the name and the tabs or the trail take.
-    fn lead(&self) -> usize {
+    /// The columns the tabs or the trail take.
+    fn tabs(&self) -> usize {
         // Each tab title is padded with a space either side, a divider between.
-        logo().width() + self.trail().map_or(TABS.iter().map(|t| t.len() + 3).sum::<usize>() - 1, |t| t.width())
+        self.trail().map_or(TABS.iter().map(|t| t.len() + 3).sum::<usize>() - 1, |t| t.width())
     }
 
     /// What follows the lead in `width` columns: the count of listed skills
@@ -320,7 +316,7 @@ impl App {
         (chips, line, notice.map(|n| Line::from(vec![Span::raw(" "), n])))
     }
 
-    /// The top bar in `area`: the name, the tabs or the card's trail, then
+    /// The top bar in `area`: the mark, the tabs or the card's trail, then
     /// [`App::top`]'s chips and tokens, and on a second row, when `area` has
     /// one, its notice.
     fn draw_top(&self, frame: &mut Frame, area: Rect) {
@@ -329,9 +325,9 @@ impl App {
         let split = |area, width: usize| {
             Layout::horizontal([Constraint::Length(width as u16), Constraint::Fill(1)]).areas(area)
         };
-        let [at, area] = split(row, logo().width());
-        frame.render_widget(logo(), at);
-        let [at, area] = split(area, self.lead() - logo().width());
+        let [at, area] = split(row, logo::mark().width());
+        frame.render_widget(logo::mark(), at);
+        let [at, area] = split(area, self.tabs());
         match self.trail() {
             Some(trail) => frame.render_widget(trail, at),
             None => {
@@ -361,7 +357,8 @@ impl App {
         let height = Constraint::Length(footer_lines.len() as u16);
         let pane_height = self.job.as_ref().map_or(0, |j| j.lines.len().clamp(1, PANE_LINES) as u16 + 2);
         // The top bar's notice takes a second row when it does not fit the first.
-        let rest = usize::from(frame.area().width).saturating_sub(self.lead());
+        let lead = logo::mark().width() + self.tabs();
+        let rest = usize::from(frame.area().width).saturating_sub(lead);
         let top_height = 1 + u16::from(self.top(rest).2.is_some());
         let [top, body, info, pane, footer] = Layout::vertical([
             Constraint::Length(top_height),
@@ -446,6 +443,7 @@ impl App {
             };
             let line = Line::raw(why).fg(theme::MUTED).italic().centered();
             frame.render_widget(Paragraph::new(line), body.centered_vertically(Constraint::Length(1)));
+            draw_logo(frame, body, usize::from(body.height) / 2 + 1);
             return;
         }
         self.page = usize::from(body.height).saturating_sub(1).max(1);
@@ -459,6 +457,25 @@ impl App {
         frame.render_stateful_widget(table, area, &mut state);
         let below = Rect { y: body.y + 1, height: body.height.saturating_sub(1), ..body };
         scrollbar(frame, below, total, first, self.page);
+        draw_logo(frame, body, 1 + total);
+    }
+}
+
+/// The [`Logo`] in the bottom left of `area`, past the gutter, with
+/// [`logo::about`] beside its last row when that fits, once the first `used`
+/// rows of `area` leave it room and a blank row above it.
+fn draw_logo(frame: &mut Frame, area: Rect, used: usize) {
+    let room = usize::from(area.height).saturating_sub(used + 1) >= usize::from(Logo::HEIGHT);
+    if !room || area.width < Logo::WIDTH + 2 {
+        return;
+    }
+    let art = Rect { x: area.x + 2, y: area.bottom() - Logo::HEIGHT, width: Logo::WIDTH, height: Logo::HEIGHT };
+    frame.render_widget(Logo, art);
+    let about = logo::about();
+    let x = art.right() + 2;
+    let beside = Rect { x, y: area.bottom() - 1, width: area.right().saturating_sub(x), height: 1 };
+    if usize::from(beside.width) >= about.width() {
+        frame.render_widget(about, beside);
     }
 }
 
