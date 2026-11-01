@@ -1575,7 +1575,7 @@ fn the_vet_prompt_after_the_picker_reads_the_answer_typed_to_it() {
 }
 
 #[test]
-fn the_vet_call_sends_a_summary_of_the_users_recent_work() {
+fn the_vet_call_sends_a_summary_of_the_users_recent_work_without_their_prompts() {
     let (fx, dir) = judged();
     answer(&fx, None, "good", "worth trying");
     add(&fx, &[&s(&dir), "--yes"]).assert_ok();
@@ -1592,12 +1592,10 @@ fn the_vet_call_sends_a_summary_of_the_users_recent_work() {
     e.src = format!("{}:1", transcript.display());
     common::write(&fx.data.join("mazo/events.jsonl"), &format!("{}\n", serde_json::to_string(&e).unwrap()));
     add(&fx, &[&s(&dir), "--yes"]).assert_ok();
-    let work = format!(
-        "<recent-work>\nSkill use in the last 30 days, as event counts.\nProjects:\n- /work: 1\nSkills:\n- unslop: 1\n\
-         Latest prompts:\n- {}: Tidy the README.\n</recent-work>\n",
-        ts.strftime("%Y-%m-%d")
-    );
-    assert!(calls(&fx)[1].contains(&work), "{}", calls(&fx)[1]);
+    let work = "<recent-work>\nSkill use in the last 30 days, as event counts.\nProjects:\n- /work: 1\nSkills:\n- unslop: 1\n\
+                </recent-work>\n";
+    assert!(calls(&fx)[1].contains(work), "{}", calls(&fx)[1]);
+    assert!(!calls(&fx)[1].contains("Tidy the README."), "the user's prompt reached the judge: {}", calls(&fx)[1]);
 }
 
 #[test]

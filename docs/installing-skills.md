@@ -186,17 +186,15 @@ The judge sees:
   with `--project`, the project's store;
 - a summary of your last 30 days of work, capped at 8 KiB as a whole.
 
-mazo builds the summary from the ledger and the transcripts it points into. It
-makes no judge call to build it. The summary holds:
+mazo builds the summary from the ledger alone. It makes no judge call to build
+it. The summary holds:
 
 - the ten projects (`cwd`) used most, each with its event count;
-- the twenty skills used most, each with its event count;
-- up to ten of your latest prompts, one per transcript, from at most twenty
-  transcripts.
+- the twenty skills used most, each with its event count.
 
-With no history the summary says so and the vet still runs. The prompts reach
-the configured judge as you wrote them, with whitespace collapsed and cut to
-200 characters. mazo does not redact them.
+It holds none of your prompts: the verdict lands in the lockfile, and a skill
+under vet could ask the judge to copy them there. With no history the summary
+says so and the vet still runs.
 
 The judge answers with:
 
@@ -225,6 +223,13 @@ Enter takes the default:
 |---|---|
 | `worth trying` and not `poor` | `[Y/n]` |
 | anything else | `[y/N]` |
+
+The verdict is one model's reading of text the skill's author wrote, and that
+text can try to talk the judge into a clean verdict. mazo frames that text and
+checks the answer, but it cannot keep the judge from being persuaded. Without
+`--yes` you see the verdict and decide; with `--yes` on an untrusted source, a
+skill the judge passes installs unread. Read the files of a source you do not
+know before trusting either.
 
 ### Judge calls with `--all`
 
