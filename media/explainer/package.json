@@ -1,0 +1,13 @@
+{
+  "name": "mazo-explainer",
+  "private": true,
+  "type": "module",
+  "description": "Animated explainer of mazo, drawn with the Canvas 2D API and encoded with ffmpeg.",
+  "scripts": {
+    "render": "node render.mjs",
+    "preview": "python3 -m http.server 8000 --bind 127.0.0.1"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.65"
+  }
+}

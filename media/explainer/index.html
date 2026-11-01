@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mazo explainer</title>
+<style>
+  body { margin: 0; background: #05080c; color: #e8eef5; font: 14px "JetBrains Mono", monospace; }
+  canvas { display: block; width: 100%; max-width: 1280px; margin: 24px auto 12px; aspect-ratio: 16 / 9; }
+  .bar { display: flex; gap: 12px; align-items: center; max-width: 1280px; margin: 0 auto; padding: 0 16px; }
+  input[type=range] { flex: 1; }
+  button { font: inherit; padding: 4px 12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="bar">
+  <button id="play">pause</button>
+  <input id="seek" type="range" min="0" step="0.01" value="0">
+  <span id="time">0.00s</span>
+</div>
+<script type="module">
+  import { draw, W, H, DURATION } from './scene.js';
+  const canvas = document.getElementById('c');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const seek = document.getElementById('seek');
+  const button = document.getElementById('play');
+  const label = document.getElementById('time');
+  seek.max = DURATION;
+  let playing = true;
+  let t = 0;
+  let last = performance.now();
+  function frame(now) {
+    if (playing) t = (t + (now - last) / 1000) % DURATION;
+    last = now;
+    seek.value = t;
+    label.textContent = `${t.toFixed(2)}s`;
+    ctx.clearRect(0, 0, W, H);
+    draw(ctx, t);
+    requestAnimationFrame(frame);
+  }
+  button.onclick = () => { playing = !playing; button.textContent = playing ? 'pause' : 'play'; };
+  seek.oninput = () => { t = Number(seek.value); };
+  document.fonts.ready.then(() => requestAnimationFrame(frame));
+</script>
+</body>
+</html>
