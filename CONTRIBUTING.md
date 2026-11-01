@@ -21,6 +21,25 @@ properties such as "a fresh scan equals an incremental one". The tests read the 
 skills tree in `tests/fixtures/skills`. Set `MAZO_TEST_SKILLS` to run them
 against a real skills directory instead.
 
+## Releases
+
+[release-please](https://github.com/googleapis/release-please) versions mazo
+from conventional commit titles on `master`: `fix` bumps the patch version,
+`feat` the minor one, and a `!` or `BREAKING CHANGE` the major one. It keeps a
+release PR open that bumps `Cargo.toml` and `Cargo.lock` and writes
+`CHANGELOG.md` with the Features, Bug Fixes, Performance, Refactoring and
+Documentation sections. `chore`, `ci`, `test`, `style` and `build` commits are
+left out of the changelog.
+
+Merging the release PR tags `vX.Y.Z` and opens a draft GitHub release with the
+changelog. The release-please workflow then dispatches `release.yml`, where
+dist builds the binaries and installers on the tag, uploads them to the draft
+and publishes it. `release.yml` is generated: after changing
+`dist-workspace.toml`, run `dist generate`.
+
+The release PR comes from `GITHUB_TOKEN`, so CI does not run on it; its diff is
+only the version and the changelog.
+
 ## Assets
 
 `src/tui/logo_art.rs` is generated: after changing `docs/assets/logo-dark.png`,
