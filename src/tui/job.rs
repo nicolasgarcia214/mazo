@@ -20,7 +20,7 @@ use crate::theme;
 
 pub(super) const PANE_LINES: usize = 6;
 
-const STOP_WAIT: Duration = Duration::from_secs(10);
+const STOP_WAIT: Duration = audit::KILL_GRACE.saturating_mul(2);
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -243,7 +243,8 @@ fn caught(verb: &str, job: impl FnOnce() -> (Note, bool)) -> (Note, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::caught;
+    use super::{STOP_WAIT, caught};
+    use crate::audit;
     use crate::render::Diag;
 
     #[test]
@@ -252,5 +253,10 @@ mod tests {
         assert_eq!(caught("audit", || panic!("boom")), (Diag::error("the audit panicked: boom").into(), false));
         let n = 2;
         assert_eq!(caught("update", || panic!("boom {n}")), (Diag::error("the update panicked: boom 2").into(), false));
+    }
+
+    #[test]
+    fn quitting_outlasts_the_judge_kill_grace() {
+        assert!(STOP_WAIT > audit::KILL_GRACE);
     }
 }

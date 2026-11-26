@@ -273,7 +273,7 @@ const JUDGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const STDERR_LINES: usize = 5;
 const STDERR_CHARS: usize = 200;
 
-const KILL_GRACE: Duration = Duration::from_secs(5);
+pub(crate) const KILL_GRACE: Duration = Duration::from_secs(5);
 
 pub(crate) fn wait(
     mut child: Child,
