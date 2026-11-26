@@ -9,7 +9,7 @@ use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
 use crate::render::PathExt;
 use crate::{Error, Result};
-use crate::{ledger, links};
+use crate::{durable, links};
 use std::cell::OnceCell;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -95,7 +95,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         }
     }
     if updated && target.project.is_none() {
-        let _lock = ledger::lock(data)?;
+        let _lock = durable::lock(data)?;
         let (plan, errors) = target.home_sync(cfg, &inventory(cfg.source.as_deref(), data)?, None);
         for e in &errors {
             out.error(e);
@@ -126,7 +126,7 @@ fn refresh(
     let (data, store, lock_dir) = (target.data, target.store(), target.lock_dir());
     let (to, old) = (store.join(&l.name), store.join(format!(".old-{}", l.name)));
     {
-        let _lock = ledger::lock(data)?;
+        let _lock = durable::lock(data)?;
         recover(&to, &old).map_err(crate::at(&old))?;
     }
     let (scratch, commit) = remote.clone_in(data, &|| out.cancelled())?;
@@ -144,7 +144,7 @@ fn refresh(
         None => None,
     };
 
-    let _lock = ledger::lock(data)?;
+    let _lock = durable::lock(data)?;
     if let Some(((_, diffed), _)) = &vetted
         && super::content_hash(&to)? != *diffed
     {

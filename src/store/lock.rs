@@ -7,7 +7,7 @@ use super::source::{Remote, Scratch, Source};
 use crate::Result;
 use crate::audit::VetVerdict;
 use crate::render::PathExt;
-use crate::{ledger, policy, yaml};
+use crate::{durable, policy, yaml};
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -89,7 +89,7 @@ impl Lock {
     }
 
     pub(super) fn save(&self, data: &Path) -> Result<()> {
-        ledger::write_atomic(
+        durable::write_atomic(
             &data.join("mazo.lock"),
             toml::to_string(self).map_err(|e| e.to_string())?.as_bytes(),
             0o666,

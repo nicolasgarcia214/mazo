@@ -19,7 +19,7 @@ These decisions about the command line, the config file, the sync and lifecycle 
 - `cmd_report` writes to `<data dir>/report.html`, outside any git repository, unless `--out` names another path. It makes an `--out` path absolute so the opener and the printed path do not depend on the cwd.
 - `cmd_scan` prints JSON through a `serde_json::Value` so object keys print sorted. After a reparse it prints absolute per-home event counts with the previous count instead of `+N`, because a delta is meaningless after a rewrite.
 - `cmd_status` also checks a project's skill links when run inside a project, and `--json` lists them under `project`.
-- `cmd_sync` and `lifecycle::retire` take the data lock (`ledger::lock`) and re-read the inventory under it before computing the plan they apply, so a concurrent `add`, `update` or `retire` cannot leave that plan stale. `cmd_sync` takes no lock for a dry run, a refusal or an empty plan.
+- `cmd_sync` and `lifecycle::retire` take the data lock (`durable::lock`) and re-read the inventory under it before computing the plan they apply, so a concurrent `add`, `update` or `retire` cannot leave that plan stale. `cmd_sync` takes no lock for a dry run, a refusal or an empty plan.
 
 ### Config file (`config`)
 - `config::path` reads `$MAZO_CONFIG`, else `$XDG_CONFIG_HOME/mazo/config.toml` with `XDG_CONFIG_HOME` defaulting to `~/.config`, and consults no other location.

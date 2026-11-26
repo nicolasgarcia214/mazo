@@ -30,7 +30,7 @@ Usage ingestion turns Claude, Codex and Pi transcripts into ledger events: adapt
 
 ### Codex exec scanner
 - `exec_calls` returns `Err` for a `tools.exec_command` call whose `cmd` is not a string literal or a substitution-free template literal. `literal` treats anything that follows the string before the expression ends (such as `"a" + b`) the same way. The command such a call runs is unknown, not guessed.
-- The scanner must terminate on any input, because it runs while the scan holds `scan.lock`. `object_call` stops at `)` or `]`, which mean the object literal was never closed, and breaks out when an entry consumes no input.
+- The scanner must terminate on any input, because it runs while the scan holds `data.lock` through `durable::lock`. `object_call` stops at `)` or `]`, which mean the object literal was never closed, and breaks out when an entry consumes no input.
 - `skip_braces` tracks open `{` and template backticks on a heap `Vec` instead of recursing, so no nesting depth can overflow the call stack. Recursion once let 120k nested `${` abort `mazo scan`.
 - `unescape` keeps any unrecognised escaped byte as itself, so an escaped multi-byte UTF-8 character passes through whole.
 
@@ -80,7 +80,7 @@ Usage ingestion turns Claude, Codex and Pi transcripts into ledger events: adapt
 - `Event`'s field declaration order is the serialised key order of a ledger line, so reordering fields changes the ledger format.
 - `Ledger::events` keeps the last line per id, in the order each id first appeared; every reader sees the ledger that way.
 - `Ledger::admit` is the append rule: it appends a new id, or upgrades a stored `path: null` event by copying it and setting only `path`. Every other duplicate is dropped.
-- `ledger::lock` takes a blocking flock on `scan.lock`, and every writer of the data directory holds it until the file is dropped. `Ledger` and `Roots::save` write without locking of their own for that reason.
+- `durable::lock` takes a blocking flock on `data.lock`, and every writer of the data directory holds it until the file is dropped. `Ledger` and `Roots::save` write without locking of their own for that reason.
 - `Ledger::load` skips a torn or unparseable line (including legacy lines whose `ts` does not parse) and sets `unreadable`. `Ledger::append` then rewrites the whole file without those lines, and `scan --reparse` re-derives their events.
 - `append_lines` starts the new lines on their own line when the log ends in a torn line, so a crash mid-append costs only that line and later runs read past it.
 - `jsonl` splits lines as bytes, so a torn write that cuts a UTF-8 character costs that line, not the file.

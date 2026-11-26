@@ -10,7 +10,7 @@ use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::lifecycle::{self, Retired};
 use mazo::render::PathExt;
 use mazo::report::{self, Since, UsageArgs};
-use mazo::{Error, adapters, audit, evals, html, links, out, outln, policy, render, scan, store, tui};
+use mazo::{Error, adapters, audit, durable, evals, html, links, out, outln, policy, render, scan, store, tui};
 
 #[derive(Parser)]
 #[command(
@@ -583,7 +583,7 @@ fn cmd_sync(
     let homes = selected(cfg, agent);
     let mut plan = links::checked(cfg, &inv, &homes);
     let _lock = if !dry_run && plan.as_ref().is_ok_and(|p| !p.actions.is_empty()) {
-        let lock = ledger::lock(data)?;
+        let lock = durable::lock(data)?;
         inv = store::inventory(cfg.source.as_deref(), data)?;
         plan = links::checked(cfg, &inv, &homes);
         Some(lock)

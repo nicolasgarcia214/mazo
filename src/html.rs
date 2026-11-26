@@ -300,7 +300,7 @@ pub fn write(path: &Path, html: &str) -> crate::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         fs::create_dir_all(dir).map_err(crate::at(dir))?;
     }
-    crate::ledger::write_atomic(path, html.as_bytes(), 0o600)
+    crate::durable::write_atomic(path, html.as_bytes(), 0o600)
 }
 
 pub fn in_worktree(path: &Path) -> bool {

@@ -566,7 +566,7 @@ fn a_failed_prune_after_the_archive_still_reports_the_archive() {
 #[test]
 fn retire_plans_from_the_skills_read_under_the_data_lock() {
     let mut fx = synced();
-    let held = mazo::ledger::lock(&fx.data.join("mazo")).unwrap();
+    let held = mazo::durable::lock(&fx.data.join("mazo")).unwrap();
     let mut retire = fx.command(&["retire", "unslop", "--force"]).stdout(Stdio::null()).spawn().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(500));
     assert!(retire.try_wait().unwrap().is_none(), "retire ran while another process held the lock");
