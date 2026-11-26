@@ -135,9 +135,9 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 
 ## What Went Well
 
+[Up to 3; fewer when fewer hold up.]
+
 1. [Positive with evidence]
-2. [Positive with evidence]
-3. [Positive with evidence]
 
 ## What Went Wrong
 
@@ -145,6 +145,8 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 [Additional issues if applicable]
 
 ## Recommendations
+
+[Omit a tier subsection with no recommendation. With none at all, write one plain sentence saying why, not a bullet.]
 
 ### Immediate (before next run)
 - **[Short action title]**: [The behaviour the next run should show, and the step that changes to produce it. 1-3 sentences.] Evidence: [L<n>, L<n>].
@@ -161,7 +163,7 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 
 | # | Recommendation | Verdict | Reviewer's reason |
 |---|----------------|---------|-------------------|
-| 1 | [recommendation title] | [SUPPORTED / PARTLY SUPPORTED / REFUTED / UNVERIFIABLE] | [one or two sentences] |
+| 1 | [recommendation title] | [SUPPORTED / PARTLY SUPPORTED / REFUTED / UNVERIFIABLE / IMMATERIAL] | [one or two sentences] |
 
 ## Filed Issues
 

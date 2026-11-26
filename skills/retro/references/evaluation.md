@@ -9,7 +9,7 @@ You evaluate one run of a skill and write the retro report. You are here because
 - **Code reading for verification only.** You may `Read` and `Grep` source files to spot-check subagent claims, and the evaluated skill's own files to tell a fault in its instructions from a fault in the run — never to re-do the skill's work.
 - **Spot-checks confined to Phase 1.5.** Verification of subagent claims happens exclusively during Phase 1.5 — via spot-check subagents where the platform supports them, or directly by you otherwise.
 - **Conservative under uncertainty.** If a phase of the run cannot be read from the evidence, note it and score conservatively rather than guessing.
-- **The focus sets depth, not scope.** When the brief carries the user's focus, give what it names the most attention in What Went Wrong and in the recommendations, and answer it in the Executive Summary. Every dimension is still scored.
+- **The focus sets depth, not scope.** When the brief carries the user's focus, answer it in the Executive Summary, saying plainly when the run handled it well, and give its failures the most attention in What Went Wrong and the recommendations. Every dimension is still scored.
 
 Platform mechanics (token measurement, subagent detection) are in [platform-notes.md](platform-notes.md); read it at the first step that names it.
 
@@ -128,7 +128,7 @@ For each non-cascading root cause (cascading failures are fixed by fixing their 
 
 Store the analysis as structured notes. These feed into:
 - **D6 scoring**: Root causes that were correctly diagnosed and recovered from during execution strengthen the score. Undiagnosed failures or silent swallowing weaken it.
-- **Recommendations**: Each unresolved root cause becomes a candidate for the Phase 3 recommendations (Immediate tier if it blocked output, Structural if it's a design gap).
+- **Recommendations**: Each root cause that cost the run something, as the Phase 3 recommendation rules define cost, becomes a candidate for the Phase 3 recommendations (Immediate tier if it blocked output, Structural if it's a design gap).
 - **Report**: The analysis populates the `## Failed Command Analysis` section.
 
 ## Phase 2: Dimensional Evaluation
@@ -137,7 +137,7 @@ Read [evaluation-rubric.md](evaluation-rubric.md) now and apply its seven-dimens
 
 ## Phase 3: Synthesis & Report
 
-1. **What went well**: Top 3 positives with evidence citations.
+1. **What went well**: Up to 3 positives with evidence citations.
 2. **What went wrong**: Issues with evidence and impact assessment.
 3. **Recommendations** in three tiers:
    - **Immediate**: Changes for the next run of this skill
@@ -145,7 +145,7 @@ Read [evaluation-rubric.md](evaluation-rubric.md) now and apply its seven-dimens
    - **Process**: Workflow or invocation improvements
    Recommendation rules:
    - Format every recommendation bullet as `- **Short title**: prescription Evidence: L<n>, L<n>.`
-   - The evidence names the trace lines that show the failure or the missed opportunity. An observation with no line to cite is context for the sections above, not a recommendation.
+   - The evidence names the trace lines that show the failure or the missed opportunity, and its cost. An observation with no line to cite is context for the sections above, not a recommendation.
    - Make the short title specific and stable enough to reuse as a GitHub issue title, in plain words: letters, digits, spaces and hyphens. It becomes a shell argument.
    - After the title, write 1-3 sentences that define the change and desired outcome. Avoid single-clause bullets that become ambiguous when promoted into issues.
    - State each recommendation as the behaviour the skill should produce on any target. When the change is to the evaluated skill's text, name the step or reference section it rewrites. Recommend a new step only when no existing one can carry the change, and name the step it follows. A fix that belongs in a script, the workflow or the environment names that instead.
@@ -153,6 +153,7 @@ Read [evaluation-rubric.md](evaluation-rubric.md) now and apply its seven-dimens
    - Keep evidence separate from prescription. Example names or file paths belong in the supporting evidence, not in the recommendation sentence unless the recommendation is explicitly to edit that file in the evaluated skill.
    - If a fix cannot be stated as a general method, classify it as context/evidence, not as a recommendation.
    - Do not invent recommendations to fill tiers. If the skill executed cleanly, a tier may be empty or the full list may be short. Each recommendation must trace to concrete evidence of a real failure mode or missed opportunity — not to a desire for completeness, symmetry across tiers, or the appearance of thoroughness.
+   - A recommendation needs a cost the trace shows in this run: a wrong, missing or incomplete output, a bypassed gate or skipped mandatory step, a user correction, rework, a waste or missed saving of calls, tokens or time (measured or estimated, with the basis stated), or a risk the run escaped only by luck, such as an unverified claim reaching the output or an irreversible action taken without the check that should guard it. Name the cost in the matching What Went Wrong item. A slip with no such cost stays in What Went Wrong and the dimension analysis.
 4. **Recommendation tracking** (skip if Prior Retro Record has no recommendations):
    - For each recommendation from the most recent prior retro, assess against the current execution trace.
    - Assign a status: **ADDRESSED-STRUCTURAL** / **ADDRESSED-REACTIVE** / **PARTIALLY ADDRESSED** / **NOT ADDRESSED** / **NOT APPLICABLE**.
@@ -178,7 +179,7 @@ Read [evaluation-rubric.md](evaluation-rubric.md) now and apply its seven-dimens
    - If the `mode` differs between retros, state each retro's mode in the trend table and say that a delta across modes may be the judge changing, not the skill. A prior retro with no `mode` field ran in-context.
 8. **Assemble the report** using the template from [report-template.md](report-template.md).
 9. **Persist to disk**: write the report to `{report}`, with YAML frontmatter carrying the machine-readable metadata, the brief's `content_hash` and the `mode` (`fresh` when the orchestrator briefed you, `in-context` when you are the orchestrator) among it.
-10. **Return**: the scorecard table and the top 3 recommendations, as a concise summary. In in-context mode, print them to the terminal.
+10. **Return**: the scorecard table and up to three recommendations in tier order (Immediate, Structural, Process), or `none`, as a concise summary. In in-context mode, print them to the terminal.
 
 ## Edge Cases
 

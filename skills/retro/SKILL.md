@@ -62,7 +62,7 @@ Scan for prior retrospective reports to enable trend analysis and recommendation
    - `{focus}`, in the user's words, when the request carried one.
 
    Leave out your own account of how the run went. The evaluator reads the trace; your summary would hand it your conclusions.
-5. **Take the result.** The evaluator returns the scorecard and the top three recommendations. Check that `{report}` exists, then print both to the terminal.
+5. **Take the result.** The evaluator returns the scorecard and up to three recommendations, or `none`. Check that `{report}` exists, then print both to the terminal.
 
 Phases 1 to 3 (trace reconstruction, spot-check, failed-command analysis, scoring, report) live in [references/evaluation.md](references/evaluation.md). Read it only in in-context mode and in the Artifact-Based Fallback.
 
@@ -74,8 +74,9 @@ Spawn one fresh agent to review every recommendation in one pass. Give it the re
 
 1. Do the cited `L<n>` lines lie inside `{span}`, and do they show what the recommendation says happened? Where the trace clipped a record, it reads line `n` of `{transcript}`; a cited call's outcome is the record after it.
 2. Does the evaluated skill's text bear the claim out? A rule called missing is missing; a step called wrong is written that way.
+3. Does the trace show the failure cost something in this run: a wrong, missing or incomplete output, a bypassed gate or skipped mandatory step, a user correction, rework, a waste or missed saving of calls, tokens or time (measured or estimated, with the basis stated), or a risk the run escaped only by luck, such as an unverified claim reaching the output or an irreversible action taken without the check that should guard it?
 
-It returns one verdict per recommendation, with one or two sentences: **SUPPORTED**, **PARTLY SUPPORTED** (the evidence holds but the claim overstates it, as when the skill already has the rule and the run broke it), **REFUTED**, or **UNVERIFIABLE** (nothing cited, or the evidence cannot settle it).
+It returns one verdict per recommendation, with one or two sentences: **SUPPORTED**, **PARTLY SUPPORTED** (the evidence holds but the claim overstates it, as when the skill already has the rule and the run broke it), **REFUTED**, **UNVERIFIABLE** (nothing cited, or the evidence cannot settle questions 1 or 2), or **IMMATERIAL** (questions 1 and 2 hold, fully or in part, but the trace shows no cost or cannot show one; it takes precedence over SUPPORTED and PARTLY SUPPORTED).
 
 Write the verdicts into `{report}` under `## Recommendation Review` and set the `review` frontmatter field, as [references/report-template.md](references/report-template.md) lays out. Leave every recommendation's text as the evaluator wrote it.
 
@@ -142,7 +143,7 @@ The Review column carries the Phase 3.5 verdict, or `—` when that phase was sk
 
 Wait for user input. This gate is **mandatory** — issues are externally visible artifacts.
 
-- **(a)**: Proceed with every recommendation whose Duplicate column is `—` and whose Review column is `SUPPORTED` or `—`. A `PARTLY SUPPORTED`, `REFUTED`, `UNVERIFIABLE` or `#N (closed)` row is filed only when the user names it through (b). Print the reviewer's reason under the table for every row that is not `SUPPORTED`.
+- **(a)**: Proceed with every recommendation whose Duplicate column is `—` and whose Review column is `SUPPORTED` or `—`. A `PARTLY SUPPORTED`, `REFUTED`, `UNVERIFIABLE`, `IMMATERIAL` or `#N (closed)` row is filed only when the user names it through (b). Print the reviewer's reason under the table for every row that is not `SUPPORTED`.
 - **(b)**: Ask the user to specify issue numbers (e.g., "1,3,5"), then filter the list.
 - **(s)**: Print `Phase 4 skipped by user.` and end.
 
@@ -204,4 +205,4 @@ With no trace there is nothing for a reviewer to check, so Phase 3.5 is skipped.
 | `mazo evals trace` exits non-zero (no transcript for the id, no load of the skill, or a mazo without the command) | In-context mode |
 | The evaluator returns without writing `{report}` | Say so, then run in-context mode |
 | The Phase 3.5 reviewer fails, or returns no verdict for a recommendation | That recommendation is `UNVERIFIABLE`, with the reason "no review returned" |
-| Every recommendation is REFUTED | Show the gate anyway; (a) files nothing |
+| Phase 3.5 ran and no recommendation is SUPPORTED | Show the gate anyway; (a) files nothing |
