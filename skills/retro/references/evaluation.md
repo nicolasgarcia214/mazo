@@ -1,17 +1,17 @@
 # Evaluation — Phases 1 to 3
 
-You evaluate one run of a skill and write the retro report. You are here because the retro's orchestrator briefed you, or because you are that orchestrator in in-context mode. The brief names the evaluated skill and its SKILL.md, `{trace}`, `{transcript}`, `{span}`, the skill's `content_hash`, the Prior Retro Record and static baseline, `{report}`, and the platform.
+You evaluate one run of a skill and write the retro report. You are here because the retro's orchestrator briefed you, or because you are that orchestrator in in-context mode. The brief names the evaluated skill and its SKILL.md, `{trace}`, `{transcript}`, `{span}`, the skill's `content_hash`, the Prior Retro Record and static baseline, `{report}`, the platform, and the user's focus when the request carried one.
 
 ## Ground Rules
 
-- **The trace is the evidence.** `{trace}` holds the run, one or more lines per transcript record, each prefixed `L<n>: `: `user:` for what the user wrote, `assistant:` for the agent's text, `tool <name>:` for a call and `result:` for what came back. Calls are cut to 200 characters and results to 500. The whole record is line `n` of `{transcript}`; read it with `sed -n '<n>p' {transcript} | jq '.message.content'` when the clipped text is not enough, as a long command or a failed one's stderr often is not. Stay inside `{span}`: the rest of the session is other work. With no trace (in-context mode when it did not print, and the artifact-based fallback), your conversation context or the artifacts are the evidence, and wherever this file asks for `L<n>` ids you cite the event or the artifact in prose instead.
+- **The trace is the evidence.** `{trace}` holds the run. Each part of a transcript record starts a line with `L<n>: `, and the unprefixed lines after it belong to that part: `user:` for what the user wrote, `assistant:` for the agent's text, `tool <name>:` for a call and `result:` for what came back. Calls are cut to 200 characters and results to 500. The whole record is line `n` of `{transcript}`; read it with `sed -n '<n>p' {transcript} | jq '.message.content'` when the clipped text is not enough, as a long command or a failed one's stderr often is not. Stay inside `{span}`: the rest of the session is other work. With no trace (in-context mode when it did not print, and the artifact-based fallback), your conversation context or the artifacts are the evidence, and wherever this file asks for `L<n>` ids you cite the event or the artifact in prose instead.
 - **Cite line ids.** Every score and every recommendation names the `L<n>` lines it rests on. A reviewer checks them.
 - **Code reading for verification only.** You may `Read` and `Grep` source files to spot-check subagent claims, and the evaluated skill's own files to tell a fault in its instructions from a fault in the run — never to re-do the skill's work.
 - **Spot-checks confined to Phase 1.5.** Verification of subagent claims happens exclusively during Phase 1.5 — via spot-check subagents where the platform supports them, or directly by you otherwise.
 - **Conservative under uncertainty.** If a phase of the run cannot be read from the evidence, note it and score conservatively rather than guessing.
-- **Recommendations must generalize.** Recommendations must be written as root-cause abstractions or workflow rules, not as benchmark-shaped fixes. Project names, issue IDs, function names, or protocol-specific bug silhouettes may appear as evidence, but not as the recommendation itself unless the change is unavoidably scoped to a named file in the evaluated skill.
+- **The focus sets depth, not scope.** When the brief carries the user's focus, give what it names the most attention in What Went Wrong and in the recommendations, and answer it in the Executive Summary. Every dimension is still scored.
 
-Platform mechanics (subagent detection, spot-check execution, token measurement) are in [platform-notes.md](platform-notes.md); read it at the first step that names it.
+Platform mechanics (token measurement, subagent detection) are in [platform-notes.md](platform-notes.md); read it at the first step that names it.
 
 ## Phase 1: Execution Trace Reconstruction
 
@@ -22,7 +22,7 @@ First `Read` the evaluated skill's SKILL.md and extract its **spec**:
 - Ground rules and constraints
 - Gate points (user gates, blocking decisions)
 - Allowed tools list, if it declares one
-- Whether subagents are used, as [platform-notes.md](platform-notes.md) §4 defines it
+- Whether subagents are used, as [platform-notes.md](platform-notes.md) §2 defines it
 
 Then walk through `{trace}` in order and build a structured trace:
 
@@ -30,11 +30,9 @@ Then walk through `{trace}` in order and build a structured trace:
 2. **Subagent activity**: For each subagent spawn — prompt summary, expected output, actual output, and token usage from `<usage>` tags when the platform provides them.
 3. **Phase mapping**: For each phase in the skill's SKILL.md workflow — mark as: executed / skipped / partial / reordered.
 4. **Gate compliance**: For each documented user gate — mark as: respected / bypassed.
-5. **Token measurement**: On Claude Code, sum all `<usage>` tags from Agent results — these are exact. If `<usage>` tags are absent (Codex, or a run with no subagents), set `tokens_measured` to "unavailable" and rely on labeled estimates — see [platform-notes.md](platform-notes.md) §3.
+5. **Token measurement**: On Claude Code, sum all `<usage>` tags from Agent results — these are exact. If `<usage>` tags are absent (Codex, or a run with no subagents), set `tokens_measured` to "unavailable" and rely on labeled estimates — see [platform-notes.md](platform-notes.md) §1.
 6. **Errors**: Note tool failures, script errors, unexpected results. For each Bash tool call failure, capture: the command (or summary), exit code / stderr snippet, whether it was retried, and whether it caused downstream failures.
 7. **Context compression**: The transcript keeps the records from before a compaction, so the trace has them. A `user:` line that summarises earlier conversation is the harness's compaction summary, not the user's words. In in-context mode without a trace, note any truncation markers and which phases they hide.
-
-Record this trace as structured notes — you will reference it throughout scoring.
 
 ## Phase 1.5: Subagent Work Spot-Check
 
@@ -61,9 +59,9 @@ Each selected claim gets a focused verification pass answering three questions:
 
 **When the cited location has moved** (a worktree gone, commits squashed or merged), check the claim where the change landed, such as `git show <merge-sha>:<path>`. A claim that reading cannot settle, such as a test count, is left out of the sample rather than marked UNVERIFIABLE.
 
-**On Claude Code**: spawn one Agent (subagent_type: `Explore`) per selected claim and launch them in parallel. Each prompt must quote the exact claim, point to the specific file(s) and line range(s) it references, ask the three questions, and request the verdict format below. See [references/platform-notes.md](platform-notes.md) for the prompt shape.
+**On Claude Code**: spawn one Agent (subagent_type: `Explore`) per selected claim and launch them in parallel. Each prompt must quote the exact claim, point to the specific file(s) and line range(s) it references, ask the three questions, and request the verdict format below.
 
-**On Pi with authorized worker tools**: use their actual schemas for the same scoped verification passes and report the actual independence obtained.
+**On Pi with authorized worker tools**: use their actual schemas for the same scoped verification passes and report the independence obtained: separate sessions give context independence, not necessarily a different model.
 
 **Whenever subagent spawning is unavailable or not permitted**: run the same verification passes yourself, sequentially. `Read` only the specific file(s) and line range(s) each claim references and answer the same three questions. The same claim cap (3) applies, and reads stay strictly verification-scoped — never expand into re-doing the skill's work. Note "direct verification (no subagent isolation)" in the report's Context Notes so scores stay comparable across platforms.
 
@@ -135,12 +133,7 @@ Store the analysis as structured notes. These feed into:
 
 ## Phase 2: Dimensional Evaluation
 
-Read [evaluation-rubric.md](evaluation-rubric.md) now and apply its seven-dimension rubric. Score D1–D6 here. D7 is scored in Phase 3 step 5, because its evidence is the recommendations and their tracking statuses, which Phase 3 produces.
-
-For each dimension:
-1. Gather evidence from the execution trace.
-2. Match evidence to the rubric criteria.
-3. Assign a score (1-5) with explicit justification citing specific events.
+Read [evaluation-rubric.md](evaluation-rubric.md) now and apply its seven-dimension rubric. Score D1–D6 here. D7 is scored in Phase 3 step 5, because its evidence is the prior recommendations' tracking statuses, which Phase 3 produces.
 
 ## Phase 3: Synthesis & Report
 
@@ -153,10 +146,9 @@ For each dimension:
    Recommendation rules:
    - Format every recommendation bullet as `- **Short title**: prescription Evidence: L<n>, L<n>.`
    - The evidence names the trace lines that show the failure or the missed opportunity. An observation with no line to cite is context for the sections above, not a recommendation.
-   - Make the short title specific and stable enough to reuse as a GitHub issue title.
+   - Make the short title specific and stable enough to reuse as a GitHub issue title, in plain words: letters, digits, spaces and hyphens. It becomes a shell argument.
    - After the title, write 1-3 sentences that define the change and desired outcome. Avoid single-clause bullets that become ambiguous when promoted into issues.
    - State each recommendation as the behaviour the skill should produce on any target. When the change is to the evaluated skill's text, name the step or reference section it rewrites. Recommend a new step only when no existing one can carry the change, and name the step it follows. A fix that belongs in a script, the workflow or the environment names that instead.
-   - Do not recommend copying a benchmark miss, target-project bug, or protocol-specific example into prompts.
    - If an observed failure came from a specific target, first state the underlying failure mode, then recommend the general fix for that failure mode.
    - Keep evidence separate from prescription. Example names or file paths belong in the supporting evidence, not in the recommendation sentence unless the recommendation is explicitly to edit that file in the evaluated skill.
    - If a fix cannot be stated as a general method, classify it as context/evidence, not as a recommendation.
@@ -168,7 +160,7 @@ For each dimension:
      - **ADDRESSED-REACTIVE**: The fix is narrowly scoped to the specific scenario that prompted the recommendation. It would not transfer to a different codebase or context without further adaptation.
    - Each status must include an evidence citation (specific tool call, phase execution, or output reference).
    - ADDRESSED-REACTIVE counts as negative evidence in D7 scoring.
-5. **D7 and composite score**: Score D7 from the statuses in step 4, or mark it `N/A` as [evaluation-rubric.md](evaluation-rubric.md) says when there is nothing to score it on. Classify this retro's own recommendations STRUCTURAL or REACTIVE in the report; that classification is a check, not a score. Then compute the weighted mean over the scored dimensions with the weights and formula the rubric defines, rounded to 1 decimal. Also compute the unweighted arithmetic mean of the scored dimensions as `score_raw` for backward compatibility.
+5. **D7 and composite score**: Score D7 from the statuses in step 4, or mark it `N/A` as [evaluation-rubric.md](evaluation-rubric.md) says when there is nothing to score it on. Classify this retro's own recommendations STRUCTURAL or REACTIVE in the report; that classification is a check, not a score. Then compute the weighted mean over the scored dimensions with the weights and formula the rubric defines, rounded to 1 decimal.
 6. **Verdict mapping**:
    - 4.5–5.0 → EXCELLENT
    - 3.5–4.4 → GOOD

@@ -10,7 +10,6 @@ content_hash: "[content_hash from mazo show <skill-name> --json]"
 mode: "[fresh | in-context | artifact-based]"
 verdict: "[EXCELLENT | GOOD | ADEQUATE | POOR | FAILED]"
 score: [X.X weighted composite]
-score_raw: [X.X unweighted mean]
 dimensions:
   goal_achievement: [X]
   workflow_discipline: [X]
@@ -47,7 +46,7 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 | Error Handling | X/5 | 1.5 | [X.XX] | [label] |
 | Token Economy | X/5 | 1.0 | [X.XX] | [label] |
 | Knowledge Generalizability | [X/5, or N/A] | 1.0 | [X.XX, or —] | [label] |
-| **Composite** | **X.X/5** (raw) | | **X.X/5** (weighted, over the scored weights) | **[VERDICT]** |
+| **Composite** | | | **X.X/5** (weighted, over the scored weights) | **[VERDICT]** |
 
 ## Dimension Analysis
 
@@ -146,9 +145,6 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 [Additional issues if applicable]
 
 ## Recommendations
-
-Write every recommendation as a root-cause abstraction: the behaviour the skill should produce on any target. Use project-specific incidents only as evidence for why the recommendation exists, not as the recommendation text itself.
-Format every recommendation bullet as `- **Short title**: prescription Evidence: L<n>, L<n>.` Keep the title stable enough to reuse as a GitHub issue title. The evidence is the trace lines that show the failure; the discussion of them stays in the sections above.
 
 ### Immediate (before next run)
 - **[Short action title]**: [The behaviour the next run should show, and the step that changes to produce it. 1-3 sentences.] Evidence: [L<n>, L<n>].
