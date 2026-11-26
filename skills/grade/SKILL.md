@@ -37,7 +37,7 @@ A score of 7 means it works well and you'd trust it. Reserve 9+ for things you'd
 
 ## Evaluation Dimensions
 
-Not all dimensions apply equally to every target. Select and weight dimensions based on what is being graded. Skip dimensions that don't apply.
+Not all dimensions apply equally to every target. Select and weight dimensions based on what is being graded. Skip dimensions that don't apply. A skill target is the exception: its dimensions and weights are fixed in Phase 2.
 
 ### D1: Purpose & Clarity
 - Is it immediately clear what this does and why it exists?
@@ -93,7 +93,7 @@ Resolve the target from the user's request — the argument passed to the skill 
 
 1. If the target is a file path — read it directly.
 2. If the target is a directory — scan its structure and read key files.
-3. If the target is a skill name (e.g., "triage-finding") — find and read its `SKILL.md` plus supporting files. Then run `mazo show <skill-name> --json` and keep its `content_hash` for the persisted grade. Its `retros` array lists retro reports newest first: read the frontmatter of the `file` of up to the 3 most recent. Retro reports are runtime evidence, and a dimension that looks strong on paper but repeatedly fails in execution is graded on the evidence, not the paper. Cite the retro dates you used. Weigh its `usage`, `examples` and `audit` as runtime evidence of the same kind, skipping its `grades`. Never read the target's own prior grades — a previous score anchors the new one. Retros are evidence; grades are not. If `mazo show` exits non-zero, mazo does not know the skill: grade it from its files alone and print the report without persisting it.
+3. If the target is a skill name (e.g., "triage-finding") — find and read its `SKILL.md` plus supporting files. Then run `mazo show <skill-name> --json` and keep its `content_hash` for the persisted grade. Its `retros` array lists retro reports newest first: read the frontmatter of the `file` of up to the 3 most recent. Retro reports are runtime evidence, and a dimension that looks strong on paper but repeatedly fails in execution is graded on the evidence, not the paper. A retro whose `content_hash` is missing or differs from the current one scored an earlier text: read its `## Recommendations` section too, and lower a dimension on it only for a recommendation whose named step still reads as the retro describes. Cite the retro dates you used. Weigh its `usage`, `examples` and `audit` as runtime evidence of the same kind, skipping its `grades`. Never read the target's own prior grades — a previous score anchors the new one. Retros are evidence; grades are not. If `mazo show` exits non-zero, mazo does not know the skill: grade it from its files alone and print the report without persisting it.
 4. If no target was given — check conversation context for a recently-discussed target. If nothing found, ask the user.
 
 For large codebases and directories, build a full picture before scoring: on Claude Code, you may spawn an Explore agent (Agent tool) to map the target. If subagent spawning is unavailable or not permitted (e.g., on Codex), run the same exploration yourself sequentially with Glob/Grep/Read. For single files and small directories, read directly.
@@ -112,15 +112,16 @@ Read the target thoroughly. For each applicable dimension:
 
 ### Phase 2: Scoring & Report
 
-1. **Select applicable dimensions.** Not all 7 apply to every target. State which you're using and why.
+1. **Select applicable dimensions.** Not all 7 apply to every target. State which you're using and why. For a skill, score D1-D6 always, and D7 unless its own skip rule applies.
 2. **Assign weights** based on the target's nature:
    - For library code: D2 (Design), D4 (Robustness), D7 (Composability) matter most.
    - For application code: D1 (Clarity), D3 (Completeness), D4 (Robustness) matter most.
-   - For specs/skills: D1 (Clarity), D2 (Design), D3 (Completeness) matter most.
+   - For skills: the weights are fixed, so that two grades of one skill differ only by their scores. D1 2, D2 2, D3 2, D4 1, D5 1, D6 1, D7 1.
+   - For other specs: D1 (Clarity), D2 (Design), D3 (Completeness) matter most.
    - For configs/infra: D3 (Completeness), D4 (Robustness), D6 (Craft) matter most.
-   - State your weights explicitly.
+   - State your weights explicitly; for a skill they are the fixed ones above.
 3. **Score each dimension** (1-10).
-4. **Composite** = weighted average, rounded to 1 decimal.
+4. **Composite** = `sum(score × weight) / sum(weight)` over the scored dimensions, rounded to 1 decimal. For a skill the weights sum to 10, or to 9 when D7 is skipped.
 
 ### Output Format
 
@@ -161,9 +162,12 @@ score: X.X
 verdict: <the one-line verdict>
 content_hash: <content_hash from mazo show --json>
 dimensions: {D1: X, D2: X, ...}
+weights: fixed-1
 retros_consulted: [<filenames, or empty>]
 ---
 ```
+
+A grade without `weights: fixed-1` was scored with weights its grader chose: compare its `dimensions` with a later grade's, not its `score`.
 
 This completes a cross-check with the `retro` skill: `retro` reads the most recent grade as its static baseline, and this skill reads the retros `mazo show` lists as runtime evidence — static and dynamic evaluation of the same skill inform each other. For non-skill targets, print the report only; write a file only when the user asks.
 
