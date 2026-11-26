@@ -14,14 +14,6 @@ use serde_json::{Value, json};
 
 const TIMEOUT: Duration = Duration::from_secs(300);
 
-fn live() -> bool {
-    let on = std::env::var_os("MAZO_LIVE").is_some_and(|v| v == "1");
-    if !on {
-        eprintln!("skipped: set MAZO_LIVE=1 to run the live tests");
-    }
-    on
-}
-
 struct Ran {
     ok: bool,
     log: String,
@@ -148,9 +140,6 @@ fn gate() -> &'static Gate {
 }
 
 fn assert_gating(home: &str) {
-    if !live() {
-        return;
-    }
     let g = gate();
     let ran = &g.runs[home];
     assert!(ran.ok, "{home} did not finish:\n{}", ran.log);
@@ -182,24 +171,24 @@ fn assert_gating(home: &str) {
 }
 
 #[test]
+#[ignore = "runs the real claude, codex and pi agents; run with cargo test --test live -- --ignored"]
 fn claude_slash_load_is_one_headless_slash_event() {
     assert_gating("claude");
 }
 
 #[test]
+#[ignore = "runs the real claude, codex and pi agents; run with cargo test --test live -- --ignored"]
 fn codex_dollar_load_is_one_headless_slash_event() {
     assert_gating("codex");
 }
 
 #[test]
+#[ignore = "runs the real claude, codex and pi agents; run with cargo test --test live -- --ignored"]
 fn pi_skill_command_is_one_main_slash_event() {
     assert_gating("pi");
 }
 
 fn assert_recorded(home: &str, channel: &str, act: impl Fn(&Probe) -> Ran, acted: impl Fn(&Probe) -> bool) {
-    if !live() {
-        return;
-    }
     for attempt in 1..=3 {
         let probe = Probe::new();
         let ran = act(&probe);
@@ -228,6 +217,7 @@ fn assert_recorded(home: &str, channel: &str, act: impl Fn(&Probe) -> Ran, acted
 }
 
 #[test]
+#[ignore = "runs the real claude, codex and pi agents; run with cargo test --test live -- --ignored"]
 fn recorded_claude_skill_tool_call_is_a_headless_tool_event() {
     assert_recorded(
         "claude",
@@ -243,6 +233,7 @@ fn recorded_claude_skill_tool_call_is_a_headless_tool_event() {
 }
 
 #[test]
+#[ignore = "runs the real claude, codex and pi agents; run with cargo test --test live -- --ignored"]
 fn recorded_codex_cat_is_a_headless_read_event() {
     let skill_md = |p: &Probe| p.codex.join("skills").join(&p.skill).join("SKILL.md").to_string_lossy().into_owned();
     assert_recorded(
