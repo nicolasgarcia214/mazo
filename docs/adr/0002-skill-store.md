@@ -72,7 +72,7 @@ comment ban (ADR 0001). This record keeps them.
 
 ### Locking, staging and undo (`store::install`, `update::refresh`)
 - `store::install` and `update::refresh` stage under a hidden per-process name that no root lists, so the judge and the y/N prompt run without holding the data lock.
-- The data lock (`ledger::lock`) also guards a project's store and `mazo.lock`, so two adds into one project serialise only when they share a data dir.
+- The data lock (`durable::lock`) also guards a project's store and `mazo.lock`, so two adds into one project serialise only when they share a data dir.
 - `store::install` and `update::refresh` re-read the inventory under the data lock, so a concurrent retire or add cannot leave the link plan or sync check stale.
 - `store::install` and `update::refresh` report a failed undo as the error, saying why the undo ran.
 

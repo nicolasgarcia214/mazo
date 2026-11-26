@@ -1173,7 +1173,7 @@ fn session_records_hold_every_field_and_are_judged_once() {
         let result: audit::Verdict = serde_json::from_value(r["result"].clone()).unwrap();
         assert_eq!(result.outcome, audit::Outcome::Achieved);
     }
-    assert!(fx.data().join("scan.lock").exists());
+    assert!(fx.data().join("data.lock").exists());
 
     let again = fx.mazo(&["audit", "unslop"]);
     assert_eq!(stdout(&again), "unslop: no session to judge\n");

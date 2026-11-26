@@ -15,7 +15,7 @@ use crate::config::{self, Config, Home};
 use crate::inventory::Inventory;
 use crate::render::PathExt;
 use crate::{Error, Result};
-use crate::{ledger, links};
+use crate::{durable, links};
 
 pub use ask::{Io, Terminal};
 pub use bundled::{install as install_bundled, missing as missing_bundled};
@@ -247,7 +247,7 @@ fn install(
     };
 
     let installed_at = now()?;
-    let _lock = ledger::lock(data)?;
+    let _lock = durable::lock(data)?;
     unclaimed(claimed())?;
     let mut with = scoped_inventory(inventory(cfg.source.as_deref(), data)?, project)?;
     fs::rename(&staged.0, &to).map_err(crate::at(&to))?;

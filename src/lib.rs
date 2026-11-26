@@ -5,6 +5,7 @@ pub mod audit;
 pub mod classify;
 pub mod config;
 pub mod ctx;
+pub mod durable;
 pub mod evals;
 mod examples;
 pub mod help;

@@ -372,7 +372,7 @@ fn a_links_entry_colliding_with_a_skill_aborts_before_writes() {
 #[test]
 fn sync_waits_for_the_data_lock_but_a_dry_run_does_not() {
     let fx = fixture();
-    let held = mazo::ledger::lock(&fx.data.join("mazo")).unwrap();
+    let held = mazo::durable::lock(&fx.data.join("mazo")).unwrap();
     let dry = fx.mazo(&["sync", "--agent", "pi", "--dry-run"]);
     dry.assert_ok();
     assert!(dry.stdout().contains("would link"), "{}", dry.stdout());

@@ -11,7 +11,8 @@ use super::logo::{self, Logo};
 use super::{App, Data};
 use crate::audit;
 use crate::config::Home;
-use crate::ledger::{self, name};
+use crate::durable;
+use crate::ledger::name;
 use crate::lifecycle::{self, Retired};
 use crate::links::{self, Plan};
 use crate::pick::Picker;
@@ -41,7 +42,7 @@ pub(super) struct Dialog {
 }
 
 fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<String>> {
-    let _lock = ledger::lock(&d.dir)?;
+    let _lock = durable::lock(&d.dir)?;
     let inv = store::inventory(d.cfg.source.as_deref(), &d.dir)?;
     let homes: Vec<&Home> = d.cfg.homes.iter().collect();
     match links::checked(&d.cfg, &inv, &homes) {

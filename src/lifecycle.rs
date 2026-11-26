@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use crate::config::Config;
+use crate::durable;
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent};
 use crate::render::PathExt;
@@ -250,7 +251,7 @@ pub fn retire(
             return Ok(Retired::Blocked(blockers));
         }
     }
-    let _lock = ledger::lock(data)?;
+    let _lock = durable::lock(data)?;
     let (mut rest, root) = located(cfg, data, name, project.as_deref())?;
     let to = archive(cfg, &root, name)?;
     let from = root.join(name);

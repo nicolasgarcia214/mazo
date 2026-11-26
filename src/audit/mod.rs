@@ -33,8 +33,9 @@ pub use vet::{Quality, VET_PROMPT, VET_SCHEMA, Vet, VetVerdict, Worth, vet, vet_
 
 use crate::Result;
 use crate::config::{Billing, Judge, JudgeAgent};
+use crate::durable;
 use crate::evals::Evals;
-use crate::ledger::{self, Agent, name};
+use crate::ledger::{Agent, name};
 use crate::render::{self, Align};
 
 pub const CENT: u64 = 10_000;
@@ -58,7 +59,7 @@ struct RecordedJudge {
 }
 
 fn parsed<T: DeserializeOwned>(data: &Path) -> Result<Vec<T>> {
-    Ok(ledger::jsonl(&data.join("audits.jsonl"))?.into_iter().filter_map(|(_, r)| r).collect())
+    Ok(durable::jsonl(&data.join("audits.jsonl"))?.into_iter().filter_map(|(_, r)| r).collect())
 }
 
 pub fn audited(data: &Path, skill: &str) -> Result<HashSet<String>> {
@@ -199,8 +200,8 @@ fn stamp() -> String {
 
 fn append(data: &Path, record: &impl Serialize) -> Result<()> {
     let line = serde_json::to_string(record).expect("record serialises") + "\n";
-    let _lock = ledger::lock(data)?;
-    ledger::append_lines(&data.join("audits.jsonl"), line)
+    let _lock = durable::lock(data)?;
+    durable::append_lines(&data.join("audits.jsonl"), line)
 }
 
 pub struct Audit<'a> {

@@ -80,7 +80,7 @@ tests, so the code no longer has to carry them.
 - `synthesis_input` leaves out any grade or retro file that no longer reads or parses, rather than failing.
 
 ### Records (`append`, `JudgeRecord`, `latest`)
-- `append` writes audit records under the ledger lock, `scan.lock`.
+- `append` writes audit records under the data-dir lock, `data.lock`, taken by `durable::lock`.
 - `audits.jsonl` is append-only. `latest` keeps the last skill record per skill in file order, and older skill records stay in the file.
 - `JudgeRecord::billing` is optional with a serde default because records written before mazo recorded billing lack it. `None` means unknown.
 
