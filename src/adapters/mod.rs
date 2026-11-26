@@ -225,14 +225,7 @@ pub trait Adapter {
         let Records { authored, render } = self.records();
         let t = transcript(src)?;
         let lines = &t.chunk.lines;
-        let header = lines.first().map(|(_, l)| l.as_slice());
-        // Strong loads come from the harness's own markers, so no skill roots are needed.
-        let strong: Vec<Raw> = self
-            .parse(&SkillRoots::default(), &t.path, header, &t.chunk)
-            .raws
-            .into_iter()
-            .filter(|r| r.channel.strong())
-            .collect();
+        let strong = strong_loads(self, &t.path, &t.chunk);
         let load = t.line as u64;
         let skill = &strong.iter().find(|r| r.line == load)?.skill;
         let start = authored_back(&lines[..t.line], &authored).map_or(load, |(n, _)| n);
@@ -244,15 +237,86 @@ pub trait Adapter {
             .nth(WINDOW_MESSAGES - 1)
             .map(|(n, _)| *n);
         let end = other.into_iter().chain(limit).min().unwrap_or(u64::MAX);
-        let text = lines
-            .iter()
-            .filter(|(n, _)| (start..end).contains(n))
-            .filter_map(|(n, l)| Some((n, render(&value(l)?))))
-            .flat_map(|(n, parts)| parts.into_iter().map(move |p| format!("L{n}: {p}")))
-            .collect::<Vec<_>>()
-            .join("\n");
-        Some(cap(text, max_chars))
+        Some(cap(numbered(&rendered(lines, start..end, render)), max_chars))
     }
+    /// The last run of `skill` in the transcript `file`, for the `reviewer`
+    /// skill that judges it in the same session. The window starts at the
+    /// prompt behind `skill`'s last strong load before the reviewer's last
+    /// load, or behind its last strong load when the reviewer never loaded
+    /// after it. It ends before the reviewer's first load after that, so an
+    /// earlier review of the same run stays out, or at the end of the file.
+    /// When the last prompt before the reviewer's load names the reviewer, it
+    /// asked for the review and the window ends before it; any other prompt
+    /// belongs to the run, since a bare `/retro` carries none. Other skills
+    /// loaded in between belong to the run too. Uncapped: tool calls and
+    /// results are clipped as in [`Adapter::condense`], and the whole record
+    /// is line `L<n>` of `file`. `None` when the file is gone or holds no
+    /// strong load of `skill`.
+    fn trace(&self, file: &Path, skill: &str, reviewer: &str) -> Option<Trace> {
+        let Records { authored, render } = self.records();
+        let chunk = Chunk { lines: lines(file)?, oversized: 0, cursor: Cursor::default() };
+        let strong = strong_loads(self, file, &chunk);
+        let lines = &chunk.lines;
+        let last = |name: &str, before: u64| {
+            strong.iter().filter(|r| r.skill == name && r.line < before).map(|r| r.line).max()
+        };
+        let eof = lines.len() as u64 + 1;
+        let reviews = || strong.iter().filter(|r| r.skill == reviewer).map(|r| r.line);
+        let load = last(skill, reviews().filter(|l| last(skill, *l).is_some()).max().unwrap_or(eof))?;
+        let prompt = |line: u64| authored_back(&lines[..line as usize], &authored);
+        let start = prompt(load).map_or(load, |(n, _)| n);
+        let end = reviews().filter(|l| *l > load).min().map_or(eof, |r| {
+            let asked = prompt(r).filter(|(p, text)| *p > load && text.contains(reviewer));
+            asked.map_or(r, |(p, _)| p)
+        });
+        let kept = rendered(lines, start..end, render);
+        Some(Trace {
+            text: numbered(&kept),
+            lines: (start, end - 1),
+            records: (end - start) as usize,
+            kept: kept.len(),
+        })
+    }
+}
+
+/// One skill run as its reviewer reads it.
+#[derive(Debug, PartialEq)]
+pub struct Trace {
+    /// Each kept record's parts, prefixed `L<line>: `.
+    pub text: String,
+    /// The window's first and last transcript line.
+    pub lines: (u64, u64),
+    /// How many records the window holds.
+    pub records: usize,
+    /// How many of them `text` keeps: the rest are meta and harness records.
+    pub kept: usize,
+}
+
+/// The strong loads in `chunk`. They come from the harness's own markers, so
+/// no skill roots are needed.
+fn strong_loads<A: Adapter + ?Sized>(adapter: &A, path: &Path, chunk: &Chunk) -> Vec<Raw> {
+    let header = chunk.lines.first().map(|(_, l)| l.as_slice());
+    let parsed = adapter.parse(&SkillRoots::default(), path, header, chunk);
+    parsed.raws.into_iter().filter(|r| r.channel.strong()).collect()
+}
+
+/// The records of `lines` in `range` that `render` keeps anything of, with their parts.
+fn rendered(
+    lines: &[(u64, Vec<u8>)],
+    range: std::ops::Range<u64>,
+    render: fn(&Value) -> Vec<String>,
+) -> Vec<(u64, Vec<String>)> {
+    lines
+        .iter()
+        .filter(|(n, _)| range.contains(n))
+        .filter_map(|(n, l)| Some((*n, render(&serde_json::from_slice(l).ok()?))))
+        .filter(|(_, parts)| !parts.is_empty())
+        .collect()
+}
+
+/// `records` as text: every part on its own line, prefixed `L<line>: `.
+fn numbered(records: &[(u64, Vec<String>)]) -> String {
+    records.iter().flat_map(|(n, parts)| parts.iter().map(move |p| format!("L{n}: {p}"))).collect::<Vec<_>>().join("\n")
 }
 
 /// A transcript's record readers: the user-authored text of a record, if it
@@ -283,9 +347,7 @@ struct Transcript {
 fn transcript(src: &str) -> Option<Transcript> {
     let (file, line) = src.rsplit_once(':')?;
     let line: usize = line.parse().ok()?;
-    let bytes = std::fs::read(file).ok()?;
-    let body = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
-    let lines: Vec<(u64, Vec<u8>)> = (1..).zip(body.split(|&b| b == b'\n').map(<[u8]>::to_vec)).collect();
+    let lines = lines(Path::new(file))?;
     if line == 0 || lines.len() < line {
         return None;
     }
@@ -294,6 +356,13 @@ fn transcript(src: &str) -> Option<Transcript> {
         chunk: Chunk { lines, oversized: 0, cursor: Cursor::default() },
         line,
     })
+}
+
+/// The lines of the transcript `file`, numbered from 1; `None` when it cannot be read.
+fn lines(file: &Path) -> Option<Vec<(u64, Vec<u8>)>> {
+    let bytes = std::fs::read(file).ok()?;
+    let body = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+    Some((1..).zip(body.split(|&b| b == b'\n').map(<[u8]>::to_vec)).collect())
 }
 
 /// The line and text of the first record `authored` reads walking back from

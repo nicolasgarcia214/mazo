@@ -628,6 +628,70 @@ fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
 }
 
 #[test]
+fn trace_runs_from_the_skills_last_prompt_to_its_reviewers_load() {
+    // `unslop` loads at lines 5 and 11 and `grade`, the reviewer, at line 14.
+    // Line 9 is the prompt behind the last `unslop` load; no prompt follows it,
+    // so the window ends at the reviewer's load. Line 12 is a meta record.
+    let got = Claude.trace(&fixture("condense.jsonl"), "unslop", "grade").unwrap();
+    let want = [
+        "L9: user: Now check the tone.",
+        r#"L10: tool Skill: {"skill":"unslop"}"#,
+        "L11: result: Launching skill: unslop",
+        r#"L13: tool Skill: {"skill":"grade"}"#,
+    ]
+    .join("\n");
+    assert_eq!((got.text.as_str(), got.lines, got.records, got.kept), (want.as_str(), (9, 13), 5, 4));
+}
+
+/// The lines `keep` of `condense.jsonl`, in that order, as a transcript.
+fn spliced(dir: &Path, keep: &[usize], edit: impl Fn(String) -> String) -> PathBuf {
+    let fixture = std::fs::read_to_string(fixture("condense.jsonl")).unwrap();
+    let all: Vec<&str> = fixture.lines().collect();
+    let text: String = keep.iter().map(|n| format!("{}\n", all[n - 1])).collect();
+    let path = dir.join("spliced.jsonl");
+    std::fs::write(&path, edit(text)).unwrap();
+    path
+}
+
+#[test]
+fn trace_ends_at_the_reviewers_prompt_only_when_it_names_the_reviewer() {
+    // `unslop` loads at line 5; line 9 is a later prompt and `grade`, the
+    // reviewer, loads at line 11 (lines 13-15 of the fixture).
+    let dir = tempfile::tempdir().unwrap();
+    let keep = [1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 14, 15, 16];
+    // A bare review command carries no prompt: the last prompt is the run's.
+    let bare = Claude.trace(&spliced(dir.path(), &keep, |t| t), "unslop", "grade").unwrap();
+    assert_eq!(bare.lines, (3, 10));
+    assert!(bare.text.contains("L9: user: Now check the tone.\n"), "{}", bare.text);
+    let asked = |t: String| t.replace("check the tone.", "grade the tone.");
+    assert_eq!(Claude.trace(&spliced(dir.path(), &keep, asked), "unslop", "grade").unwrap().lines, (3, 8));
+}
+
+#[test]
+fn trace_ends_at_the_first_review_of_the_run() {
+    // `unslop` at line 5, `grade` at line 10, then a prompt and `grade` again
+    // at line 15: the first review's own turns stay out of the trace.
+    let dir = tempfile::tempdir().unwrap();
+    let keep = [1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 16, 9, 13, 14, 15];
+    let got = Claude.trace(&spliced(dir.path(), &keep, |t| t), "unslop", "grade").unwrap();
+    assert_eq!(got.lines, (3, 9));
+}
+
+#[test]
+fn trace_without_a_reviewer_runs_to_the_end_and_needs_a_load_of_the_skill() {
+    let file = fixture("condense.jsonl");
+    let last = std::fs::read_to_string(&file).unwrap().lines().count() as u64;
+    let got = Claude.trace(&file, "grade", "retro").unwrap();
+    assert_eq!(got.lines, (9, last), "from the prompt behind the load at line 14 to the last line");
+    assert!(got.text.starts_with("L9: user: Now check the tone.\n"), "{}", got.text);
+    // A reviewer that loaded before the skill does not end its run.
+    assert_eq!(Claude.trace(&file, "grade", "unslop").unwrap().lines, (9, last));
+    assert_eq!(Claude.trace(&file, "nope", "retro"), None);
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(Claude.trace(&dir.path().join("gone.jsonl"), "grade", "retro"), None);
+}
+
+#[test]
 fn condense_needs_a_strong_load_at_src() {
     assert_eq!(condense_at(&fixture("condense.jsonl"), 3, 60_000), None, "a user message");
     let dir = tempfile::tempdir().unwrap();

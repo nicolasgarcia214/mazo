@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::adapters::jsonl_files;
+use crate::config::Home;
 use crate::inventory::Inventory;
+use crate::ledger::Agent;
 use crate::render::PathExt;
 use crate::store::content_hash;
 use crate::yaml;
@@ -55,6 +58,32 @@ pub struct Evals {
 /// `skill`'s grade and retro directories under `evals_dir`.
 pub fn dirs(evals_dir: &Path, skill: &str) -> [PathBuf; 2] {
     ["grades", "retros"].map(|kind| evals_dir.join(kind).join(skill))
+}
+
+/// The transcript `session` names, with its agent: a file under a home's
+/// transcripts, or a session id that the name of exactly one transcript holds.
+pub fn transcript(homes: &[Home], session: &str) -> crate::Result<(Agent, PathBuf)> {
+    let usage = |m: String| crate::Error::Usage(m);
+    if session.is_empty() {
+        return Err(usage("the session is empty: give a transcript's path or a session id".into()));
+    }
+    // A path only when it is a file: a session id may also name something in the cwd.
+    if let Some(file) = std::fs::canonicalize(session).ok().filter(|f| f.is_file()) {
+        let under = |h: &&Home| std::fs::canonicalize(h.transcripts()).is_ok_and(|t| file.starts_with(t));
+        let home =
+            homes.iter().find(under).ok_or_else(|| usage(format!("{}: under no home's transcripts", file.inert())))?;
+        return Ok((home.agent, file));
+    }
+    let named = |f: &PathBuf| f.file_name().is_some_and(|n| n.to_string_lossy().contains(session));
+    let mut found =
+        homes.iter().flat_map(|h| jsonl_files(&h.transcripts()).into_iter().filter(named).map(|f| (h.agent, f)));
+    match (found.next(), found.next()) {
+        (Some(one), None) => Ok(one),
+        (None, _) => Err(usage(format!("no transcript is named {}", crate::render::inert_line(session)))),
+        (Some(_), Some(_)) => {
+            Err(usage(format!("more than one transcript is named {}", crate::render::inert_line(session))))
+        }
+    }
 }
 
 /// The evaluation artifacts under `evals_dir` of `skill`, a source or store

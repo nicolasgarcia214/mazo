@@ -142,6 +142,24 @@ A grade whose frontmatter `content_hash` is not the skill's current one, the
 `content_hash` that `mazo show <skill> --json` prints, is stale. A grade
 without one is stale too.
 
+### `mazo evals trace`
+
+`mazo evals trace <skill> <session>` prints the skill's last run in one
+session, for the retro skill to read and cite. `<session>` is a transcript's
+path, or a session id that the file name of exactly one transcript holds.
+
+The run starts at the prompt behind the skill's last load before the retro
+loaded, and ends before the prompt that asked for the retro. Without a retro
+load it runs to the end of the transcript. Each kept record is one or more
+lines prefixed `L<n>: `, where `n` is the record's line in the transcript:
+your prompts and the agent's text in full, tool calls cut to 200 characters
+and tool results to 500. The whole record is line `n` of the file.
+
+stderr gets one line with the transcript's path, the span (`L166-L601`), how
+many of the span's records were kept, and the character count. It exits 2 when
+no transcript, or more than one, matches `<session>`, and 1 when the
+transcript holds no load of the skill.
+
 ## `context_window`
 
 Optional. The context window, in tokens, that the TUI's top bar measures each

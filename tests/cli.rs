@@ -77,6 +77,42 @@ fn evals_dir_prints_the_grade_and_retro_directories() {
     assert_eq!(card["content_hash"], card["grades"][0]["content_hash"]);
 }
 
+/// `evals trace` finds the transcript by path or by a session id in its file
+/// name, prints the run line-numbered and its span on stderr; a transcript it
+/// cannot place exits 2 and one with no load of the skill exits 1.
+#[test]
+fn evals_trace_prints_the_skills_run_in_a_session() {
+    let (temp, mazo) = fixture();
+    let root = fs::canonicalize(temp.path()).unwrap();
+    let file = root.join("home/.claude/projects/p/c0de0001.jsonl");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::copy(common::fixture("claude/condense.jsonl"), &file).unwrap();
+    let by_id = mazo.output(&["evals", "trace", "grade", "c0de0001"]);
+    assert_eq!(by_id.status.code(), Some(0), "{}", stderr(&by_id));
+    assert!(stdout(&by_id).starts_with("L9: user: Now check the tone.\nL10: tool Skill: "), "{}", stdout(&by_id));
+    assert!(stderr(&by_id).contains("c0de0001.jsonl: L9-L16, "), "{}", stderr(&by_id));
+    let by_path = mazo.output(&["evals", "trace", "grade", file.to_str().unwrap()]);
+    assert_eq!(stdout(&by_path), stdout(&by_id));
+
+    let unloaded = mazo.output(&["evals", "trace", "idle", "c0de0001"]);
+    assert_eq!(unloaded.status.code(), Some(1));
+    assert!(stderr(&unloaded).contains("no load of idle"), "{}", stderr(&unloaded));
+    let unnamed = mazo.output(&["evals", "trace", "grade", "nope"]);
+    assert_eq!(unnamed.status.code(), Some(2));
+    assert!(stderr(&unnamed).contains("no transcript is named nope"), "{}", stderr(&unnamed));
+    fs::copy(&file, file.with_file_name("c0de0001-again.jsonl")).unwrap();
+    let twice = mazo.output(&["evals", "trace", "grade", "c0de0001"]);
+    assert_eq!(twice.status.code(), Some(2));
+    assert!(stderr(&twice).contains("more than one transcript is named c0de0001"), "{}", stderr(&twice));
+    let empty = mazo.output(&["evals", "trace", "grade", ""]);
+    assert_eq!(empty.status.code(), Some(2));
+    assert!(stderr(&empty).contains("the session is empty"), "{}", stderr(&empty));
+    let outside = root.join("skills/mazo.toml");
+    let elsewhere = mazo.output(&["evals", "trace", "grade", outside.to_str().unwrap()]);
+    assert_eq!(elsewhere.status.code(), Some(2));
+    assert!(stderr(&elsewhere).contains("under no home's transcripts"), "{}", stderr(&elsewhere));
+}
+
 /// A read command parses the ledger once, so an unreadable line warns once,
 /// and its scan drops the line, so the next command does not warn.
 #[test]

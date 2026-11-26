@@ -10,7 +10,7 @@ use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::lifecycle::{self, Retired};
 use mazo::render::PathExt;
 use mazo::report::{self, Since, UsageArgs};
-use mazo::{Error, audit, evals, html, links, out, outln, policy, render, scan, store, tui};
+use mazo::{Error, adapters, audit, evals, html, links, out, outln, policy, render, scan, store, tui};
 
 #[derive(Parser)]
 #[command(
@@ -208,6 +208,13 @@ enum EvalsCmd {
         /// The skill whose directories to print.
         skill: String,
     },
+    /// Print the skill's last run in a session, line-numbered, for a retro to cite.
+    Trace {
+        /// The skill whose run to print.
+        skill: String,
+        /// The session's transcript: its path, or a session id in its file name.
+        session: String,
+    },
 }
 
 #[derive(clap::Args)]
@@ -306,6 +313,22 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             #[allow(clippy::disallowed_methods)]
             let (grades, retros) = (grades.display(), retros.display());
             outln!("grades\t{grades}\nretros\t{retros}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Evals { cmd: EvalsCmd::Trace { skill, session } } => {
+            let (agent, file) = evals::transcript(&cfg.homes, &session)?;
+            let trace = adapters::for_agent(agent)
+                .trace(&file, &skill, "retro")
+                .ok_or_else(|| Error::Failed(format!("{}: no load of {}", file.inert(), render::inert_line(&skill))))?;
+            outln!("{}", render::inert(&trace.text));
+            let (first, last) = trace.lines;
+            eprintln!(
+                "{}: L{first}-L{last}, {} of {} records kept, {} characters",
+                file.inert(),
+                trace.kept,
+                trace.records,
+                trace.text.chars().count()
+            );
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Report { since, out, open } => cmd_report(&cfg, &inv, &data, since, out, open),

@@ -8,6 +8,7 @@
 | [`mazo unused`](usage-tracking.md#mazo-unused) | Skills with no strong load in the window. |
 | [`mazo show <skill>`](usage-tracking.md#mazo-show) | Everything mazo knows about one skill. |
 | [`mazo evals dir <skill>`](configuration.md#evals_dir) | Print the skill's grades and retros directories. |
+| [`mazo evals trace <skill> <session>`](configuration.md#mazo-evals-trace) | Print the skill's last run in a session, line-numbered, for a retro to cite. |
 | [`mazo report`](usage-tracking.md#mazo-report) | One self-contained HTML page of usage and cards. |
 | [`mazo status`](managing-skills.md#mazo-status) | Drift and policy for every home. Writes nothing. |
 | [`mazo sync`](managing-skills.md#mazo-sync) | Link every skill into every home. |
