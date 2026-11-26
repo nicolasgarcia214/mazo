@@ -1,9 +1,3 @@
-//! The live end-to-end fixture of `tests/live.rs`, built directly and never by
-//! `mazo sync`: a temporary `HOME` with a Claude, a Codex and a Pi directory,
-//! the real Claude and Codex credentials linked in, one probe skill linked into
-//! each home's `skills/`, a `mazo.toml` with every policy rule on, and Claude
-//! settings that set the probe to `"name-only"`.
-
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
@@ -14,8 +8,6 @@ use std::process::{Command, Output};
 
 use super::{Mazo, stderr, stdout, write};
 
-/// A Pi extension registering the faux provider `probe`, whose one model
-/// answers `ok` without a network call.
 const PROBE_EXTENSION: &str = r#"import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -31,19 +23,12 @@ export default function (pi: ExtensionAPI) {
 
 pub struct Probe {
     _temp: tempfile::TempDir,
-    /// The temporary `HOME`.
     home: PathBuf,
-    /// `CLAUDE_CONFIG_DIR`, the home named `claude`.
     pub claude: PathBuf,
-    /// `CODEX_HOME`, the home named `codex`.
     pub codex: PathBuf,
-    /// `PI_CODING_AGENT_DIR`, the home named `pi`.
     pub pi: PathBuf,
-    /// `mazo-probe-<random>`.
     pub skill: String,
-    /// The directory the agents run in.
     work: PathBuf,
-    /// The faux-provider extension Pi loads with `-e`.
     pub extension: PathBuf,
     run: Mazo,
 }
@@ -51,7 +36,6 @@ pub struct Probe {
 impl Probe {
     pub fn new() -> Probe {
         let temp = tempfile::tempdir().unwrap();
-        // Agents record physical paths, so build on a physical root.
         let root = fs::canonicalize(temp.path()).unwrap();
         let real_home = PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
         let skill = format!("mazo-probe-{:016x}", RandomState::new().hash_one(&root));
@@ -60,8 +44,6 @@ impl Probe {
         for dir in [&home, &claude, &codex, &pi, &work] {
             fs::create_dir_all(dir).unwrap();
         }
-        // The real credentials, not copies, so a token refresh reaches them;
-        // `tests/live.rs` runs one agent at a time so no two refresh together.
         symlink(real_home.join(".claude/.credentials.json"), claude.join(".credentials.json")).unwrap();
         symlink(real_home.join(".codex/auth.json"), codex.join("auth.json")).unwrap();
 
@@ -100,8 +82,6 @@ impl Probe {
         Probe { _temp: temp, home, claude, codex, pi, skill, work, extension, run }
     }
 
-    /// `program args…` in the work directory, with every agent directory
-    /// pointed into the fixture.
     pub fn agent(&self, program: &str, args: &[&str]) -> Command {
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -114,27 +94,23 @@ impl Probe {
         cmd
     }
 
-    /// `mazo args…`, asserted to succeed.
     fn mazo(&self, args: &[&str]) -> Output {
         let out = self.run.output(args);
         assert!(out.status.success(), "mazo {args:?}\nstdout:\n{}\nstderr:\n{}", stdout(&out), stderr(&out));
         out
     }
 
-    /// `mazo <args…> --json`, parsed.
     pub fn json(&self, args: &[&str]) -> serde_json::Value {
         let args: Vec<&str> = args.iter().copied().chain(["--json"]).collect();
         serde_json::from_str(&stdout(&self.mazo(&args))).unwrap()
     }
 
-    /// `mazo scan --json`: each home's new events.
     pub fn scan(&self) -> BTreeMap<String, Vec<serde_json::Value>> {
         let report = self.json(&["scan"]);
         let homes = report.as_object().unwrap();
         homes.iter().map(|(name, h)| (name.clone(), h["new_events"].as_array().unwrap().clone())).collect()
     }
 
-    /// Whether any line of a transcript under `dir` contains every one of `needles`.
     pub fn transcript_has(dir: &Path, needles: &[&str]) -> bool {
         let Ok(entries) = fs::read_dir(dir) else { return false };
         entries.flatten().any(|e| {

@@ -1,7 +1,3 @@
-//! The skills bundled under `skills/`: they pass the always-on SKILL.md
-//! checks and keep their reports under `evals_dir`, never in dot directories
-//! of a skills root.
-
 #![allow(clippy::disallowed_methods)]
 
 use std::fs;
@@ -13,7 +9,6 @@ fn skills() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("skills")
 }
 
-/// Every file under `dir`, recursively.
 fn files(dir: &Path) -> Vec<PathBuf> {
     fs::read_dir(dir)
         .unwrap()

@@ -14,14 +14,9 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "docs/assets/logo-dark.png"
 TARGET = ROOT / "src/tui/logo_art.rs"
-# The content of logo-dark.png, its background trimmed.
 CROP = "1975x526+101+109"
-# Cells across. A cell is about twice as tall as wide, so a pixel row is half a
-# cell and the pixels come out square.
 COLS = 56
-# Restores the edges the downscale softens, short of haloing them.
 SHARPEN = "0x0.6+1.0"
-# A pixel no channel of which reaches this is background.
 DARK = 48
 
 

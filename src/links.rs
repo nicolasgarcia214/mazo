@@ -1,6 +1,3 @@
-//! Drift classification and sync: `plan()` is pure and
-//! `apply()` is the only writer, so every check happens before any write.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,7 +28,6 @@ impl State {
         }
     }
 
-    /// What the state means, for `status`: `<home>: <name> <finding>`.
     pub fn finding(self) -> &'static str {
         match self {
             State::Ok => unreachable!("status prints no line for an ok entry"),
@@ -67,22 +63,16 @@ pub enum Action {
 pub struct Plan {
     pub entries: Vec<Entry>,
     pub actions: Vec<Action>,
-    /// `(home, "ERROR: …")` pairs, each line with its resolution hint; any
-    /// conflict means no writes.
     pub conflicts: Vec<(String, String)>,
 }
 
-/// One directory mazo links into, with the canonical entries it should hold.
 struct Target {
     home: String,
     dir: PathBuf,
-    /// `(name in dir, absolute source)` pairs.
     entries: Vec<(String, PathBuf)>,
 }
 
 impl Target {
-    /// Adds the entry `name` linking to `src`, or the conflict when `name`
-    /// already links to another source.
     fn claim(&mut self, name: String, src: PathBuf) -> Option<String> {
         match self.entries.iter().find(|(n, _)| *n == name) {
             Some((_, other)) if *other == src => None,
@@ -110,7 +100,6 @@ fn targets(
     let (single, shared): (Vec<_>, Vec<_>) = inv.origins.iter().partition(|(_, roots)| roots.len() == 1);
     let mut common: Vec<(String, PathBuf)> =
         single.iter().map(|(name, roots)| (name.to_string(), roots[0].join(name))).collect();
-    // `load` refuses `loose` and `links` without a source.
     for (loose, src) in cfg.source.iter().flat_map(|s| cfg.loose.iter().map(move |l| (l, s.join(l)))) {
         if src.is_file() {
             common.push((loose.clone(), src));
@@ -147,8 +136,6 @@ fn targets(
     out
 }
 
-/// The `(home, skill)` pairs that [`plan`] links over `homes`, whatever is
-/// on disk: each skill of `inv` that is an entry of a home's skills directory.
 pub fn linked<'h>(cfg: &Config, inv: &Inventory, homes: &[&'h Home]) -> Vec<(&'h Home, String)> {
     let targets = targets(cfg, inv, homes, &|p: &Path| p.exists(), &mut Vec::new());
     let entries = |h: &'h Home| {
@@ -159,25 +146,15 @@ pub fn linked<'h>(cfg: &Config, inv: &Inventory, homes: &[&'h Home]) -> Vec<(&'h
     homes.iter().flat_map(|h| entries(h)).collect()
 }
 
-/// Classifies every entry of the selected homes and plans the writes that
-/// `sync` would make. Never touches the filesystem except to read it.
-/// With `gone` (for `retire`), the plan is the one `sync` would make if `gone`
-/// did not exist: links into it plan as dangling and a `links` entry under it
-/// is missing. `inv` must already leave out the skill at `gone`.
 pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>) -> Plan {
     let present = |p: &Path| gone.is_none_or(|g| !p.starts_with(g)) && p.exists();
     let mut plan = Plan::default();
     let targets = targets(cfg, inv, homes, &present, &mut plan.conflicts);
-    // A link to `<root>/<its name>` for a root of `inv`, whose target is gone:
-    // mazo made it, so mazo may remove it.
     let owned_dangling = |path: &Path| {
         fs::read_link(path).is_ok_and(|text| {
             path.file_name().is_some_and(|n| inv.roots.iter().any(|r| text == r.join(n))) && !present(&text)
         })
     };
-    // Two homes can share a directory, directly or through a symlink
-    // (PI_CODING_AGENT_DIR pointing at another home): plan each physical one
-    // once, with the entries of every target there.
     let mut merged: Vec<(PathBuf, Target)> = Vec::new();
     for t in targets {
         let physical = physical(&t.dir);
@@ -191,7 +168,6 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         }
     }
     for (physical, t) in &merged {
-        // Every skill there would look like a real file, or a link written into the root.
         if let Some(root) = inv.roots.iter().find(|r| *r == physical) {
             plan.conflicts.push((
                 t.home.clone(),
@@ -215,7 +191,6 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
             };
             match state {
                 State::Missing => plan.actions.push(Action::Link { source: src.clone(), path: path.clone() }),
-                // A copy deleted from one root and installed into another.
                 State::Dangling => {
                     plan.actions.push(Action::Remove(path.clone()));
                     plan.actions.push(Action::Link { source: src.clone(), path: path.clone() });
@@ -248,7 +223,6 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
             .flatten()
             .map(|e| e.path())
             .filter(|p| !t.entries.iter().any(|(n, _)| p.file_name().is_some_and(|f| f == n.as_str())))
-            // Hidden names are never pruned.
             .filter(|p| p.file_name().is_some_and(|f| !f.to_string_lossy().starts_with('.')))
             .collect();
         others.sort();
@@ -264,7 +238,6 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
     plan
 }
 
-/// The state of the entry at `path` that should be a link to `src`.
 pub fn state(path: &Path, src: &Path) -> State {
     match fs::symlink_metadata(path) {
         Err(_) => State::Missing,
@@ -276,7 +249,6 @@ pub fn state(path: &Path, src: &Path) -> State {
     }
 }
 
-/// The directory with its nearest existing ancestor resolved through symlinks.
 fn physical(dir: &Path) -> PathBuf {
     let mut existing = dir.to_path_buf();
     let mut rest = Vec::new();
@@ -291,8 +263,6 @@ fn physical(dir: &Path) -> PathBuf {
     p
 }
 
-/// The directory, or its first existing ancestor, must be a directory
-/// (a regular file or a dangling symlink there is a conflict).
 fn check_dir(dir: &Path) -> Result<(), PathBuf> {
     let mut p = dir.to_path_buf();
     while fs::symlink_metadata(&p).is_err() {
@@ -316,8 +286,6 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Every line that stops `sync`: the per-skill rules, the
-/// per-home rules of the selected homes, then the plan's conflicts.
 pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) -> Vec<String> {
     policy::per_skill(cfg, inv)
         .into_iter()
@@ -325,14 +293,12 @@ pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) 
         .collect()
 }
 
-/// `sync`'s plan over `homes`, or the [`sync_errors`] that stop it.
 pub fn checked(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Result<Plan, Vec<String>> {
     let plan = plan(cfg, inv, homes, None);
     let errors = sync_errors(cfg, inv, homes, &plan);
     if errors.is_empty() { Ok(plan) } else { Err(errors) }
 }
 
-/// The line `sync --dry-run` prints for each action of `plan`.
 pub fn planned(plan: &Plan) -> Vec<String> {
     plan.actions
         .iter()
@@ -344,14 +310,10 @@ pub fn planned(plan: &Plan) -> Vec<String> {
         .collect()
 }
 
-/// Performs a conflict-free plan. Returns the lines to print.
 pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
     apply_after(Vec::new(), plan)
 }
 
-/// [`apply`], continuing `out`, the lines of writes already made. A failed
-/// write's error lists every link and prune done before it, `out`'s
-/// included; none is undone.
 pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> crate::Result<Vec<String>> {
     assert!(plan.conflicts.is_empty(), "apply() is only called on a conflict-free plan");
     for a in &plan.actions {
@@ -437,7 +399,6 @@ mod tests {
         let homes: Vec<&Home> = cfg.homes.iter().collect();
         let skills = tmp.path().join("home/skills");
         std::fs::create_dir_all(&skills).unwrap();
-        // `theirs` was a source skill, deleted there and installed into the store.
         std::os::unix::fs::symlink(tmp.path().join("source/theirs"), skills.join("theirs")).unwrap();
         let p = plan(&cfg, &inv, &homes, None);
         assert!(p.conflicts.is_empty(), "{:?}", p.conflicts);
@@ -445,7 +406,6 @@ mod tests {
         super::apply(&p).unwrap();
         assert_eq!(std::fs::read_link(skills.join("theirs")).unwrap(), tmp.path().join("store/theirs"));
 
-        // A wrong link whose target exists is still the user's to resolve.
         std::fs::remove_file(skills.join("mine")).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("store/theirs"), skills.join("mine")).unwrap();
         let p = plan(&cfg, &inv, &homes, None);
@@ -483,7 +443,6 @@ mod tests {
         let extra = Action::Link { source: tmp.join("source/extra.md"), path: skills.join("extra.md") };
         assert!(p.actions.contains(&extra), "{:?}", p.actions);
 
-        // The same name to another source is a conflict, whichever home claims it.
         cfg.homes[1].links = [("skills/mine".to_string(), "extra.md".to_string())].into();
         let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
         let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();

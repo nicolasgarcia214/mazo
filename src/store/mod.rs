@@ -1,16 +1,3 @@
-//! The store of installed third-party skills, `<data dir>/store/`, and its
-//! lockfile `<data dir>/mazo.lock`: `mazo add`, `mazo update`, and the entry
-//! `mazo retire` drops. With `--project`, `add`, `update` and `retire` act on
-//! a project's own store, `<git root>/.mazo/skills/`, and its own
-//! `<git root>/mazo.lock`.
-//!
-//! Here `add`, its install into a [`Target`], and that target's removal;
-//! [`update`] re-fetches, and [`bundled`] installs mazo's own skills. A
-//! source is parsed, trusted and cloned in [`source`], copied, hashed and
-//! recorded in [`lock`], judged in [`vet`] beside the user's recent [`work`],
-//! asked about in [`ask`], and a
-//! project's root and links are [`project`]'s.
-
 mod ask;
 mod bundled;
 mod lock;
@@ -43,16 +30,12 @@ use project::{project_links, unlink_project};
 use source::{Remote, Scratch, Source, local};
 use vet::{contents, gate, no_judge};
 
-/// `<data dir>/store`, the skill root after the source.
 pub fn dir(data: &Path) -> PathBuf {
     data.join("store")
 }
 
-/// The inventory over the source and the store, with each store skill's
-/// install date from the lockfile.
 pub fn inventory(source: Option<&Path>, data: &Path) -> Result<Inventory> {
     let store = dir(data);
-    // Like the source, canonical: event paths are compared resolved.
     let store = fs::canonicalize(&store).unwrap_or(store);
     let roots: Vec<&Path> = source.into_iter().chain([store.as_path()]).collect();
     let mut inv = Inventory::load_roots(source, &roots)?;
@@ -60,38 +43,24 @@ pub fn inventory(source: Option<&Path>, data: &Path) -> Result<Inventory> {
     Ok(inv)
 }
 
-/// `mazo add`'s arguments.
 pub struct Add<'a> {
-    /// A local path, a git URL or GitHub `owner/repo[/path]`.
     pub source: &'a str,
-    /// `--as`.
     pub rename: Option<&'a str>,
-    /// `--skill`.
     pub pick: Option<&'a str>,
-    /// `--all`.
     pub all: bool,
-    /// Install without vetting.
     pub trust: bool,
-    /// Accept a vetted skill without asking.
     pub yes: bool,
-    /// Install a skill with a security finding.
     pub force: bool,
-    /// Install into the project at the current directory's git root.
     pub project: bool,
-    /// Where the add reports and asks.
     pub io: &'a dyn Io,
 }
 
 impl Add<'_> {
-    /// What the vet gate may assume for this add.
     fn consent(&self) -> Consent<'_> {
         Consent { update: false, yes: self.yes, force: self.force, io: self.io }
     }
 }
 
-/// `arg` parsed, and whether it installs without vetting: with `trust`, or
-/// as a git source on the `trusted` list. An untrusted source with no
-/// `[judge]` is refused, naming the judges to add ([`no_judge`]).
 fn resolve(cfg: &Config, arg: &str, trust: bool) -> Result<(Source, bool)> {
     let source = Source::parse(arg).map_err(|e| Error::Usage(format!("add {arg}: {e}")))?;
     let trusted = trust || matches!(&source, Source::Git(r) if r.trusted_by(&cfg.trusted));
@@ -105,55 +74,33 @@ fn resolve(cfg: &Config, arg: &str, trust: bool) -> Result<(Source, bool)> {
     Ok((source, trusted))
 }
 
-/// The refusal `mazo add <arg>` gives before reading the source, if any.
 pub fn precheck(cfg: &Config, arg: &str) -> Result<()> {
     resolve(cfg, arg, false).map(drop)
 }
 
-/// How an add or update ended, its failures reported as they happened: the
-/// worst of them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Outcome {
     Done,
-    /// A skill failed or was refused.
     Failed,
-    /// A skill was refused as a usage error, or for want of a `[judge]`.
     Usage,
 }
 
-/// What `add` reads skills from: the source resolved, and cloned when it is a repository.
 struct Fetched<'a> {
-    /// The source at its subpath.
     root: PathBuf,
     origin: String,
     subpath: PathBuf,
     r#ref: Option<String>,
     commit: Option<String>,
-    /// The name of a skill at `root` itself.
     own: String,
-    /// The clone a skill must stay inside.
     clone: Option<&'a Path>,
     trusted: bool,
 }
 
-/// `mazo add <source> [--skill <name> | --all] [--as <name>] [--trust]
-/// [--yes] [--force]`: copies the chosen skills at `source` into the store,
-/// records each in the lockfile and links it into every home ([`install`]).
-/// `source` is a local path, or a repository whose ref is resolved and then
-/// shallow-cloned into `<data dir>/.clone-<pid>`. `--skill` picks one skill,
-/// `--all` every one, and otherwise a terminal picker ([`skills_in`]); none
-/// picked installs nothing. The judge vets an untrusted source first
-/// ([`gate`]); with `--all`, only once its judge calls are agreed to
-/// ([`confirm_calls`]). A skill that fails or is refused leaves the rest to
-/// install, and the outcome is the worst of them. With `--project`, running
-/// outside a git repository is a usage error before anything else, and the
-/// vet also sees the project's skills.
 pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Outcome> {
     let project = if args.project { Some(project_root("add")?) } else { None };
     let (arg, out) = (args.source, args.io);
     let usage = |e: String| Error::Usage(format!("add {arg}: {e}"));
     let (source, trusted) = resolve(cfg, arg, args.trust)?;
-    // The judge is set up, and its login checked, before anything is cloned.
     let backend = match &cfg.judge {
         Some(judge) if !trusted => Some((judge, audit::backend(judge, &cfg.homes)?)),
         _ => None,
@@ -161,7 +108,6 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
     let caller =
         backend.as_ref().map(|(judge, backend)| Caller { data, judge, backend: backend.as_ref(), pane: out.pane() });
     if let Some(c) = &caller {
-        // `--all` shows its call count first, so it asks once the source is read.
         if !args.all {
             args.consent().answerable().map_err(Error::Usage)?;
         }
@@ -196,7 +142,6 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
     let target = Target { data, project: project.as_deref() };
     let mut outcome = Outcome::Done;
     for child in children {
-        // A cancelled job starts nothing more.
         if out.cancelled() {
             return Err(audit::CANCELLED.into());
         }
@@ -208,18 +153,13 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
     Ok(outcome)
 }
 
-/// The store a command acts on: the data directory's, or a project's.
 #[derive(Clone, Copy)]
 pub struct Target<'a> {
     pub data: &'a Path,
-    /// The project's git root, for `--project`.
     pub project: Option<&'a Path>,
 }
 
 impl Target<'_> {
-    /// The sync of every home after a change to this store, over `inv`
-    /// without `gone`: its plan and the errors that stop it. Empty for a
-    /// project's store, which the homes do not link.
     pub fn home_sync(self, cfg: &Config, inv: &Inventory, gone: Option<&Path>) -> (links::Plan, Vec<String>) {
         if self.project.is_some() {
             return Default::default();
@@ -230,10 +170,6 @@ impl Target<'_> {
         (plan, errors)
     }
 
-    /// Removes the skill `name` at `from` in this store: its links (`plan`'s,
-    /// and a project's own), then its lock entry, then its directory, so
-    /// that a failure leaves at worst an unrecorded skill, never an entry for
-    /// a missing one. The lines reporting it.
     pub fn remove(self, from: &Path, name: &str, plan: &links::Plan) -> Result<Vec<String>> {
         let mut out = links::apply(plan)?;
         if let Some(p) = self.project {
@@ -249,13 +185,11 @@ impl Target<'_> {
         self.project.map_or_else(|| dir(self.data), project_dir)
     }
 
-    /// Where its `mazo.lock` is.
     fn lock_dir(self) -> PathBuf {
         self.project.unwrap_or(self.data).to_path_buf()
     }
 }
 
-/// Refuses the name `add` would install when any of its `paths` exists.
 fn unclaimed(paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
     match paths.into_iter().find(|p| p.symlink_metadata().is_ok()) {
         Some(p) => Err(Error::Usage(format!(
@@ -266,8 +200,6 @@ fn unclaimed(paths: impl IntoIterator<Item = PathBuf>) -> Result<()> {
     }
 }
 
-/// Directories, deepest first, each removed when dropped if it is empty: what
-/// staging made of a store, gone again when the add is refused.
 struct Fresh(Vec<PathBuf>);
 
 impl Drop for Fresh {
@@ -278,13 +210,6 @@ impl Drop for Fresh {
     }
 }
 
-/// Installs the skill of `from` at the path `child` below its root (`None`
-/// for `from.root` itself), named for its last segment, and adds it to
-/// `inv`. A bad skill or a name taken in any root, or at a
-/// project link, is a usage error, and a refused vet or a sync that would
-/// fail with the skill installed is a refusal; either way the store and the
-/// lockfile are left as they were. A project skill is linked into the
-/// project skill dirs ([`project_links`]), not the homes.
 fn install(
     cfg: &Config,
     inv: &mut Inventory,
@@ -312,12 +237,8 @@ fn install(
         let roots = cfg.source.iter().cloned().chain([dir(data)]).chain(project.map(|_| store.clone()));
         roots.map(|r| r.join(&name)).chain(links.iter().map(|(l, _)| l.clone()))
     };
-    // Checked before the judge is paid for, and again under the lock.
     unclaimed(claimed())?;
 
-    // Copied under a hidden name of this process's own, which no root lists,
-    // so that the judge and the y/N prompt run without the data lock. Declared
-    // first, the store's new directories are dropped last.
     let _fresh = Fresh(store.ancestors().take_while(|d| !d.exists()).map(Path::to_path_buf).collect());
     let (staged, content_hash) = stage(&src, &files, &skill_md, Scratch::new(&store, &format!(".add-{name}")))?;
     let vetted = match caller {
@@ -326,17 +247,11 @@ fn install(
     };
 
     let installed_at = now()?;
-    // The data lock guards the project's store and `mazo.lock` too, so two
-    // adds into one project are serialized only when they share a data dir.
     let _lock = ledger::lock(data)?;
     unclaimed(claimed())?;
-    // Read under the lock, so a concurrent `retire` or `add` cannot stale the plan.
     let mut with = scoped_inventory(inventory(cfg.source.as_deref(), data)?, project)?;
     fs::rename(&staged.0, &to).map_err(crate::at(&to))?;
 
-    // From here until the lockfile is written, `store/<name>` has no lock
-    // entry. A crash in that window leaves it there unrecorded: a re-run of
-    // `add` refuses the name as taken, and `sync` links it like any store skill.
     let subpath = if subpath.as_os_str().is_empty() { ".".into() } else { subpath.to_string_lossy().into() };
     let (vetted_at, r#for, r#try, verdict) = match vetted {
         Some((vet, at)) => (Some(at), Some(vet.r#for), vet.r#try, Some(vet.verdict)),
@@ -363,8 +278,6 @@ fn install(
             lock.save(&lock_dir)
         })
     };
-    // A store skill joins the homes' links; a project skill gets its own
-    // links in the project skill dirs, and the homes' plan for its store is empty.
     with.skills.insert(name.clone());
     with.known.insert(name.clone());
     with.origins.insert(name.clone(), vec![store]);
@@ -390,14 +303,12 @@ fn install(
             .iter()
             .try_for_each(|link| fs::remove_file(link).map_err(crate::at(link)))
             .and_then(|()| fs::remove_dir_all(&to).map_err(crate::at(&to)));
-        // A failed undo is the error to report, after why it ran.
         if let Err(c) = undone {
             let why = if errors.is_empty() { e.to_string() } else { "the sync refused it".into() };
             return Err(format!("add {arg}: the install failed ({why}), and undoing it failed: {c}").into());
         }
         return Err(e);
     }
-    // Recorded: the next skill of this add is vetted beside this one.
     *inv = with;
     out.line(&format!("installed {}", to.inert()));
     for link in made {

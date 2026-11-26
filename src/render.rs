@@ -1,6 +1,3 @@
-//! Text rendering helpers shared by reports: aligned tables, local
-//! timestamps and status colours.
-
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -8,30 +5,22 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use unicode_width::UnicodeWidthStr;
 
-/// Column alignment.
 #[derive(Clone, Copy)]
 pub enum Align {
     Left,
     Right,
 }
 
-/// Whether a stream gets colour: it is a terminal and `no_color`, the value
-/// of `NO_COLOR`, is unset or empty.
 pub fn colour(tty: bool, no_color: Option<&OsStr>) -> bool {
     tty && no_color.is_none_or(OsStr::is_empty)
 }
 
-/// A status token's colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Colour {
     Red,
     Yellow,
 }
 
-/// The colour of a status token: red for `unused`, `ERROR:` and the audit
-/// column's security mark `!`, yellow for
-/// `held`, `new`, `warning:`, a `named by` note and a grade's `stale` mark;
-/// `None` for any other token.
 pub fn status_colour(token: &str) -> Option<Colour> {
     match token {
         "unused" | "ERROR:" | "!" => Some(Colour::Red),
@@ -41,7 +30,6 @@ pub fn status_colour(token: &str) -> Option<Colour> {
     }
 }
 
-/// `token` in its [`status_colour`] when `on`; unchanged otherwise.
 pub fn paint(token: &str, on: bool) -> String {
     let code = match status_colour(token) {
         Some(Colour::Red) if on => "31",
@@ -51,23 +39,18 @@ pub fn paint(token: &str, on: bool) -> String {
     format!("\x1b[{code}m{token}\x1b[0m")
 }
 
-/// `line` split after a leading `ERROR:` or `warning:`.
 fn prefixed(line: &str) -> Option<(&str, &str)> {
     line.split_once(' ').filter(|(head, _)| matches!(*head, "ERROR:" | "warning:"))
 }
 
-/// `line` with a leading `ERROR:` or `warning:` painted.
 pub fn paint_prefix(line: &str, on: bool) -> String {
     prefixed(line).map_or_else(|| line.to_string(), |(head, rest)| format!("{} {rest}", paint(head, on)))
 }
 
-/// `line` without a leading `ERROR:` or `warning:`, for JSON whose key says which.
 pub fn unprefixed(line: &str) -> &str {
     prefixed(line).map_or(line, |(_, rest)| rest)
 }
 
-/// Visible columns of `s`: its display width, less `ESC [ … m` colour
-/// sequences.
 fn width(s: &str) -> usize {
     let mut n = 0;
     let mut rest = s;
@@ -78,10 +61,6 @@ fn width(s: &str) -> usize {
     n + rest.width()
 }
 
-/// An aligned plain-text table, one space between columns, the header bold
-/// when `tty`. Widths count display columns, so painted and wide cells keep
-/// their alignment. Trailing spaces are trimmed
-/// from every line.
 pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> String {
     let mut widths: Vec<usize> = header.iter().map(|(h, _)| width(h)).collect();
     for row in rows {
@@ -116,11 +95,6 @@ pub fn table(header: &[(&str, Align)], rows: &[Vec<String>], tty: bool) -> Strin
 pub const DAY: &str = "%Y-%m-%d";
 pub const MINUTE: &str = "%Y-%m-%d %H:%M";
 
-/// `text` with U+FFFD in place of every control character but newline and
-/// tab (C0, DEL and C1), so text from a skill or a judge cannot drive the
-/// terminal it is printed to. The bidi controls go too, so it cannot reorder
-/// what is shown, as do the zero-width space, the BOM and the line and
-/// paragraph separators. Zero-width joiners stay, as scripts and emoji need them.
 pub fn inert(text: &str) -> String {
     let spoofs = |c| {
         matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
@@ -131,15 +105,10 @@ pub fn inert(text: &str) -> String {
         .collect()
 }
 
-/// `text` [`inert`] and on one line: newline and tab go too, so a name cannot
-/// forge a line of the output it is shown in.
 pub fn inert_line(text: &str) -> String {
     inert(text).replace(['\n', '\t'], "\u{fffd}")
 }
 
-/// A path as shown to a person: [`inert_line`], since a skill, a transcript or
-/// another installer may name it. `Path::display` is banned (`clippy.toml`)
-/// so that every shown path goes through here.
 pub struct InertPath<'a>(&'a Path);
 
 impl std::fmt::Display for InertPath<'_> {
@@ -148,7 +117,6 @@ impl std::fmt::Display for InertPath<'_> {
     }
 }
 
-/// [`InertPath`] as a method, in place of `display`.
 pub trait PathExt {
     fn inert(&self) -> InertPath<'_>;
 }
@@ -159,8 +127,6 @@ impl PathExt for Path {
     }
 }
 
-/// `value` with every string in it, keys too, [`inert`]: a judge's answer, or
-/// a lockfile anyone can commit.
 pub fn inert_value(value: serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
     match value {
@@ -171,18 +137,14 @@ pub fn inert_value(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// The timestamp `ts` in `tz`, formatted with `format`; `ts` unchanged when it
-/// does not parse.
 pub fn local(ts: &str, tz: &TimeZone, format: &str) -> String {
     ts.parse().map_or(ts.to_string(), |t| zoned(t, tz, format))
 }
 
-/// `n noun`, with an `s` unless `n` is 1.
 pub fn count(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
-/// `t` in `tz`, formatted with `format`.
 pub fn zoned(t: Timestamp, tz: &TimeZone, format: &str) -> String {
     t.to_zoned(tz.clone()).strftime(format).to_string()
 }

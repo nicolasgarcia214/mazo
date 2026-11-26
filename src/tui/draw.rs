@@ -1,6 +1,3 @@
-//! The screen: the top bar, the list tables, the side card, the footer and
-//! the styling they share.
-
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
@@ -22,11 +19,8 @@ use crate::report;
 use crate::store;
 use crate::theme;
 
-/// The terminal width from which the usage table shows the selected
-/// skill's card beside it.
 const WIDE: u16 = 140;
 
-/// The screens a key works on.
 #[derive(Clone, Copy)]
 enum On {
     All,
@@ -34,7 +28,6 @@ enum On {
     NotUnused,
 }
 
-/// The keys, as the footer lists them.
 const KEYS: [(&str, On); 16] = [
     ("↑↓←→/hjkl move", On::All),
     ("Enter card/retire", On::Lists),
@@ -54,8 +47,6 @@ const KEYS: [(&str, On); 16] = [
     ("q quit", On::All),
 ];
 
-/// The [`KEYS`] that work on `screen`, joined with ` · ` into lines of at
-/// most `width` columns.
 fn keys(screen: Screen, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<String> = vec![];
     for (key, on) in KEYS {
@@ -73,15 +64,12 @@ fn keys(screen: Screen, width: usize) -> Vec<Line<'static>> {
     lines.iter().map(|l| theme::hints(l)).collect()
 }
 
-/// The top bar's tabs.
 const TABS: [&str; 2] = ["usage", "unused"];
 
-/// `s` in the muted colour.
 fn muted(s: &str) -> Span<'static> {
     Span::raw(s.to_string()).fg(theme::MUTED)
 }
 
-/// `t` styled in its [`render::status_colour`].
 fn token(t: &str) -> Span<'static> {
     let span = Span::raw(t.to_string());
     match render::status_colour(t) {
@@ -91,9 +79,6 @@ fn token(t: &str) -> Span<'static> {
     }
 }
 
-/// The spans of `cell` in the column `head`: a grade of 9 or more green and its mark apart,
-/// `today` in the accent, and zero counts and `-` muted. In any other column,
-/// the audit mark among them, each `; `-separated note is styled as a status token.
 fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
     let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
     match (head, cell) {
@@ -119,7 +104,6 @@ fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
     }
 }
 
-/// A table column: its header, alignment and cells.
 struct Column {
     head: &'static str,
     align: Align,
@@ -127,24 +111,17 @@ struct Column {
 }
 
 impl Column {
-    /// The width of its widest cell or its header.
     fn width(&self) -> usize {
         self.cells.iter().map(|c| c.chars().count()).chain([self.head.chars().count()]).max().unwrap_or(0)
     }
 }
 
-/// How a column gives way as the terminal narrows.
 enum Narrow {
     Drop(&'static str),
-    /// The two columns fold into one under the header, each cell `a/b`.
     Fold(&'static str, &'static str, &'static str),
-    /// The column's cells are cut with `…`, down to its header's width.
     Cut(&'static str),
 }
 
-/// How the columns give way as the terminal narrows, the first first, each
-/// step taken only while the table overflows. A column not named here
-/// never narrows; one only cut never drops.
 const NARROWING: &[Narrow] = &[
     Narrow::Drop("typed"),
     Narrow::Drop("ref"),
@@ -157,9 +134,6 @@ const NARROWING: &[Narrow] = &[
     Narrow::Cut("skill"),
 ];
 
-/// `cols` narrowed by [`NARROWING`] until they fit in `room` columns, one
-/// space between them, and the width of each: the first and the last take
-/// what is left over.
 fn fit(mut cols: Vec<Column>, room: usize) -> (Vec<Column>, Vec<u16>) {
     let used = |cols: &[Column]| cols.iter().map(Column::width).sum::<usize>() + cols.len().saturating_sub(1);
     for step in NARROWING {
@@ -196,9 +170,6 @@ fn fit(mut cols: Vec<Column>, room: usize) -> (Vec<Column>, Vec<u16>) {
     (cols, widths.into_iter().map(|w| w as u16).collect())
 }
 
-/// `header` and `rows` as a table that fits `width` columns: the header bold
-/// in the accent, a cell aligned as its column. The skill column is never
-/// styled, so a name never takes a status colour.
 fn table(header: &[(&'static str, Align)], rows: Vec<Vec<String>>, width: usize) -> Table<'static> {
     let mut cols: Vec<Column> = header.iter().map(|&(head, align)| Column { head, align, cells: Vec::new() }).collect();
     for row in rows {
@@ -227,8 +198,6 @@ fn table(header: &[(&'static str, Align)], rows: Vec<Vec<String>>, width: usize)
 }
 
 impl App {
-    /// The footer's hints while a dialog is open or the filter is being
-    /// typed; `None` when the footer lists the [`KEYS`].
     fn hints(&self) -> Option<String> {
         Some(match &self.dialog {
             Some(Dialog { ask: Some(Ask::Source(_)), .. }) => "Enter add · Esc cancels".into(),
@@ -245,26 +214,16 @@ impl App {
         })
     }
 
-    /// The card's trail after the name: the list it goes back to, then its skill.
     fn trail(&self) -> Option<Line<'static>> {
         let (Screen::Card, Some((skill, ..))) = (self.screen, &self.card) else { return None };
         let back = if self.back == Screen::Unused { "unused" } else { "usage" };
         Some(Line::from(vec![muted(back), muted(" › "), Span::raw(skill.clone()).bold(), Span::raw("  ")]))
     }
 
-    /// The columns the tabs or the trail take.
     fn tabs(&self) -> usize {
-        // Each tab title is padded with a space either side, a divider between.
         self.trail().map_or(TABS.iter().map(|t| t.len() + 3).sum::<usize>() - 1, |t| t.width())
     }
 
-    /// What follows the lead in `width` columns: the count of listed skills
-    /// and the filter, the window, and the agent, channel and authoring
-    /// filters when set; the tokens in context at the right edge, each
-    /// agent's in the warning colour near its listing budget, their label
-    /// shortened where the chips would crowd them; and the bundled skills
-    /// not installed, after the chips when they fit beside the tokens, else
-    /// returned as a row of its own.
     fn top(&self, width: usize) -> (Line<'static>, Line<'static>, Option<Line<'static>>) {
         let mut chips: Vec<(&str, String)> = Vec::new();
         if self.screen != Screen::Card {
@@ -308,7 +267,6 @@ impl App {
         let missing = store::missing_bundled(&self.data.inv);
         let mut notice = (!missing.is_empty())
             .then(|| Span::raw(format!("{} not installed, press i", missing.join(", "))).fg(theme::WARN));
-        // Joined by ` · `, three columns.
         if let Some(n) = notice.take_if(|n| fits(chips.width() + 3 + n.width(), &short)) {
             chips.spans.extend([muted(" · "), n]);
         }
@@ -316,12 +274,8 @@ impl App {
         (chips, line, notice.map(|n| Line::from(vec![Span::raw(" "), n])))
     }
 
-    /// The top bar in `area`: the mark, the tabs or the card's trail, then
-    /// [`App::top`]'s chips and tokens, and on a second row, when `area` has
-    /// one, its notice.
     fn draw_top(&self, frame: &mut Frame, area: Rect) {
         let [row, below] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
-        // The first `width` columns of `area`, and the rest.
         let split = |area, width: usize| {
             Layout::horizontal([Constraint::Length(width as u16), Constraint::Fill(1)]).areas(area)
         };
@@ -356,7 +310,6 @@ impl App {
         };
         let height = Constraint::Length(footer_lines.len() as u16);
         let pane_height = self.job.as_ref().map_or(0, |j| j.lines.len().clamp(1, PANE_LINES) as u16 + 2);
-        // The top bar's notice takes a second row when it does not fit the first.
         let lead = logo::mark().width() + self.tabs();
         let rest = usize::from(frame.area().width).saturating_sub(lead);
         let top_height = 1 + u16::from(self.top(rest).2.is_some());
@@ -387,7 +340,6 @@ impl App {
         }
         if let Some(dialog) = &mut self.dialog {
             let area = body.union(info);
-            // The screen behind stays in view, dimmed.
             frame.buffer_mut().set_style(area, Style::new().add_modifier(Modifier::DIM));
             match &mut dialog.ask {
                 Some(Ask::Help(scroll)) => self.page = draw_help(frame, &dialog.lines, scroll, area),
@@ -396,7 +348,6 @@ impl App {
         }
     }
 
-    /// The selected skill's card in `area`, behind a rule, from its top.
     fn draw_side(&mut self, frame: &mut Frame, area: Rect) {
         let Some(skill) = self.listed().get(self.selected).map(|s| s.to_string()) else { return };
         if self.side.as_ref().is_none_or(|(s, ..)| *s != skill) {
@@ -408,8 +359,6 @@ impl App {
         draw_card(frame, skill, lines, chart, self.usage_since, 0, rule.inner(area));
     }
 
-    /// The current list as a table in `body` from the row that keeps the
-    /// selection in view, and its coverage note in `info`.
     fn draw_list(&mut self, frame: &mut Frame, body: Rect, info: Rect) {
         let input = self.data.input();
         let (header, rows, note) = match self.screen {
@@ -449,9 +398,7 @@ impl App {
         self.page = usize::from(body.height).saturating_sub(1).max(1);
         let total = rows.len();
         let first = self.selected.saturating_sub(self.page - 1);
-        // The scrollbar, when shown, takes the last column.
         let area = Rect { width: body.width.saturating_sub(u16::from(total > self.page)), ..body };
-        // Room for the gutter.
         let table = table(header, rows, usize::from(area.width).saturating_sub(2));
         let mut state = TableState::new().with_offset(first).with_selected(Some(self.selected));
         frame.render_stateful_widget(table, area, &mut state);
@@ -461,9 +408,6 @@ impl App {
     }
 }
 
-/// The [`Logo`] in the bottom left of `area`, past the gutter, with
-/// [`logo::about`] beside its last row when that fits, once the first `used`
-/// rows of `area` leave it room and a blank row above it.
 fn draw_logo(frame: &mut Frame, area: Rect, used: usize) {
     let room = usize::from(area.height).saturating_sub(used + 1) >= usize::from(Logo::HEIGHT);
     if !room || area.width < Logo::WIDTH + 2 {
@@ -479,7 +423,6 @@ fn draw_logo(frame: &mut Frame, area: Rect, used: usize) {
     }
 }
 
-/// `line` with a leading status token, such as `ERROR:`, in its colour.
 pub(super) fn status_line(line: &str) -> Line<'static> {
     match line.split_once(' ') {
         Some((head, rest)) if render::status_colour(head).is_some() => {
@@ -489,8 +432,6 @@ pub(super) fn status_line(line: &str) -> Line<'static> {
     }
 }
 
-/// A scrollbar down the right edge of `area` when `total` rows overflow the
-/// `page` shown from row `first`.
 pub(super) fn scrollbar(frame: &mut Frame, area: Rect, total: usize, first: usize, page: usize) {
     if total <= page {
         return;

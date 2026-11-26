@@ -1,21 +1,7 @@
-//! The shared reader grammar: does a shell command string load
-//! files, and which ones?
-//!
-//! - A load is made only of reader verbs (`cat`, `sed -n 'a,bp'`, `head`, `tail`,
-//!   `nl -ba`, `bat`, `less`), chained with `&&` or `;`. `cd <dir>` segments are
-//!   allowed and rebase later relative paths.
-//! - A pipeline loads when its first stage is a reader and every later stage only
-//!   passes lines through (`nl`, `cat`, `head`, `tail`, `sed -n`).
-//! - `rg`, `grep`, `wc`, `ls`, `find`, `git`, `apply_patch`, and any pipeline whose
-//!   first stage is not a reader, are not loads.
-//! - Anything else is unknown; the caller counts it as unparsed when it names a
-//!   skill file.
-
 use crate::config;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reads {
-    /// The distinct files read, in order of first read.
     Load(Vec<String>),
     NotLoad,
     Unknown,
@@ -27,7 +13,6 @@ pub fn reads(cmd: &str) -> Reads {
     let Some(segments) = lex(cmd) else { return Reads::Unknown };
     let mut files: Vec<String> = Vec::new();
     let mut base: Option<String> = None;
-    // After `cd $X` relative paths are unknowable; absolute ones still read.
     let mut base_unknown = false;
     let mut not_load = false;
     for pipeline in &segments {
@@ -69,7 +54,6 @@ pub fn reads(cmd: &str) -> Reads {
             None => return Reads::Unknown,
         }
     }
-    // A reader mixed with non-readers matches neither rule: unparsed, not silent.
     match (not_load, files.is_empty()) {
         (true, false) | (false, true) => Reads::Unknown,
         (true, true) => Reads::NotLoad,
@@ -77,9 +61,6 @@ pub fn reads(cmd: &str) -> Reads {
     }
 }
 
-/// Splits into `;`/`&&`/newline-separated segments of `|`-separated stages of
-/// words, honouring quotes and backslashes. `None` on `||`, `&` backgrounding,
-/// subshells or unbalanced quotes: those are not plain reads.
 fn lex(cmd: &str) -> Option<Vec<Vec<Vec<String>>>> {
     let mut segments = vec![vec![Vec::new()]];
     let mut word = String::new();
@@ -127,7 +108,6 @@ fn lex(cmd: &str) -> Option<Vec<Vec<Vec<String>>>> {
             }
             '&' => {
                 if chars.next_if_eq(&'&').is_none() {
-                    // `2>&1` is a redirection, a lone `&` backgrounds.
                     if word.ends_with('>') {
                         word.push('&');
                         continue;
@@ -155,7 +135,6 @@ fn lex(cmd: &str) -> Option<Vec<Vec<Vec<String>>>> {
     Some(segments)
 }
 
-/// Drops leading `VAR=value` words and redirections (`2>/dev/null`, `> f`, `2>&1`).
 fn strip(words: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut skip_next = false;
@@ -179,8 +158,6 @@ fn strip(words: &[String]) -> Vec<String> {
     out
 }
 
-/// The files a reader stage reads, or `None` if the stage is not a reader.
-/// `command cat` and `/usr/bin/cat` are `cat`.
 fn reader_files(words: &[String]) -> Option<Vec<String>> {
     let words = if words.first().is_some_and(|w| w == "command") { &words[1..] } else { words };
     let (verb, args) = words.split_first()?;
@@ -194,7 +171,6 @@ fn reader_files(words: &[String]) -> Option<Vec<String>> {
     (!files.is_empty()).then_some(files)
 }
 
-/// Words after the flags; `with_value` flags take the next word as their value.
 fn flags_then_files(args: &[String], with_value: &[&str]) -> Option<Vec<String>> {
     let mut files = Vec::new();
     let mut i = 0;
@@ -209,7 +185,6 @@ fn flags_then_files(args: &[String], with_value: &[&str]) -> Option<Vec<String>>
                 i += 1;
             }
         } else if a.starts_with('+') && files.is_empty() {
-            // `tail +N` style offsets
         } else {
             files.push(a.clone());
         }
@@ -218,7 +193,6 @@ fn flags_then_files(args: &[String], with_value: &[&str]) -> Option<Vec<String>>
     Some(files)
 }
 
-/// `sed -n 'a,bp' file…`: printing a line range is a read; other scripts are not.
 fn sed_files(args: &[String]) -> Option<Vec<String>> {
     let mut quiet = false;
     let mut script = None;
@@ -241,7 +215,6 @@ fn sed_files(args: &[String]) -> Option<Vec<String>> {
     (quiet && script.is_some_and(|s| range_print(&s))).then_some(files)
 }
 
-/// One or more `;`-separated `Np` / `N,Mp` commands, `$` allowed as an address.
 fn range_print(script: &str) -> bool {
     let addr = |a: &str| a == "$" || (!a.is_empty() && a.bytes().all(|b| b.is_ascii_digit()));
     let one = |cmd: &str| {
@@ -255,7 +228,6 @@ fn range_print(script: &str) -> bool {
     !s.is_empty() && s.split(';').all(one)
 }
 
-/// A later pipeline stage that only passes lines through, reading no file.
 fn pass_through(words: &[String]) -> bool {
     let Some((verb, args)) = words.split_first() else { return false };
     match verb.as_str() {
@@ -266,13 +238,11 @@ fn pass_through(words: &[String]) -> bool {
     }
 }
 
-/// A path with no shell expansion left in it, other than a leading `~/`.
 fn plain(p: &str) -> bool {
     let rest = p.strip_prefix("~/").unwrap_or(p);
     !rest.contains(['$', '*', '?', '[', '~'])
 }
 
-/// The shell's leading `~/` expansion.
 fn expand_home(p: &str) -> String {
     config::home_dir().map_or_else(|_| p.to_string(), |home| config::expand_tilde(p, &home))
 }

@@ -1,6 +1,3 @@
-//! Grade and retro frontmatter under `evals_dir`, and grade staleness by
-//! content hash. Read at report time; never copied or written.
-
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -13,15 +10,11 @@ use crate::render::PathExt;
 use crate::store::content_hash;
 use crate::yaml;
 
-/// One loaded grade or retro file.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Eval {
     pub file: PathBuf,
-    /// The first 10 characters of the frontmatter `date`, a `YYYY-MM-DD`.
     pub date: String,
-    /// The frontmatter `score` as written (`8.6`, `9`), if any.
     pub score: Option<String>,
-    /// A retro's frontmatter `verdict`, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<String>,
 }
@@ -30,14 +23,11 @@ pub struct Eval {
 pub struct Grade {
     #[serde(flatten)]
     pub eval: Eval,
-    /// The frontmatter `content_hash`: the skill's [`content_hash`] when it was graded.
     pub content_hash: Option<String>,
-    /// `content_hash` is missing or is not the skill's current one.
     pub stale: bool,
 }
 
 impl Grade {
-    /// `stale` for a stale grade, else empty.
     pub fn mark(&self) -> &'static str {
         if self.stale { "stale" } else { "" }
     }
@@ -45,29 +35,21 @@ impl Grade {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Evals {
-    /// The skill's current [`content_hash`]; None for a name in no root.
     pub content_hash: Option<String>,
-    /// Every grade, oldest first; the last one is the latest.
     pub grades: Vec<Grade>,
-    /// Every retro, oldest first; the last one is the latest.
     pub retros: Vec<Eval>,
-    /// Each grade or retro file with frontmatter that was skipped, and why.
     pub skipped: Vec<String>,
 }
 
-/// `skill`'s grade and retro directories under `evals_dir`.
 pub fn dirs(evals_dir: &Path, skill: &str) -> [PathBuf; 2] {
     ["grades", "retros"].map(|kind| evals_dir.join(kind).join(skill))
 }
 
-/// The transcript `session` names, with its agent: a file under a home's
-/// transcripts, or a session id that the name of exactly one transcript holds.
 pub fn transcript(homes: &[Home], session: &str) -> crate::Result<(Agent, PathBuf)> {
     let usage = |m: String| crate::Error::Usage(m);
     if session.is_empty() {
         return Err(usage("the session is empty: give a transcript's path or a session id".into()));
     }
-    // A path only when it is a file: a session id may also name something in the cwd.
     if let Some(file) = std::fs::canonicalize(session).ok().filter(|f| f.is_file()) {
         let under = |h: &&Home| std::fs::canonicalize(h.transcripts()).is_ok_and(|t| file.starts_with(t));
         let home =
@@ -86,8 +68,6 @@ pub fn transcript(homes: &[Home], session: &str) -> crate::Result<(Agent, PathBu
     }
 }
 
-/// The evaluation artifacts under `evals_dir` of `skill`, a source or store
-/// skill of `inv`; none for a name in no root.
 pub fn load(evals_dir: &Path, inv: &Inventory, skill: &str) -> Evals {
     let Some(root) = inv.root(skill) else {
         return Evals::default();
@@ -103,9 +83,6 @@ pub fn load(evals_dir: &Path, inv: &Inventory, skill: &str) -> Evals {
     Evals { grades, retros, content_hash: current, skipped }
 }
 
-/// Every `*.md` in `dir` with loadable frontmatter and a `date`, with its
-/// frontmatter `content_hash`, sorted by (date, filename). Other files are
-/// skipped, one with frontmatter noted in `skipped` with why.
 fn read_dir(dir: &Path, skipped: &mut Vec<String>) -> Vec<(Eval, Option<String>)> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -117,9 +94,8 @@ fn read_dir(dir: &Path, skipped: &mut Vec<String>) -> Vec<(Eval, Option<String>)
             continue;
         };
         if !text.trim_start_matches('\u{feff}').starts_with("---") {
-            continue; // no frontmatter: not an evaluation artifact
+            continue;
         }
-        // A file's name and YAML error are anyone's text.
         let skip = |why: &str| format!("{}: {}", file.inert(), crate::render::inert(why));
         let fm = match yaml::frontmatter(&text) {
             Ok(fm) => fm,
@@ -139,8 +115,6 @@ fn read_dir(dir: &Path, skipped: &mut Vec<String>) -> Vec<(Eval, Option<String>)
     out
 }
 
-/// The leading `YYYY-MM-DD` of a date scalar, quoted or not, when it is a
-/// calendar date.
 fn date(text: &str) -> Option<String> {
     let d = text.get(..10)?;
     let shape = d.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });

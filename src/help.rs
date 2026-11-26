@@ -1,8 +1,3 @@
-//! The help text: what each column and mark means and why counts look low.
-//! It is the one source of the TUI's help overlay (`H`), the legend under
-//! `mazo usage` and `mazo unused`, and the HTML report's legend.
-
-/// What each column of the usage table means, in its order.
 pub const USAGE_COLUMNS: [(&str, &str); 15] = [
     ("skill", "the skill's name; (project) marks a project skill"),
     ("sess", "distinct sessions with a strong load (slash, tool or typed) in the window"),
@@ -27,11 +22,9 @@ pub const USAGE_COLUMNS: [(&str, &str); 15] = [
     ),
 ];
 
-/// What the TUI's usage table does on a narrow terminal, said under its columns.
 pub const NARROW: &str = "on a narrow terminal some columns hide in priority order, typed first, \
     and slash and tool fold into via, shown as slash/tool such as 4/78";
 
-/// What each column of the unused list means, in its order.
 pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
     ("skill", "a skill with no strong load in the window"),
     (
@@ -44,8 +37,6 @@ pub const UNUSED_COLUMNS: [(&str, &str); 3] = [
     ),
 ];
 
-/// The marks and glyphs in the cells: the usage column each appears in, the
-/// mark and what it means. A mark named as its column stands for the whole column.
 pub const MARKS: [(&str, &str, &str); 10] = [
     ("agents", "agents", "C Claude, X Codex, P Pi"),
     ("ctx", "●", "name and description in context: Claude on, every Codex skill, Pi by default"),
@@ -63,7 +54,6 @@ pub const MARKS: [(&str, &str, &str); 10] = [
     ("skill", "(project)", "a project skill, counted apart"),
 ];
 
-/// The questions the help answers, each with its answer's lines.
 pub const FAQ: [(&str, &[&str]); 6] = [
     (
         "Why are the counts lower than I expected?",
@@ -114,8 +104,6 @@ pub const FAQ: [(&str, &[&str]); 6] = [
     ),
 ];
 
-/// The [`MARKS`] that `shown(column, mark)` keeps as one line, each
-/// `mark meaning`, joined with `; `.
 pub fn legend(shown: impl Fn(&str, &str) -> bool) -> String {
     MARKS
         .iter()
@@ -125,9 +113,6 @@ pub fn legend(shown: impl Fn(&str, &str) -> bool) -> String {
         .join("; ")
 }
 
-/// The help as lines: Columns, the unused list's first when `unused_first`,
-/// the usage list's followed by the [`NARROW`] note, then Marks and glyphs, then the FAQ. A heading has no indent, an entry two
-/// spaces, an answer four.
 pub fn lines(unused_first: bool) -> Vec<String> {
     let mut tables = [("usage", &USAGE_COLUMNS[..]), ("unused", &UNUSED_COLUMNS[..])];
     if unused_first {

@@ -1,6 +1,3 @@
-//! Claude fixtures. Each fixture is a real record from this machine,
-//! trimmed to the fields the adapter reads, with prompt and tool text scrubbed.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -35,7 +32,6 @@ fn roots() -> SkillRoots {
     }
 }
 
-/// Reads `path` through the scan's prefilter from `cursor` and parses the chunk.
 fn parse_from(path: &Path, cursor: Option<&Cursor>) -> (Parsed, Cursor) {
     common::parse_file(&Claude, &roots(), path, cursor)
 }
@@ -46,8 +42,6 @@ fn parse(name: &str) -> Vec<Raw> {
     p.raws
 }
 
-/// Parses every line of a fixture, prefilter bypassed: a no-event fixture
-/// whose records carry no marker still reaches the parser.
 fn parse_all(name: &str) -> Parsed {
     common::parse_unfiltered(&Claude, &roots(), &fixture(name))
 }
@@ -146,8 +140,6 @@ fn slash_meta_without_source_tool_use_id_is_slash_and_the_command_record_is_igno
     );
     assert_eq!(parse("slash.jsonl"), vec![slash.clone()]);
 
-    // A scan that stops between the `<command-name>` record and the meta record
-    // loses nothing: the meta record classifies on its own.
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     let text = std::fs::read_to_string(fixture("slash.jsonl")).unwrap();
@@ -187,7 +179,6 @@ fn subagent_slash_meta_matches_base_directory_in_block_1() {
 
 #[test]
 fn skill_result_without_a_base_directory_meta_has_no_path() {
-    // `workflow-authoring` is built in: its meta record carries no `Base directory`.
     let s = session("10da2fa2-c02b-442b-8173-eac8c0c16476", "cli", false, "/home/nicolas/dotfiles", "2.1.294");
     assert_eq!(
         parse("result_only.jsonl"),
@@ -251,7 +242,6 @@ fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
     let upgrade = ledger.admit(event(second.raws[0].clone())).unwrap();
     assert_eq!(upgrade, mazo::ledger::Event { path: unslop_pair().path, ..stored });
 
-    // A fresh scan of the whole file stores the same event.
     let (fresh, _) = parse_from(&p, None);
     assert_eq!(fresh.raws.len(), 1);
     assert_eq!(event(fresh.raws[0].clone()), upgrade);
@@ -259,9 +249,6 @@ fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
 
 #[test]
 fn clear_command_yields_nothing() {
-    // The real `/clear` triple: the `isMeta` caveat record, the
-    // `<command-name>` record and the `local_command` system record. None
-    // carries a prefilter marker, so the parser is fed every line.
     let p = parse_all("clear.jsonl");
     assert!(p.raws.is_empty() && p.unparsed.is_empty(), "{:?}", p.raws);
 }
@@ -278,18 +265,12 @@ fn skill_mention_and_invoked_skills_attachments_yield_nothing() {
 
 #[test]
 fn refused_skill_calls_yield_nothing() {
-    // `disable-model-invocation` and a `PreToolUse:Skill` hook refusal, each
-    // the assistant `Skill` call and its error result. The results carry no
-    // prefilter marker, so the parser is fed every line.
     let p = parse_all("refused.jsonl");
     assert!(p.raws.is_empty() && p.unparsed.is_empty(), "{:?}", p.raws);
 }
 
 #[test]
 fn skill_result_without_success_true_yields_nothing() {
-    // A Skill result counts only with `success: true`. No refusal on this machine has a
-    // `commandName` (they store an error string), so this is the real result
-    // of `pair.jsonl` with `success` flipped.
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     let result = std::fs::read_to_string(fixture("pair.jsonl")).unwrap().lines().next().unwrap().to_string();
@@ -323,7 +304,6 @@ fn bench_and_probe_entrypoints_pass_through_to_a_probe_actor() {
     let bench = parse("bench.jsonl");
     assert_eq!(bench.len(), 1);
     let b = &bench[0];
-    // The plugin skill takes its name from `commandName`, its path from the meta record.
     assert_eq!((b.skill.as_str(), b.channel, b.line), ("anthropic-skills:pdf", Channel::Tool, 1));
     assert!(b.path.as_deref().unwrap().ends_with("/pdf/SKILL.md"));
     assert_eq!(b.session.actor.entrypoint.as_deref(), Some("bench"));
@@ -350,12 +330,9 @@ fn bash_reading_two_skill_files_yields_two_events_with_distinct_ids() {
             false,
         )
     };
-    // Two chunks of one file collapse; the second file gets its own index.
     assert_eq!(parse("bash_two.jsonl"), vec![r(0, "validate-findings-backlog"), r(1, "interrogate")]);
 }
 
-/// The named file is a skill's only because `unslop/SKILL.md` exists on disk
-/// (`known` is empty), so the home skills dir is built under a temp root.
 #[test]
 fn unknown_command_naming_a_skill_file_is_counted_as_unparsed() {
     let tmp = tempfile::tempdir().unwrap();
@@ -395,8 +372,6 @@ fn history_backfill_emits_typed_only_for_known_names_without_a_transcript() {
     assert_eq!(
         claude::backfill(&home(dir.path()), &known),
         vec![
-            // Line 1 (`/gitmoji-conventional-commit`) has a transcript on disk;
-            // line 3 (`/argus:triage`) is a plugin command.
             typed(
                 2,
                 "af75c7ad-55c0-44f0-8836-492993dede34",
@@ -413,7 +388,6 @@ fn history_backfill_emits_typed_only_for_known_names_without_a_transcript() {
                 "argus",
                 "/home/nicolas/bug_bounties_and_contests/folks-staking-contracts",
             ),
-            // `/clear ` matches the anchor when `clear` is a known name.
             typed(
                 5,
                 "9ebf4dd4-f339-44a7-8e12-4ba723625987",
@@ -445,7 +419,6 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
         policy: Default::default(),
         judge: Default::default(),
     };
-    // `argus` is a known name from git history but not canonical today.
     let inv = Inventory {
         source: Some(source.clone()),
         skills: ["grade".to_string()].into(),
@@ -455,7 +428,6 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
         ..Default::default()
     };
     let first = mazo::scan::scan(&cfg, &inv, &data, false).unwrap();
-    // No transcript exists here, so line 1 counts too.
     assert_eq!(first.homes["claude"].new_events.len(), 3);
     let ledger = Ledger::load(&data).unwrap();
     let got: Vec<(&str, Origin, String)> =
@@ -475,12 +447,6 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     assert_eq!(second.homes["claude"].new_events.len(), 0);
 }
 
-/// Authoring, through a scan. The source sits in a git worktree
-/// built here; the transcript is the real authoring `Read` of
-/// `subagents/agent-a5b86c28fed127eef.jsonl` (cwd `~/dotfiles`) and the real
-/// `pair.jsonl` Skill call, with `~/dotfiles` and `~/.claude` moved under the
-/// temp root and the pair's cwd moved into the worktree. Copies of the `Read`
-/// (new `uuid`) move its cwd.
 #[test]
 fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
     let tmp = tempfile::tempdir().unwrap();
@@ -542,33 +508,28 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
         ("cc:850b0039-5f37-4f9a-909f-cf9e7084bf15:0:0".into(), Channel::Read, s(&dotfiles), true),
         ("cc:00000000-0000-4000-8000-000000000001:0:0".into(), Channel::Read, s(&home_skill_dir), true),
         ("cc:00000000-0000-4000-8000-000000000002:0:0".into(), Channel::Read, s(&elsewhere), false),
-        // The strong Skill call in the worktree is a real use.
         ("cc:toolu_01EKQ5jSt7RhgFyyw72kyqoY".into(), Channel::Tool, s(&dotfiles), false),
     ];
     assert_eq!(got, want);
 }
 
-/// `prompt_at` on line `line` of a fixture.
 fn prompt(name: &str, line: u64) -> Option<String> {
     Claude.prompt_at(&format!("{}:{line}", fixture(name).display()))
 }
 
 #[test]
 fn slash_prompt_is_the_invocation_and_its_arguments() {
-    // Line 2 is the meta record; line 1 is the command record holding the arguments.
     assert_eq!(prompt("slash.jsonl", 2).as_deref(), Some("/gitmoji-conventional-commit [scrubbed]"));
 }
 
 #[test]
 fn bare_slash_prompt_is_the_message_before_it() {
-    // Line 3 is a bare `/gitmoji-conventional-commit`; line 2 is an earlier load's skill body.
     let want = "Validate the scrubbed claims with two agents and implement it.";
     assert_eq!(prompt("prompt_bare.jsonl", 4).as_deref(), Some(want));
 }
 
 #[test]
 fn tool_prompt_is_the_user_message_not_a_tool_result() {
-    // Line 3 is a Bash tool_result; lines 5 and 6 are the Skill result and its meta record.
     let want = Some("Improve the scrubbed skill and check its retros.");
     assert_eq!(prompt("prompt_tool.jsonl", 5).as_deref(), want);
     assert_eq!(prompt("prompt_tool.jsonl", 6).as_deref(), want);
@@ -580,9 +541,6 @@ fn injected_blocks_are_stripped_and_an_image_keeps_its_text() {
     assert_eq!(prompt("prompt_image.jsonl", 4).as_deref(), Some(image));
     let pasted = "Improve the scrubbed skill based on this one: \"\n\n\"";
     assert_eq!(prompt("prompt_pasted.jsonl", 3).as_deref(), Some(pasted));
-    // Lines 2 and 3 hold only a task notification and a `<system-reminder>`, so
-    // the walk passes them. Line 2 is real but came 68 records before line 1 in
-    // its session, where no load follows it.
     assert_eq!(prompt("prompt_reminder.jsonl", 4).as_deref(), Some("Validate the scrubbed nits and commit."));
 }
 
@@ -598,16 +556,12 @@ fn expired_transcript_has_no_prompt() {
     assert_eq!(prompt("slash.jsonl", 3), None, "a line past the end");
 }
 
-/// `condense` at line `line` of `path` with the audit's 60,000-character cap.
 fn condense_at(path: &Path, line: u64, max_chars: usize) -> Option<String> {
     Claude.condense(&format!("{}:{line}", path.display()), max_chars)
 }
 
 #[test]
 fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
-    // Line 3 is the prompt, line 5 the `unslop` Skill result and line 6 its
-    // meta record with the body; line 11 loads `unslop` again and line 14 loads
-    // `grade`, which ends the window.
     let got = condense_at(&fixture("condense.jsonl"), 5, 60_000).unwrap();
     let input = format!("{{\"command\":\"echo {}", "a".repeat(183));
     let want = [
@@ -629,9 +583,6 @@ fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
 
 #[test]
 fn trace_runs_from_the_skills_last_prompt_to_its_reviewers_load() {
-    // `unslop` loads at lines 5 and 11 and `grade`, the reviewer, at line 14.
-    // Line 9 is the prompt behind the last `unslop` load; no prompt follows it,
-    // so the window ends at the reviewer's load. Line 12 is a meta record.
     let got = Claude.trace(&fixture("condense.jsonl"), "unslop", "grade").unwrap();
     let want = [
         "L9: user: Now check the tone.",
@@ -643,7 +594,6 @@ fn trace_runs_from_the_skills_last_prompt_to_its_reviewers_load() {
     assert_eq!((got.text.as_str(), got.lines, got.records, got.kept), (want.as_str(), (9, 13), 5, 4));
 }
 
-/// The lines `keep` of `condense.jsonl`, in that order, as a transcript.
 fn spliced(dir: &Path, keep: &[usize], edit: impl Fn(String) -> String) -> PathBuf {
     let fixture = std::fs::read_to_string(fixture("condense.jsonl")).unwrap();
     let all: Vec<&str> = fixture.lines().collect();
@@ -655,11 +605,8 @@ fn spliced(dir: &Path, keep: &[usize], edit: impl Fn(String) -> String) -> PathB
 
 #[test]
 fn trace_ends_at_the_reviewers_prompt_only_when_it_names_the_reviewer() {
-    // `unslop` loads at line 5; line 9 is a later prompt and `grade`, the
-    // reviewer, loads at line 11 (lines 13-15 of the fixture).
     let dir = tempfile::tempdir().unwrap();
     let keep = [1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 14, 15, 16];
-    // A bare review command carries no prompt: the last prompt is the run's.
     let bare = Claude.trace(&spliced(dir.path(), &keep, |t| t), "unslop", "grade").unwrap();
     assert_eq!(bare.lines, (3, 10));
     assert!(bare.text.contains("L9: user: Now check the tone.\n"), "{}", bare.text);
@@ -669,8 +616,6 @@ fn trace_ends_at_the_reviewers_prompt_only_when_it_names_the_reviewer() {
 
 #[test]
 fn trace_ends_at_the_first_review_of_the_run() {
-    // `unslop` at line 5, `grade` at line 10, then a prompt and `grade` again
-    // at line 15: the first review's own turns stay out of the trace.
     let dir = tempfile::tempdir().unwrap();
     let keep = [1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 16, 9, 13, 14, 15];
     let got = Claude.trace(&spliced(dir.path(), &keep, |t| t), "unslop", "grade").unwrap();
@@ -684,7 +629,6 @@ fn trace_without_a_reviewer_runs_to_the_end_and_needs_a_load_of_the_skill() {
     let got = Claude.trace(&file, "grade", "retro").unwrap();
     assert_eq!(got.lines, (9, last), "from the prompt behind the load at line 14 to the last line");
     assert!(got.text.starts_with("L9: user: Now check the tone.\n"), "{}", got.text);
-    // A reviewer that loaded before the skill does not end its run.
     assert_eq!(Claude.trace(&file, "grade", "unslop").unwrap().lines, (9, last));
     assert_eq!(Claude.trace(&file, "nope", "retro"), None);
     let dir = tempfile::tempdir().unwrap();
@@ -698,7 +642,6 @@ fn condense_needs_a_strong_load_at_src() {
     assert_eq!(condense_at(&dir.path().join("gone.jsonl"), 5, 60_000), None);
 }
 
-/// A transcript: line 1 is the prompt, lines 2–4 load `unslop`, then `rest`.
 fn transcript_with(dir: &Path, rest: impl Iterator<Item = serde_json::Value>) -> PathBuf {
     let fixture = std::fs::read_to_string(fixture("condense.jsonl")).unwrap();
     let load = fixture.lines().skip(3).take(3);
@@ -719,7 +662,6 @@ fn transcript_with(dir: &Path, rest: impl Iterator<Item = serde_json::Value>) ->
 #[test]
 fn condense_stops_before_the_40th_user_message_after_the_start() {
     let dir = tempfile::tempdir().unwrap();
-    // `m0` is on line 5, so `m39`, the 40th user message after line 1, is on line 44.
     let path =
         transcript_with(dir.path(), (0..45).map(|i| serde_json::json!({"role": "user", "content": format!("m{i}")})));
     let got = condense_at(&path, 3, 60_000).unwrap();

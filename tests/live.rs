@@ -1,13 +1,3 @@
-//! Live end-to-end tests: one cheap model turn per agent proves that a real
-//! Claude, Codex and Pi load lands in the ledger as the right event. They run
-//! only with `MAZO_LIVE=1`; otherwise every test returns before spawning an
-//! agent, so `cargo test` makes no network call.
-//!
-//! The three gating tests share one run of all three agents and each asserts
-//! the whole of it. The two recorded tests depend on a model choosing to act:
-//! each tries up to three times and reports `skipped` when the model never
-//! acted, but fails when it acted and mazo recorded no event or the wrong one.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -22,7 +12,6 @@ use std::time::{Duration, Instant};
 use common::probe::Probe;
 use serde_json::{Value, json};
 
-/// The most one agent run may take.
 const TIMEOUT: Duration = Duration::from_secs(300);
 
 fn live() -> bool {
@@ -33,24 +22,16 @@ fn live() -> bool {
     on
 }
 
-/// What an agent run left: whether it finished, and its output for a failure message.
 struct Ran {
     ok: bool,
     log: String,
 }
 
-/// Held for every agent run: the probes link the real credentials, and two
-/// agents of one kind refreshing the same token at once could corrupt it.
 static LIVE: Mutex<()> = Mutex::new(());
 
-/// Runs `cmd` until it exits successfully or, given `(input, until)`, writes
-/// `input` to its stdin and runs it until a stdout line is a JSON event of
-/// type `until`; a failed `response` line ends the run at once. Killed after
-/// [`TIMEOUT`].
 fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
     let _live = LIVE.lock().unwrap_or_else(PoisonError::into_inner);
     cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() });
-    // Its own process group, so a timeout kills every process it started.
     cmd.process_group(0);
     let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
@@ -58,10 +39,8 @@ fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
     };
     let mut input = child.stdin.take();
     if let (Some(pipe), Some((text, _))) = (&mut input, stdin) {
-        // A write error shows up as a missing event below.
         let _ = writeln!(pipe, "{text}");
     }
-    // Both streams feed one channel, so every wait on them is bounded.
     let (tx, rx) = mpsc::channel();
     let readers: [(bool, Box<dyn Read + Send>); 2] =
         [(true, Box::new(child.stdout.take().unwrap())), (false, Box::new(child.stderr.take().unwrap()))];
@@ -92,7 +71,6 @@ fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
             break;
         }
     }
-    // End of input lets an RPC agent exit on its own; anything still running is killed.
     drop(input);
     let grace = Instant::now() + Duration::from_secs(10);
     let status = loop {
@@ -102,14 +80,12 @@ fn run(mut cmd: Command, stdin: Option<(&str, &str)>) -> Ran {
                 std::thread::sleep(Duration::from_millis(100))
             }
             _ => {
-                // SAFETY: `kill` takes no pointers; the negative pid names the child's group.
                 unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
                 let _ = child.wait();
                 break None;
             }
         }
     };
-    // What is left, for at most a second: a grandchild may hold the pipes open.
     let drained = Instant::now() + Duration::from_secs(1);
     while let Ok((_, line)) = rx.recv_timeout(drained.saturating_duration_since(Instant::now())) {
         log.push_str(&line);
@@ -124,26 +100,21 @@ fn claude(probe: &Probe, prompt: &str) -> Ran {
 }
 
 fn codex(probe: &Probe, prompt: &str) -> Ran {
-    // The work directory is no git repository.
     run(probe.agent("codex", &["exec", "--skip-git-repo-check", prompt]), None)
 }
 
-/// One RPC prompt to Pi, with session persistence on, answered by the faux provider.
 fn pi(probe: &Probe, prompt: &str) -> Ran {
     let ext = probe.extension.to_str().unwrap();
     let cmd = probe.agent("pi", &["--mode", "rpc", "-e", ext, "--provider", "probe", "--model", "probe"]);
     run(cmd, Some((&json!({"type": "prompt", "message": prompt}).to_string(), "agent_end")))
 }
 
-/// Each home's `(home, channel, actor)` for a gating load.
 const GATING: [(&str, &str, &str); 3] =
     [("claude", "slash", "headless"), ("codex", "slash", "headless"), ("pi", "slash", "main")];
 
-/// The shared gating run: each agent loads the probe once, then two scans and a show.
 struct Gate {
     skill: String,
     runs: BTreeMap<&'static str, Ran>,
-    /// Each home's transcript directory.
     transcripts: BTreeMap<&'static str, String>,
     first: BTreeMap<String, Vec<Value>>,
     shown: Vec<Value>,
@@ -170,16 +141,12 @@ fn gate_run() -> Gate {
     Gate { skill, runs, transcripts, first, shown, second }
 }
 
-/// The gating run, made once per test binary; a failed setup fails every
-/// gating test without running the agents again.
 fn gate() -> &'static Gate {
     static GATE: OnceLock<Result<Gate, String>> = OnceLock::new();
     let gate = GATE.get_or_init(|| std::panic::catch_unwind(gate_run).map_err(|_| "the gating run panicked".into()));
     gate.as_ref().unwrap()
 }
 
-/// D35: `home`'s agent finished, every home's first scan found exactly its one
-/// expected event, `show` lists exactly those three, and a second scan finds none.
 fn assert_gating(home: &str) {
     if !live() {
         return;
@@ -229,9 +196,6 @@ fn pi_skill_command_is_one_main_slash_event() {
     assert_gating("pi");
 }
 
-/// D36: up to three runs of `act` on a fresh probe. A run in which the model
-/// never acted is retried, and three of them report `skipped`; the first run in
-/// which it acted must put a headless `channel` event of the probe in `home`.
 fn assert_recorded(home: &str, channel: &str, act: impl Fn(&Probe) -> Ran, acted: impl Fn(&Probe) -> bool) {
     if !live() {
         return;

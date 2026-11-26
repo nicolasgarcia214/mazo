@@ -1,5 +1,3 @@
-// Renders every frame of scene.js and pipes raw RGBA into ffmpeg, which
-// encodes an MP4 that YouTube and X accept. Usage: node render.mjs [out.mp4]
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';

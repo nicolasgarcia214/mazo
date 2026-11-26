@@ -1,6 +1,3 @@
-//! The sync and status tests beyond the linking and policy cases of
-//! `tests/sync_port.rs`.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -11,7 +8,6 @@ use std::os::unix::fs::PermissionsExt;
 
 use common::sync::*;
 
-/// The Pi home in its configured place, `~/.pi/agent`.
 fn fixture() -> Fixture {
     let mut fx = Fixture::new();
     fx.set_env("PI_CODING_AGENT_DIR", None);
@@ -136,7 +132,6 @@ fn status_writes_nothing() {
     assert_eq!(fx.snapshot(), before);
 }
 
-/// `<home>: in sync (<n> skills)` for each of `homes`, in order.
 fn in_sync(fx: &Fixture, homes: &[&str]) -> String {
     homes.iter().map(|h| format!("{h}: in sync ({} skills)\n", fx.skills.len())).collect()
 }
@@ -170,7 +165,6 @@ fn status_prints_one_plain_line_per_finding() {
     );
     assert_eq!(r.stdout(), expected);
 
-    // A home whose only finding is foreign is in sync, and status exits 0.
     for name in [wrong.as_str(), obstructed, "gone"] {
         fs::remove_file(codex.join(name)).unwrap();
     }
@@ -185,7 +179,6 @@ fn status_prints_one_plain_line_per_finding() {
     assert_eq!(r.stdout(), expected);
 }
 
-/// Another installer names a foreign entry, so it reaches the terminal inert.
 #[test]
 fn status_prints_a_foreign_entry_name_inert() {
     let fx = fixture();
@@ -196,14 +189,12 @@ fn status_prints_a_foreign_entry_name_inert() {
     let line = "claude: evil\u{fffd}]0;pwned\u{fffd}\u{fffd} is not from the source; left alone (foreign)\n";
     assert!(r.stdout().contains(line), "{:?}", r.stdout());
 
-    // A newline in a name forges no line of its own.
     fs::remove_dir(fx.home.join(".claude/skills/evil\x1b]0;pwned\x07\u{202e}")).unwrap();
     fs::create_dir(fx.home.join(".claude/skills/x\nclaude: in sync")).unwrap();
     let r = fx.mazo(&["status"]);
     assert!(r.stdout().contains("claude: x\u{fffd}claude: in sync is not from the source"), "{:?}", r.stdout());
 }
 
-/// A dangling link mazo pruned is named inert, in the plan and in the deed.
 #[test]
 fn sync_prints_a_pruned_link_name_inert() {
     let fx = fixture();
@@ -252,8 +243,6 @@ fn dry_run_on_a_clean_tree_prints_in_sync() {
     let pi = fx.mazo(&["sync", "--dry-run", "--agent", "pi"]);
     assert_eq!(pi.stdout(), format!("in sync: 1 home, {} skills\n", fx.skills.len()));
 }
-
-// Regression tests for the code-review findings.
 
 #[test]
 fn retention_of_seven_days_or_less_always_warns() {
@@ -397,14 +386,13 @@ fn sync_waits_for_the_data_lock_but_a_dry_run_does_not() {
     assert_eq!(names(&fx.target), fx.skills);
 }
 
-/// A skills dir that cannot be listed is an error, never a clean home.
 #[test]
 fn an_unlistable_skills_dir_fails_status() {
     let fx = fixture();
     fx.mazo(&["sync"]).assert_ok();
     let skills = fx.home.join(".claude/skills");
     fs::set_permissions(&skills, fs::Permissions::from_mode(0o311)).unwrap();
-    let listable = fs::read_dir(&skills).is_ok(); // true when running as root
+    let listable = fs::read_dir(&skills).is_ok();
     let r = fx.mazo(&["status"]);
     fs::set_permissions(&skills, fs::Permissions::from_mode(0o755)).unwrap();
     if !listable {
@@ -414,13 +402,11 @@ fn an_unlistable_skills_dir_fails_status() {
     }
 }
 
-/// A foreign name that is not UTF-8 does not break `status --json`.
 #[test]
 fn status_json_reports_a_name_that_is_not_utf8() {
     let fx = fixture();
     fx.mazo(&["sync"]).assert_ok();
     match fs::create_dir(fx.home.join(std::ffi::OsStr::from_bytes(b".claude/skills/bad\xff"))) {
-        // APFS refuses a name that is not UTF-8, so macOS never lists one.
         Err(e) if e.raw_os_error() == Some(libc::EILSEQ) => return,
         r => r.unwrap(),
     }

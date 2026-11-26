@@ -1,6 +1,3 @@
-//! Always-on and configurable policy rules, and the
-//! scan-freshness warning.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -10,10 +7,7 @@ use crate::ledger::{Agent, Coverage};
 use crate::render::PathExt;
 use crate::yaml::{self, Yaml};
 
-/// Per-skill rules, always-on then the configured ones: run on every `sync`
-/// and `status`, whatever `--agent` says. Returns `ERROR: …` lines.
 pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
-    // Without a source the user's own skill set is empty by design.
     if let (true, Some(source)) = (inv.skills.is_empty(), &cfg.source) {
         return vec![format!("ERROR: no canonical skills found in {}", source.inert())];
     }
@@ -46,7 +40,6 @@ fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
     Ok(())
 }
 
-/// The Agent Skills format rules on a parsed frontmatter.
 pub fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
     if !meta.is_mapping() {
         return Err("SKILL.md frontmatter must be a mapping".into());
@@ -70,24 +63,19 @@ pub fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
     Ok(())
 }
 
-/// Python's `str.isspace()`: Unicode whitespace plus the separators U+001C–U+001F.
 fn python_space(c: char) -> bool {
     c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
 }
 
-/// `[a-z0-9]+(-[a-z0-9]+)*`
 pub fn valid_name(name: &str) -> bool {
     let ok = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
     name.split('-').all(ok)
 }
 
-/// Per-home rules for the selected homes, as `(home, line)`.
 pub fn home_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<(String, String)> {
     homes.iter().flat_map(|h| per_home(&cfg.policy, inv, h).into_iter().map(|e| (h.name.clone(), e))).collect()
 }
 
-/// Per-home configurable rules. Returns `ERROR: …` lines. A skill not set
-/// name-only is listed under the file whose value wins, else `settings.json`.
 fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
     if !policy.claude_name_only || home.agent != Agent::Claude {
         return Vec::new();
@@ -115,8 +103,6 @@ fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
     missing.into_iter().map(error).collect()
 }
 
-/// A Claude home's settings files that exist, parsed: `settings.json`, then
-/// the `settings.local.json` that wins over it.
 pub(crate) fn settings(home: &Home) -> impl Iterator<Item = (PathBuf, Result<serde_json::Value, String>)> {
     [home.settings(), home.path.join("settings.local.json")].into_iter().filter_map(|path| {
         let parsed = match std::fs::read(&path) {
@@ -128,10 +114,6 @@ pub(crate) fn settings(home: &Home) -> impl Iterator<Item = (PathBuf, Result<ser
     })
 }
 
-/// A Claude home's effective `skillOverrides`: each skill's value and the
-/// file that sets it, `settings.local.json` winning per skill. A file that
-/// does not parse, or whose `skillOverrides` is not an object, sets none and
-/// gives an `ERROR: …` line.
 pub fn overrides(home: &Home) -> (BTreeMap<String, (PathBuf, serde_json::Value)>, Vec<String>) {
     let mut values = BTreeMap::new();
     let mut errors = Vec::new();
@@ -153,12 +135,9 @@ pub fn overrides(home: &Home) -> (BTreeMap<String, (PathBuf, serde_json::Value)>
     (values, errors)
 }
 
-/// Scan-freshness warnings: a Claude home never scanned, or last
-/// scanned more than retention minus 7 days ago.
 pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff::Timestamp) -> Vec<String> {
     let mut out = Vec::new();
     for home in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
-        // Claude's `cleanupPeriodDays`, the winning file's, or 30 when unset.
         let set = settings(home).filter_map(|(_, v)| v.ok()?.get("cleanupPeriodDays")?.as_i64());
         let days = set.last().unwrap_or(30);
         let limit = (days - 7).max(0) * 86_400;

@@ -1,8 +1,3 @@
-//! The TUI of bare `mazo`: its views rendered into ratatui's `TestBackend`
-//! from the golden fixture, its retire, sync and audit actions driven by key
-//! events against a temp config and a stub judge, and the binary opening and
-//! quitting it on a pseudo-terminal.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -24,13 +19,10 @@ use mazo::report::{self, Input, Since, UsageArgs};
 use mazo::tui::{App, Screen};
 use mazo::{config, links, store};
 
-/// The app over the golden fixture, whose views read no data directory.
 fn app(input: &Input) -> App {
     App::new(input, Path::new("/nonexistent"))
 }
 
-/// The screen of `app` at `width`×`height`: each row's text and the
-/// foreground colour of each of its cells.
 fn draw(app: &mut App, width: u16, height: u16) -> Vec<(String, Vec<Color>)> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
@@ -60,16 +52,12 @@ fn typed(app: &mut App, s: &str) {
     }
 }
 
-/// The lines of `screen` under the top bar, whose second row, when it has
-/// one, names the bundled skills not installed.
 fn under_top(screen: &[String]) -> &[String] {
     &screen[if screen[1].ends_with(" not installed, press i") { 2 } else { 1 }..]
 }
 
 const TAGLINE: &str = "Make every skill earn its place.";
 
-/// The table rows on `screen`: the lines after the top bar and the table
-/// header, up to the blank line or the coverage note, without the gutter.
 fn rows(screen: &[String]) -> Vec<String> {
     under_top(screen)[1..]
         .iter()
@@ -78,19 +66,15 @@ fn rows(screen: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// `line` of the body without the two-column gutter or inset, cut at the
-/// scrollbar or the rule before the side card.
 fn body(line: &str) -> String {
     line.chars().skip(2).take_while(|c| !matches!(c, '│' | '┃')).collect::<String>().trim_end().to_string()
 }
 
-/// The words of `skill`'s row on `screen`.
 fn row(screen: &[String], skill: &str) -> Vec<String> {
     let line = rows(screen).into_iter().find(|l| l.split_whitespace().next() == Some(skill));
     line.unwrap_or_else(|| panic!("no {skill} row in {screen:#?}")).split_whitespace().map(String::from).collect()
 }
 
-/// The usage table's rows under `args`, as the text output words them.
 fn expected(input: &Input, args: &UsageArgs) -> Vec<Vec<String>> {
     report::usage_table(input, args)
         .rows
@@ -107,7 +91,6 @@ fn ratatui_colour(token: &str) -> Color {
     }
 }
 
-/// The foreground of `token`'s first cell in the line of `screen` that contains `line`.
 fn colour_of(screen: &[(String, Vec<Color>)], line: &str, token: &str) -> Color {
     let (text, colours) = screen.iter().find(|(t, _)| t.contains(line)).unwrap();
     colours[text[..text.find(token).unwrap()].chars().count()]
@@ -131,8 +114,6 @@ fn usage_row_shows_its_sessions_and_its_grade_mark_in_the_status_colour() {
     assert_eq!(colour_of(&screen, "unslop", "unslop"), Color::Reset);
 }
 
-/// The audit column marks `unslop`'s audit `✓`, a store skill's vet `vet`
-/// and the rest `-`, muted.
 #[test]
 fn usage_rows_mark_the_audit_else_the_vet_else_a_dash() {
     let mut golden = Golden::new();
@@ -148,7 +129,6 @@ fn usage_rows_mark_the_audit_else_the_vet_else_a_dash() {
     assert!(tail("goal-plan").ends_with(" - -"), "{lines:#?}");
 }
 
-/// AC3: a store skill's grade, read from `evals_dir`, fills its grade cell.
 #[test]
 fn a_store_skills_grade_shows_in_the_grade_column() {
     let mut golden = Golden::new();
@@ -173,7 +153,6 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen(), Screen::Card);
     let screen = text(&mut app, 200, 100);
-    // The card opens with the manual, as `show` prints it.
     let card: Vec<String> = under_top(&screen).iter().map(|l| body(l)).collect();
     assert_eq!(card[..3], ["for:      Removes slop from prose.", "your use: - Tighten the release notes.", ""]);
     assert_eq!(card[3], format!("unslop: since {}", common::ago(30).get(..10).unwrap()));
@@ -189,7 +168,6 @@ fn enter_opens_the_card_whose_audit_line_matches_show_json_and_esc_goes_back() {
     );
     assert!(card.contains(&line), "{line:?} not in {screen:#?}");
 
-    // A page is the card's visible height, not the list's.
     let height = text(&mut app, 200, 30).iter().position(|l| l.starts_with("↑↓←→/hjkl move")).unwrap() - 1;
     press(&mut app, KeyCode::Char('l'));
     assert_eq!(body(&text(&mut app, 200, 30)[1]), card[height]);
@@ -214,12 +192,10 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert_eq!(colour_of(&screen, "goal-plan", "named by"), ratatui_colour("named by unslop"));
     assert_eq!(colour_of(&screen, "goal-plan", "held by"), Color::Reset);
     assert!(lines[0].contains(" unused ") && lines[0].contains("window 60d"), "{lines:#?}");
-    // The tabs in the top bar, a divider between them, show the active one in the accent.
     assert!(lines[0].contains(" usage │ unused "), "{lines:#?}");
     assert_eq!(colour_of(&screen, "█ mazo", "unused"), mazo::theme::ACCENT);
     assert_eq!(colour_of(&screen, "█ mazo", "usage"), mazo::theme::MUTED);
 
-    // From the last row of 30d, the shorter 60d list keeps a row selected.
     press(&mut app, KeyCode::Char('w'));
     press(&mut app, KeyCode::Char('w'));
     let before = rows(&text(&mut app, 200, 40)).len();
@@ -232,7 +208,6 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen(), Screen::Card);
 
-    // `a` on a card opened from unused leaves the unused selection where it was.
     press(&mut app, KeyCode::Char('a'));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen(), Screen::Unused);
@@ -241,8 +216,6 @@ fn tab_shows_unused_with_the_held_and_named_by_notes_in_their_colours() {
     assert!(text(&mut app, 200, 40).iter().any(|l| body(l).starts_with(&format!("{skill}: "))));
 }
 
-/// The top bar ends with the tokens in context, an agent near its listing
-/// budget in the warning colour.
 #[test]
 fn the_top_bar_shows_each_agents_tokens_in_context_and_warns_near_its_budget() {
     let mut golden = Golden::new();
@@ -254,7 +227,6 @@ fn the_top_bar_shows_each_agents_tokens_in_context_and_warns_near_its_budget() {
     let approx = mazo::ctx::approx;
     let (c, x, p) = (approx(tokens.claude), approx(tokens.codex), approx(tokens.pi));
     let bar = format!("~{} tok in context: C {c} · X {x} · P {p}", approx(tokens.total()));
-    // The top bar's text, and the colour of the value after `letter `.
     let top_at = |golden: &Golden, width| {
         let (text, colours) = draw(&mut app(&golden.world.input(&golden.events)), width, 30).swap_remove(0);
         let at = |letter: &str| colours[text[..text.rfind(&format!("{letter} ")).unwrap()].chars().count() + 2];
@@ -264,11 +236,9 @@ fn the_top_bar_shows_each_agents_tokens_in_context_and_warns_near_its_budget() {
     let (text, colours) = top(&golden);
     assert!(text.ends_with(&bar), "{text:?}");
     assert_eq!(colours, [mazo::theme::ACCENT; 3]);
-    // A window where Claude's tokens are 80% of its 1%, and Codex's under 80% of its 2%.
     golden.world.cfg.context_window = tokens.claude * 125;
     assert!(tokens.codex * 125 < golden.world.cfg.context_window * 2);
     assert_eq!(top(&golden).1, [mazo::theme::WARN, mazo::theme::ACCENT, mazo::theme::ACCENT]);
-    // At 80 columns the label shortens and every agent's value and colour stay in view.
     let (text, colours) = top_at(&golden, 80);
     assert!(text.ends_with(&format!("~{} tok: C {c} · X {x} · P {p}", approx(tokens.total()))), "{text:?}");
     assert!(text.contains("window 30d"), "{text:?}");
@@ -312,8 +282,6 @@ fn the_top_bar_names_the_bundled_skills_not_installed_until_both_are() {
     }
 }
 
-/// At 80 columns the notice takes a second row of the top bar, and the first
-/// keeps the window and every agent's tokens.
 #[test]
 fn at_80_columns_the_notice_takes_its_own_row_beside_the_token_split() {
     let mut golden = Golden::new();
@@ -333,7 +301,6 @@ fn at_80_columns_the_notice_takes_its_own_row_beside_the_token_split() {
     assert!(screen[0].contains("window 30d") && screen[0].ends_with(&split), "{screen:#?}");
     assert_eq!(screen[1], " grade, retro not installed, press i", "{screen:#?}");
     assert!(screen[2].split_whitespace().next() == Some("skill"), "the table follows: {screen:#?}");
-    // Installed, the row goes and the table moves up.
     golden.world.inv.skills.extend(["grade".into(), "retro".into()]);
     let screen = text(&mut app(&golden.world.input(&golden.events)), 80, 30);
     assert!(screen[0].ends_with(&split) && screen.iter().all(|l| !l.contains("not installed")), "{screen:#?}");
@@ -365,16 +332,12 @@ fn w_a_c_and_capital_a_change_the_footer_and_counts_as_the_usage_flags_do() {
     }
 }
 
-/// The cells of `app`'s screen at `width`×`height`, with their styles.
 fn buffer(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     terminal.backend().buffer().clone()
 }
 
-/// On a wide terminal the table spans the body left of the side card: the
-/// skill and audit columns split the spare width, the counts keep theirs,
-/// and the selected row's highlight runs from edge to edge of the table.
 #[test]
 fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whole_row() {
     let golden = Golden::new();
@@ -389,9 +352,7 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
         .map(|r| report::usage_cells(&input, r, false))
         .collect();
     let widest = |col: usize| cells.iter().map(|c| c[col].chars().count()).max().unwrap();
-    // The gutter, the skill column and a space come before `sess`, right-aligned in its four columns.
     let skill = header.find(" sess ").unwrap() + 1 - 3;
-    // The side card takes 100 of the 250 columns.
     let audit = 150 - header.find("audit").unwrap();
     let (skill_spare, audit_spare) = (skill - widest(0).max(5), audit - widest(14).max(5));
     assert!(skill_spare > 0 && skill_spare.abs_diff(audit_spare) <= 1, "{skill} {audit}: {screen:#?}");
@@ -403,10 +364,6 @@ fn a_wide_terminal_stretches_the_skill_and_audit_columns_and_highlights_the_whol
     assert!((0..250).all(|x| buf[(x, 3)].bg != selected));
 }
 
-/// As the terminal narrows from the widest with no side card, the usage
-/// columns give way one at a time in their priority order, slash and tool
-/// folding into `via`, while skill, sess, 30d, trend, last, grade and
-/// audit stay down to 60 columns.
 #[test]
 fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_30d_trend_last_grade_and_audit() {
     let golden = Golden::new();
@@ -416,7 +373,6 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_30d_tr
     let mut seen: Vec<String> = Vec::new();
     for width in (60..140).rev() {
         let screen = text(&mut app, width, 30);
-        // The skill header may be cut with the names, so it is left out.
         let header = under_top(&screen)[0].split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
         assert_eq!(rows(&screen).len(), all, "{width}: {screen:#?}");
         if seen.last() != Some(&header) {
@@ -440,7 +396,6 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_30d_tr
     let screen = text(&mut app, 60, 30);
     let keys = screen.iter().rev().take_while(|l| !body(l).starts_with("coverage:")).flat_map(|l| l.split(" · "));
     assert_eq!(keys.count(), 16, "every key shows: {screen:#?}");
-    // The skill names are cut with `…`, then the audit cell; via shows slash/tool.
     let expected: Vec<(String, Vec<String>)> = report::usage_table(&input, &UsageArgs::new(Since::Days(30)))
         .rows
         .iter()
@@ -461,8 +416,6 @@ fn a_narrow_terminal_drops_columns_in_priority_order_and_keeps_skill_sess_30d_tr
     }
 }
 
-/// On a narrow terminal the unused list cuts its notes with `…` before it
-/// cuts a skill name.
 #[test]
 fn a_narrow_unused_list_cuts_the_notes_and_keeps_the_skill_names() {
     let golden = Golden::new();
@@ -479,7 +432,6 @@ fn a_narrow_unused_list_cuts_the_notes_and_keeps_the_skill_names() {
     assert!(line.contains(" held by") && line.ends_with('…'), "{screen:#?}");
 }
 
-/// The selected skill's card as `show` prints it over the usage window.
 fn card_of(input: &Input, skill: &str) -> Vec<String> {
     let card = report::skill_card(input, skill, &UsageArgs::new(Since::Days(30)), report::SHOW_LIMIT);
     report::card_text(input, &card, false).lines().map(String::from).collect()
@@ -489,11 +441,6 @@ fn chart_of(input: &Input, skill: &str, since: Since) -> Vec<report::Bucket> {
     report::skill_card(input, skill, &UsageArgs::new(since), report::SHOW_LIMIT).activity
 }
 
-/// The buckets of `skill`'s chart over `since` that `screen` shows, checked
-/// bar by bar: the chart's bottom row under the heading holds the labels, a
-/// column apart from `skip` within `room` columns, the row above each count;
-/// today's label muted, the others in the accent. The heading notes a chart
-/// cut to the newest buckets.
 fn check_chart(
     input: &Input,
     skill: &str,
@@ -526,10 +473,6 @@ fn check_chart(
     shown.to_vec()
 }
 
-/// D5: the card, full screen or beside a wide table, charts the skill's
-/// strong sessions per bucket of the w window in a few rows, each bar
-/// labelled and showing its count, today's muted, the newest buckets that
-/// fit; w redraws it in days, ISO weeks, then months.
 #[test]
 fn the_card_charts_sessions_per_bucket_of_the_window_and_w_rebuckets_it() {
     let golden = Golden::new();
@@ -539,7 +482,6 @@ fn the_card_charts_sessions_per_bucket_of_the_window_and_w_rebuckets_it() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen(), Screen::Card);
-    // Full screen: the inset either side.
     let days = check_chart(&input, "unslop", &draw(&mut app, 200, 40), (2, 196), Since::Days(30));
     assert_eq!(days.len(), chart_of(&input, "unslop", Since::Days(30)).len(), "every day fits");
     assert_eq!(days.last().unwrap().label, &common::NOW[8..10]);
@@ -550,7 +492,6 @@ fn the_card_charts_sessions_per_bucket_of_the_window_and_w_rebuckets_it() {
     let months = check_chart(&input, "unslop", &draw(&mut app, 200, 40), (2, 196), Since::All);
     assert!(months.iter().all(|b| b.label.len() == 3 && !b.label.starts_with('W')), "{months:?}");
 
-    // Beside a wide table: the rule and the inset, then the newest days that fit.
     press(&mut app, KeyCode::Esc);
     let (skip, room) = (200 - 80 + 3, 80 - 5);
     let days = check_chart(&input, "unslop", &draw(&mut app, 200, 40), (skip, room), Since::Days(30));
@@ -559,9 +500,6 @@ fn the_card_charts_sessions_per_bucket_of_the_window_and_w_rebuckets_it() {
     check_chart(&input, "unslop", &draw(&mut app, 200, 40), (skip, room), Since::Days(60));
 }
 
-/// Every bar shows its count, however short the bar or wide the count: the
-/// bars widen to the widest count, so the side pane keeps the newest days
-/// and says so.
 #[test]
 fn every_bar_shows_its_count_and_a_cut_chart_says_how_many_buckets_it_shows() {
     let repo = common::report_repo();
@@ -583,10 +521,6 @@ fn every_bar_shows_its_count_and_a_cut_chart_says_how_many_buckets_it_shows() {
     assert_eq!(days.len(), 31, "every day fits full screen");
 }
 
-/// From 140 columns the usage table leaves 40% of the width, at least 50
-/// columns, to the selected skill's card behind a rule; the card follows the
-/// selection, and Enter opens the same card full screen. Narrower, there is
-/// no side card and Enter still opens it.
 #[test]
 fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
     let golden = Golden::new();
@@ -597,7 +531,6 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
     for (width, side) in [(140, 56), (200, 80)] {
         let screen = text(&mut app, width, 40);
         let table = usize::from(width - side);
-        // The side card's lines: right of the rule and the inset, down the body.
         let side: Vec<String> = screen[1..]
             .iter()
             .take_while(|l| l.chars().nth(table) == Some('│'))
@@ -605,14 +538,11 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
             .collect();
         assert!(side.len() > 30, "{width}: {screen:#?}");
         let card = card_of(&input, &skills[0]);
-        // The chart and its blank row under the heading and its blank line.
         let at = card.iter().position(|l| l.starts_with(&format!("{}: since", skills[0]))).unwrap() + 2;
         let side = [&side[..at], &side[at + 6 + 1..]].concat();
         assert!(side.len() > at + 20, "the card's text shows under the chart: {width}: {screen:#?}");
-        // The rule and an inset either side.
         let room = usize::from(width) - table - 5;
         for (shown, line) in side.iter().zip(&card) {
-            // Less the heading's note on a cut chart.
             let shown = shown.split(" · last ").next().unwrap();
             assert_eq!(shown, line.chars().take(room).collect::<String>().trim_end(), "{width}: {screen:#?}");
         }
@@ -624,12 +554,10 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
     let heading = format!("{}: since", skills[1]);
     assert!(screen.iter().any(|l| l.contains(&heading)), "the card follows the selection: {screen:#?}");
 
-    // Enter opens the same card full screen, and Esc goes back.
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.screen(), Screen::Card);
     let screen = text(&mut app, 140, 40);
     let card = card_of(&input, &skills[1]);
-    // Down to the chart under the heading.
     let at = card.iter().position(|l| l.starts_with(&heading)).unwrap() + 2;
     assert_eq!(screen[1..].iter().map(|l| body(l)).take(at).collect::<Vec<_>>(), card[..at], "{screen:#?}");
     assert!(screen.iter().all(|l| !l.contains(" skills · ")), "{screen:#?}");
@@ -644,8 +572,6 @@ fn a_wide_usage_table_shows_the_selected_skills_card_beside_it() {
     assert!(text(&mut app, 139, 40).iter().any(|l| body(l).starts_with(&heading)));
 }
 
-/// The footer lists only the keys that work on the screen, and a list with
-/// no row says why instead of showing an empty table.
 #[test]
 fn the_footer_lists_the_screens_keys_and_an_empty_list_says_why() {
     let golden = Golden::new();
@@ -665,8 +591,6 @@ fn the_footer_lists_the_screens_keys_and_an_empty_list_says_why() {
     assert_eq!(screen.last().unwrap(), "Enter keep · Esc clear");
 }
 
-/// The help overlay's text lines on `app` at `width`×`height`, without its
-/// border, padding or scrollbar; `None` when it is not open.
 fn help(app: &mut App, width: u16, height: u16) -> Option<Vec<String>> {
     let screen = text(app, width, height);
     let top = screen.iter().position(|l| l.contains("╭ help "))?;
@@ -675,15 +599,11 @@ fn help(app: &mut App, width: u16, height: u16) -> Option<Vec<String>> {
         .take_while(|l| !l.contains('╰'))
         .map(|l| l.trim_matches(['│', '┃', ' ']).to_string())
         .collect();
-    // Less the padding rows, and on a tall screen the logo and its tagline
-    // over a blank row.
     let lines = &lines[1..lines.len() - 1];
     let head = lines.iter().position(|l| l.ends_with(TAGLINE)).map_or(0, |at| at + 2);
     Some(lines[head..].to_vec())
 }
 
-/// AC1, AC8: `H` opens the help on any screen; `j`/`k` and `PgUp`/`PgDn`
-/// scroll it, and `Esc` or `H` closes it.
 #[test]
 fn capital_h_opens_the_help_scrolls_it_and_esc_or_h_closes_it() {
     let golden = Golden::new();
@@ -721,8 +641,6 @@ fn capital_h_opens_the_help_scrolls_it_and_esc_or_h_closes_it() {
     assert_eq!(app.screen(), Screen::Card);
 }
 
-/// AC2-AC5: the help's sections, the current screen's columns first, and
-/// the FAQ's answers.
 #[test]
 fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq() {
     let golden = Golden::new();
@@ -769,7 +687,6 @@ fn the_help_lists_the_current_screens_columns_first_then_the_marks_and_the_faq()
     }
 }
 
-/// AC1: `H` is a literal `H` while the filter or the add source is typed.
 #[test]
 fn capital_h_types_into_the_filter_and_the_add_source() {
     let golden = Golden::new();
@@ -795,9 +712,6 @@ fn q_and_ctrl_c_quit() {
     assert!(!app.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
 }
 
-/// A source of `idle`, `busy` used 3 days ago and `held` cited by `busy`,
-/// unless `source` is false; the store skill `stored`; one Claude home with
-/// every skill linked into it.
 struct Actions {
     _temp: tempfile::TempDir,
     source: PathBuf,
@@ -828,7 +742,6 @@ impl Actions {
         common::write(&data.join("events.jsonl"), &(serde_json::to_string(&e).unwrap() + "\n"));
         let cfg = config::load(&root.join("mazo.toml")).unwrap().unwrap();
         let fx = Actions { _temp: temp, skills: home.join("skills"), source: dir, data, cfg };
-        // `add` links every skill.
         let stored = root.join("in/stored");
         let stored = stored.to_string_lossy();
         let args = store::Add {
@@ -850,12 +763,10 @@ impl Actions {
         store::inventory(self.cfg.source.as_deref(), &self.data).unwrap()
     }
 
-    /// The app over what is on disk now.
     fn app(&self) -> App {
         self.app_at(jiff::Timestamp::now())
     }
 
-    /// The app over what is on disk, as of `now`.
     fn app_at(&self, now: jiff::Timestamp) -> App {
         let (inv, ledger) = (self.inv(), Ledger::load(&self.data).unwrap());
         let coverage = ledger::load_coverage(&self.data).unwrap();
@@ -872,7 +783,6 @@ impl Actions {
         App::new(&input, &self.data)
     }
 
-    /// The source, the store, the lockfile and the home's links.
     fn disk(&self) -> common::sync::Snapshot {
         common::sync::snapshot(&[&self.source, &store::dir(&self.data), &self.data.join("mazo.lock"), &self.skills])
     }
@@ -881,8 +791,6 @@ impl Actions {
         self.skills.join(name).symlink_metadata().is_ok()
     }
 
-    /// Adds a `[judge]` of `agent`, for `command` the [`stub`] judge, and a
-    /// strong load of `busy` in a real transcript for it to judge.
     fn judge(&mut self, agent: &str) {
         let root = self.data.parent().unwrap().to_path_buf();
         let argv = match agent {
@@ -899,17 +807,12 @@ impl Actions {
         common::write(&self.data.join("events.jsonl"), &(events + &serde_json::to_string(&e).unwrap() + "\n"));
     }
 
-    /// The pids the stub judge wrote, one per call.
     fn pids(&self) -> Vec<String> {
         let pids = std::fs::read_to_string(self.data.parent().unwrap().join("pids")).unwrap_or_default();
         pids.lines().map(String::from).collect()
     }
 }
 
-/// A `#!/bin/sh` command judge under `root` that appends its pid to
-/// `<root>/pids`, then answers either stage, or, while `<root>/hang` exists,
-/// becomes a `sleep` that outlasts any test and ignores the hangup of a
-/// closing terminal, so only mazo's kill ends it.
 fn stub(root: &Path) -> PathBuf {
     let r = root.display();
     let script = format!(
@@ -934,12 +837,10 @@ fi
     path
 }
 
-/// Whether process `pid` exists.
 fn alive(pid: &str) -> bool {
     Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().unwrap().success()
 }
 
-/// Ticks `app` until `done` holds, for at most 20 seconds.
 fn until(app: &mut App, done: impl Fn(&App) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !done(app) {
@@ -949,7 +850,6 @@ fn until(app: &mut App, done: impl Fn(&App) -> bool) {
     }
 }
 
-/// Selects `skill` on the current list through the filter.
 fn select(app: &mut App, skill: &str) {
     typed(app, &format!("/{skill}"));
     press(app, KeyCode::Enter);
@@ -974,7 +874,6 @@ fn r_retires_a_source_skill_from_usage_after_y_and_the_list_drops_it() {
     let screen = text(&mut app, 200, 20);
     assert!(screen.iter().any(|l| l.contains("archived ")), "{screen:#?}");
 
-    // Any key closes the result; the list was re-read.
     press(&mut app, KeyCode::Char('j'));
     let screen = text(&mut app, 200, 20);
     assert!(screen[0].contains(" usage ") && screen[0].contains("0 skills · filter /idle"), "{screen:#?}");
@@ -994,7 +893,6 @@ fn r_retires_a_store_skill_from_its_card() {
     assert!(!store::dir(&fx.data).join("stored").exists());
     assert!(store::Lock::load(&fx.data).unwrap().skills.is_empty());
     assert!(!fx.linked("stored"));
-    // The card of a retired skill closes to its list.
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen(), Screen::Usage);
 }
@@ -1184,7 +1082,6 @@ fn x_shows_the_audit_cap_and_any_key_but_y_starts_nothing() {
     assert!(!fx.data.join("audits.jsonl").exists());
     assert_eq!(fx.disk(), before);
 
-    // A judge that reports its cost shows `mazo audit`'s default budget too.
     let mut fx = Actions::new(true);
     fx.judge("claude");
     let mut app = fx.app();
@@ -1226,7 +1123,6 @@ fn y_audits_in_the_background_and_the_pane_shows_the_result() {
     assert!(screen.iter().any(|l| l.contains("busy: 1 judged, 0 dropped")), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains("busy: skill report over 1 session: ")), "{screen:#?}");
 
-    // The data was re-read: the card shows the new audit.
     press(&mut app, KeyCode::Enter);
     let screen = text(&mut app, 200, 100);
     assert!(screen.iter().any(|l| body(l).starts_with("audit: ") && l.contains(", 1 session, ")), "{screen:#?}");
@@ -1248,7 +1144,6 @@ fn quitting_with_a_job_running_asks_and_kills_its_judge() {
     let pid = fx.pids()[0].clone();
     assert!(alive(&pid));
 
-    // Navigation keeps working, the pane shows the progress, and a second job is refused.
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.screen(), Screen::Unused);
     app.tick();
@@ -1256,7 +1151,6 @@ fn quitting_with_a_job_running_asks_and_kills_its_judge() {
     assert!(screen.iter().any(|l| l.contains(" audit busy · running ")), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains("judging 1/1 s2")), "{screen:#?}");
     press(&mut app, KeyCode::Tab);
-    // Retire and sync plan on the inventory the job may change, so they are refused too.
     for key in ['x', 'r', 's'] {
         press(&mut app, KeyCode::Char(key));
         let screen = text(&mut app, 200, 30);
@@ -1289,8 +1183,6 @@ fn quitting_with_a_job_running_asks_and_kills_its_judge() {
 }
 
 impl Actions {
-    /// A bare repository `origin/<name>.git` holding the skill `name` at its
-    /// root, and its `file://` URL.
     fn repo(&self, name: &str) -> String {
         let root = self.data.parent().unwrap();
         let work = root.join("work").join(name);
@@ -1304,18 +1196,11 @@ impl Actions {
         format!("file://{}", bare.display())
     }
 
-    /// [`Actions::repo`] served as `https://git.example.org/acme/<temp path>`,
-    /// a source with a host to trust: an `insteadOf` rewrite in this process's
-    /// environment, set once, sends git from that prefix to the temp directory.
     fn hosted_repo(&self, name: &str) -> String {
         static REWRITE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
         let tmp = REWRITE.get_or_init(|| {
             let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
             let key = format!("url.file://{}/.insteadOf", tmp.display());
-            // SAFETY: all environment access in this binary goes through std,
-            // which serializes it under its lock (a spawn's PATH lookup too),
-            // and no test here does network or DNS lookups. The count goes
-            // last, so a git spawned meanwhile sees the whole rewrite or none.
             unsafe {
                 std::env::set_var("GIT_CONFIG_KEY_0", key);
                 std::env::set_var("GIT_CONFIG_VALUE_0", "https://git.example.org/acme/");
@@ -1328,8 +1213,6 @@ impl Actions {
         format!("https://git.example.org/acme/{}", rel.display())
     }
 
-    /// Installs the skill at `url` into the store unvetted; whether `update`
-    /// re-vets it is the config's `trusted` list's to say.
     fn install(&self, url: &str) {
         let args = store::Add {
             source: url,
@@ -1345,7 +1228,6 @@ impl Actions {
         store::add(&self.cfg, &self.inv(), &self.data, &args).unwrap();
     }
 
-    /// Commits a new `SKILL.md` body to the skill `name`'s repository and pushes it.
     fn push(&self, name: &str, body: &str) {
         let root = self.data.parent().unwrap();
         let work = root.join("work").join(name);
@@ -1355,9 +1237,6 @@ impl Actions {
         common::git(&work, &["push", "-q", &bare.display().to_string(), "HEAD"], common::NOW);
     }
 
-    /// Adds a command `[judge]` that appends its pid to `<root>/pids` and
-    /// gives a vet verdict with `security` as its finding, or, while
-    /// `<root>/hang` exists, sleeps until it is killed.
     fn vetter(&mut self, security: Option<&str>) {
         let root = self.data.parent().unwrap().to_path_buf();
         let r = root.display();
@@ -1391,7 +1270,6 @@ impl Actions {
     }
 }
 
-/// Runs the update `key` asks for on the selected skill, after `y`, to its end.
 fn update(app: &mut App, key: char) -> Vec<String> {
     press(app, KeyCode::Char(key));
     press(app, KeyCode::Char('y'));
@@ -1449,7 +1327,6 @@ fn u_updates_a_trusted_skill_without_the_judge_and_re_vets_an_untrusted_one_in_t
     let entry = lock.skills.iter().find(|l| l.name == "theirs").unwrap();
     assert_eq!(entry.r#for.as_deref(), Some("Tidies notes."));
 
-    // Every store skill is up to date now: reported, and no judge is called.
     press(&mut app, KeyCode::Esc);
     let screen = update(&mut app, 'U');
     assert!(screen.iter().any(|l| l.contains(" update every store skill · done · Esc closes ")), "{screen:#?}");
@@ -1531,7 +1408,6 @@ fn declining_ctrl_c_at_a_jobs_question_reopens_it_unanswered() {
 fn quitting_during_an_update_of_every_skill_leaves_every_store_skill_in_place() {
     let mut fx = Actions::new(true);
     fx.vetter(None);
-    // `one` is re-vetted by a judge that hangs; trusted `two` needs no judge.
     fx.cfg.trusted = vec!["git.example.org/acme".into()];
     for (name, url) in [("one", fx.repo("one")), ("two", fx.hosted_repo("two"))] {
         fx.install(&url);
@@ -1603,9 +1479,6 @@ fn u_on_a_source_or_local_path_skill_says_it_is_not_updatable() {
     assert_eq!(fx.disk(), before);
 }
 
-/// A source with one skill and one Claude home never scanned; with `judge`,
-/// also `unslop`, one Claude transcript that loads it, and the [`stub`] judge,
-/// hanging. The temp directory, its canonical path, and the binary.
 fn binary(judge: bool) -> (tempfile::TempDir, PathBuf, common::Mazo) {
     let temp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(temp.path()).unwrap();
@@ -1634,9 +1507,6 @@ fn bare_mazo_off_a_terminal_prints_help_and_exits_2() {
     assert!(common::stderr(&out).contains("Usage: mazo <COMMAND>"), "{}", common::stderr(&out));
 }
 
-/// Bare `mazo` under `script` on an 80×24 pseudo-terminal: once the screen
-/// opens, each step's keys are written to it as soon as its condition holds.
-/// The exit code and everything it printed.
 #[cfg(target_os = "linux")]
 fn on_a_pty(mut mazo: common::Mazo, steps: &[(&[u8], &dyn Fn() -> bool)]) -> Option<(Option<i32>, Vec<u8>)> {
     use std::io::{Read, Write};
@@ -1678,7 +1548,6 @@ fn on_a_pty(mut mazo: common::Mazo, steps: &[(&[u8], &dyn Fn() -> bool)]) -> Opt
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        // The alternate screen is entered after raw mode, so the bytes are keys.
         if let Some((keys, ready)) = steps.get(sent)
             && ready()
             && out.windows(8).any(|w| w == b"\x1b[?1049h")
@@ -1716,8 +1585,6 @@ fn quitting_bare_mazo_mid_audit_kills_the_judge_and_restores_the_terminal() {
 }
 
 impl Actions {
-    /// A bare repository `origin/<name>.git` holding each of `skills` in a
-    /// child directory, and its `file://` URL.
     fn repo_of(&self, name: &str, skills: &[&str]) -> String {
         let root = self.data.parent().unwrap();
         let work = root.join("work").join(name);
@@ -1740,14 +1607,12 @@ impl Actions {
     }
 }
 
-/// Opens the add dialog and submits `source`.
 fn add(app: &mut App, source: &str) {
     press(app, KeyCode::Char('i'));
     typed(app, source);
     press(app, KeyCode::Enter);
 }
 
-/// Ticks `app` until a screen line contains `line`, for at most 20 seconds: that screen.
 fn shown(app: &mut App, line: &str) -> Vec<String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -1783,7 +1648,6 @@ fn i_adds_an_untrusted_skill_after_the_call_count_and_the_verdict_dialog() {
     let screen = shown(&mut app, "install theirs? [Y/n]");
     assert!(screen.iter().any(|l| l.contains("vet theirs: quality good, value worth trying")), "{screen:#?}");
     assert!(screen.iter().any(|l| l == "Enter yes · y yes · n/Esc no · q quit"), "{screen:#?}");
-    // Any key but Enter, y, n, Esc and q leaves the question open.
     press(&mut app, KeyCode::Char('x'));
     assert!(text(&mut app, 200, 30).iter().any(|l| l.contains("install theirs? [Y/n]")));
     press(&mut app, KeyCode::Enter);
@@ -1799,7 +1663,6 @@ fn i_adds_an_untrusted_skill_after_the_call_count_and_the_verdict_dialog() {
     assert_eq!(entry.r#for.as_deref(), Some("Tidies notes."));
     assert!(fx.linked("theirs"));
     assert_eq!(fx.pids().len(), 1);
-    // The data was re-read: the usage table lists the new skill.
     assert!(rows(&screen).iter().any(|l| l.split_whitespace().next() == Some("theirs")), "{screen:#?}");
 }
 
@@ -1857,7 +1720,6 @@ fn declining_the_call_count_makes_no_judge_call_and_installs_nothing() {
     let mut app = fx.app();
     add(&mut app, &url);
     shown(&mut app, "make 1 judge call? [y/N]");
-    // Enter takes the default, No.
     press(&mut app, KeyCode::Enter);
     until(&mut app, |app| !app.busy());
     let screen = text(&mut app, 200, 30);
@@ -1890,13 +1752,10 @@ fn i_with_no_judge_shows_the_refusal_and_starts_nothing() {
     add(&mut app, &url);
     assert!(!app.busy());
     let screen = text(&mut app, 200, 60);
-    // The dialog wraps at spaces, and a long origin path, as macOS temp dirs
-    // give, pushes the refusal onto two lines: read it as one.
     let said = screen.iter().map(|l| l.trim_matches(['│', ' '])).collect::<Vec<_>>().join(" ");
     assert!(said.contains("vetting it needs a [judge], which the config lacks"), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains("agent = \"command\"")), "{screen:#?}");
     assert!(screen.iter().any(|l| l == "any key closes"), "{screen:#?}");
-    // Esc cancels the source dialog.
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('i'));
     press(&mut app, KeyCode::Esc);
@@ -1942,7 +1801,6 @@ fn q_on_the_verdict_answers_no_and_asks_to_quit() {
     shown(&mut app, "install theirs? [Y/n]");
     press(&mut app, KeyCode::Char('q'));
     shown(&mut app, "stop its judge and quit?");
-    // Not quitting leaves the add to end on its No.
     press(&mut app, KeyCode::Char('n'));
     until(&mut app, |app| !app.busy());
     assert!(text(&mut app, 200, 30).iter().any(|l| l.contains("add declined; nothing was installed")));
@@ -1966,7 +1824,6 @@ fn a_paste_inserts_its_text_without_submitting_and_a_long_source_shows_its_tail(
     let screen = text(&mut app, 60, 30);
     let line = screen.iter().find(|l| l.contains("tail-end_")).unwrap_or_else(|| panic!("{screen:#?}"));
     assert!(line.contains('…') && !line.contains("https"), "{line}");
-    // Outside the source dialog a paste does nothing.
     press(&mut app, KeyCode::Esc);
     app.paste("q");
     assert_eq!(app.screen(), Screen::Usage);
@@ -1991,15 +1848,11 @@ fn capital_y_accepts_the_verdict_and_a_ctrl_or_alt_chord_answers_nothing() {
     assert!(fx.locked("theirs").is_some());
 }
 
-/// The logo takes the bottom left of the list's pane once the rows leave it
-/// room, the version and tagline beside it when they fit, and the top bar
-/// leads with the one-line mark.
 #[test]
 fn the_logo_fills_the_room_under_a_short_list() {
     let golden = Golden::new();
     let input = golden.world.input(&golden.events);
     let mut app = app(&input);
-    // The logo's cells: its pixels' colours in the first columns past the gutter.
     let logo = |screen: &[(String, Vec<Color>)]| {
         let note = screen.iter().position(|(l, _)| l.trim_start().starts_with("coverage:")).unwrap();
         let rows = &screen[note - 7..note];
@@ -2013,7 +1866,6 @@ fn the_logo_fills_the_room_under_a_short_list() {
     assert!(screen[note - 1].0.ends_with(TAGLINE), "{}", screen[note - 1].0);
     assert_eq!(rows(&text(&mut app, 120, 40)), rows(&text(&mut app, 120, 15)), "the logo takes no row");
 
-    // On a short screen the rows leave no room.
     let short = draw(&mut app, 120, 15);
     assert!(!short[1..].iter().any(|(_, c)| c.iter().any(|c| matches!(c, Color::Rgb(..)))));
 }

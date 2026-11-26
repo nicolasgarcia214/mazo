@@ -1,7 +1,3 @@
-//! The ctx column: what each agent a skill is linked into keeps of it in
-//! context, from Claude's `skillOverrides` and the SKILL.md's
-//! `disable-model-invocation`.
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -12,18 +8,12 @@ use crate::inventory::{self, Inventory, Scope};
 use crate::ledger::Agent;
 use crate::{links, policy, store, yaml};
 
-/// What an agent keeps of a skill in context, the costliest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Invocation {
-    /// Its name and description: Claude on, every Codex skill, Pi's default.
     On,
-    /// Its name: Claude name-only.
     NameOnly,
-    /// Nothing until the user invokes it: Claude user-invocable-only, or
-    /// `disable-model-invocation` in Claude or Pi.
     UserInvocableOnly,
-    /// Nothing: Claude off.
     Off,
 }
 
@@ -37,8 +27,6 @@ impl Invocation {
         }
     }
 
-    /// A Claude skill's state under its `skillOverrides` value: `off` wins
-    /// over `disable-model-invocation`, which wins over any other value.
     fn claude(value: Option<&str>, disabled: bool) -> Invocation {
         match value {
             Some("off") => Invocation::Off,
@@ -49,7 +37,6 @@ impl Invocation {
         }
     }
 
-    /// The characters it keeps of the skill `name` described by `description`.
     fn chars(self, name: &str, description: &str) -> usize {
         match self {
             Invocation::On => name.chars().count() + description.chars().count(),
@@ -59,7 +46,6 @@ impl Invocation {
     }
 }
 
-/// Each agent's [`Invocation`] of a skill, for the agents it is linked into only.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Ctx {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,7 +57,6 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// Each linked agent's letter and glyph, in the order C, X, P: `C◐X●`.
     pub fn cell(&self) -> String {
         [(Agent::Claude, self.claude), (Agent::Codex, self.codex), (Agent::Pi, self.pi)]
             .into_iter()
@@ -80,8 +65,6 @@ impl Ctx {
     }
 }
 
-/// Each agent's approximate tokens of skill listings in context: the
-/// characters [`Invocation::chars`] keeps of every skill, divided by 4.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tokens {
     pub claude: usize,
@@ -94,10 +77,7 @@ impl Tokens {
         self.claude + self.codex + self.pi
     }
 
-    /// Each agent's tokens and whether they reach 80% of its listing budget
-    /// out of `context_window`: 1% for Claude, 2% for Codex, none for Pi.
     pub fn agents(&self, context_window: usize) -> [(Agent, usize, bool); 3] {
-        // 80% of `percent`% of the window.
         let near =
             |tokens: usize, percent: usize| tokens.saturating_mul(500) >= context_window.saturating_mul(percent * 4);
         [
@@ -108,19 +88,13 @@ impl Tokens {
     }
 }
 
-/// `n` tokens as the top bar shows them: whole under 1000, else thousands
-/// to the nearest tenth, halves up, `2.5k`.
 pub fn approx(n: usize) -> String {
     let tenths = n.saturating_add(50) / 100;
     if n < 1000 { n.to_string() } else { format!("{}.{}k", tenths / 10, tenths % 10) }
 }
 
-/// What every skill's [`Ctx`] reads, read once: the homes each skill is
-/// linked into and each Claude home's `skillOverrides`.
 pub struct Contexts {
-    /// Each skill's linked homes, as `(agent, home)`.
     linked: BTreeMap<String, Vec<(Agent, String)>>,
-    /// Each Claude home's [`policy::overrides`].
     overrides: BTreeMap<String, BTreeMap<String, (PathBuf, serde_json::Value)>>,
 }
 
@@ -136,9 +110,6 @@ impl Contexts {
         Contexts { linked, overrides: overrides.collect() }
     }
 
-    /// `skill`'s ctx in `scope`. An agent takes the costliest state among
-    /// its homes. A project skill is linked into every agent, its Claude
-    /// state taken over every Claude home.
     pub fn of(&self, inv: &Inventory, skill: &str, scope: Scope) -> Ctx {
         let (dir, homes): (Option<PathBuf>, Vec<(Agent, Option<&str>)>) = match scope {
             Scope::Global => {
@@ -167,7 +138,6 @@ impl Contexts {
         Ctx { claude: of(Agent::Claude), codex: of(Agent::Codex), pi: of(Agent::Pi) }
     }
 
-    /// The [`Tokens`] of every skill of `inv` and of its project.
     pub fn tokens(&self, inv: &Inventory) -> Tokens {
         let global = inv.skills.iter().map(|s| (s, Scope::Global, inv.description(s)));
         let project = inv.project.iter().flat_map(|p| {
@@ -187,7 +157,6 @@ impl Contexts {
     }
 }
 
-/// Whether the SKILL.md in `dir` sets `disable-model-invocation: true`.
 fn disables_model_invocation(dir: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else { return false };
     yaml::frontmatter(&text).is_ok_and(|m| yaml::get(&m, "disable-model-invocation").is_some_and(yaml::is_true))
@@ -232,11 +201,6 @@ mod tests {
 
     const SKILLS: [&str; 6] = ["plain", "named", "user", "off", "local", "manual"];
 
-    /// Two Claude homes, a Codex home and a Pi home over one source.
-    /// `a`'s settings set name-only, user-invocable-only and off, and
-    /// `settings.local.json` turns `local` off over its name-only; `b` sets
-    /// `named` on and `user` off. `manual` sets disable-model-invocation and
-    /// `off` sets it too.
     fn setup(tmp: &Path) -> (Config, Inventory) {
         let source = tmp.join("source");
         for name in SKILLS {
@@ -262,7 +226,6 @@ mod tests {
     fn claude_takes_the_costliest_override_and_codex_and_pi_follow_the_skill_md() {
         let tmp = tempfile::tempdir().unwrap();
         let (cfg, inv) = setup(tmp.path());
-        // A Codex manifest never changes the Codex state.
         write(&tmp.path().join("source/plain/agents/openai.yaml"), "policy:\n  allow_implicit_invocation: false\n");
         let only_a = Config { homes: cfg.homes.iter().filter(|h| h.name != "b").cloned().collect(), ..cfg.clone() };
         let cells = |cfg: &Config| {
@@ -280,7 +243,6 @@ mod tests {
                 ("manual", "C○X●P○".into()),
             ]
         );
-        // `b` sets named on, which costs more than a's name-only, and user off, which costs less.
         assert_eq!(cells(&cfg)[1..3], [("named", "C●X●P●".into()), ("user", "C○X●P●".into())]);
     }
 
@@ -323,7 +285,6 @@ mod tests {
         let ctx = Contexts::new(&cfg, &inv);
         assert_eq!(ctx.of(&inv, "user", Scope::Project).cell(), "C○X●P●");
         assert_eq!(ctx.of(&inv, "manual", Scope::Project).cell(), "C○X●P○");
-        // Codex keeps user and manual of the project beside the six global skills.
         assert_eq!(ctx.tokens(&inv).codex, (40 + "user".len() + 2 + "manual".len() + 2) / 4);
         let no_claude = Config { homes: vec![], ..cfg };
         assert_eq!(Contexts::new(&no_claude, &inv).of(&inv, "user", Scope::Project).cell(), "C●X●P●");
@@ -334,9 +295,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (cfg, inv) = setup(tmp.path());
         let only_a = Config { homes: cfg.homes.into_iter().filter(|h| h.name != "b").collect(), ..cfg };
-        // Each skill is its name and the description `D.`. Claude has plain
-        // on and named name-only; Codex has all six on; Pi all but the two
-        // that disable model invocation.
         let on = |names: &[&str]| names.iter().map(|n| n.len() + 2).sum::<usize>();
         let claude = on(&["plain"]) + "named".len();
         let codex = on(&SKILLS);

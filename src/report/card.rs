@@ -1,5 +1,3 @@
-//! The skill card: what `show` prints and the report lists per skill.
-
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -47,8 +45,6 @@ pub struct CardHistory<'a> {
     pub uncommitted: bool,
 }
 
-/// A skill the card's skill cites, or one citing it, and whether it is held
-/// in the window.
 #[derive(Serialize)]
 pub struct Link {
     pub skill: String,
@@ -70,50 +66,34 @@ pub struct Project {
 
 #[derive(Serialize)]
 pub struct CardUsage {
-    /// Collapsed strong events in the window per agent and channel.
     pub strong: Vec<ByChannel>,
-    /// The latest strong event in the whole ledger.
     pub last_use: Option<String>,
-    /// The top three cwds in the window by distinct root sessions with a strong event.
     pub projects: Vec<Project>,
 }
 
-/// What a skill is for and how to use it, atop the card.
 #[derive(Serialize)]
 pub struct Manual {
-    /// The `for` of [`Manual::guide`]'s pick, else the frontmatter description.
     pub r#for: Option<String>,
-    /// The first line of each real example, cut to [`USE_CHARS`].
     pub your_use: Vec<String>,
-    /// The uses to try of [`Manual::guide`]'s pick.
     pub r#try: Vec<String>,
 }
 
-/// The manual's Your use and Try each list this many.
 const MANUAL_ITEMS: usize = 3;
-/// A Your use line is cut to this many characters.
 const USE_CHARS: usize = 100;
-/// The manual's text is this wide, its label column included; For takes at
-/// most `FOR_LINES` and each item `ITEM_LINES`, so it fits 15 lines.
 const MANUAL_WIDTH: usize = 80;
 const LABEL_WIDTH: usize = 10;
 const FOR_LINES: usize = 3;
 const ITEM_LINES: usize = 2;
-/// The card shows the audit's top improvements, this many.
 const AUDIT_IMPROVEMENTS: usize = 3;
 
-/// `text` cut to `max` characters, the last a `…` when cut.
 pub(crate) fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max { text.into() } else { text.chars().take(max - 1).chain(['…']).collect() }
 }
 
-/// The first line of `text`, cut to [`USE_CHARS`].
 fn first_line(text: &str) -> String {
     cut(text.trim().lines().next().unwrap_or_default().trim(), USE_CHARS)
 }
 
-/// `text` word-wrapped to `width` characters in at most `max` lines; a cut
-/// ends in `…`. A word longer than `width` is split.
 fn wrap(text: &str, width: usize, max: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let (mut line, mut len) = (String::new(), 0);
@@ -143,9 +123,6 @@ fn wrap(text: &str, width: usize, max: usize) -> Vec<String> {
 }
 
 impl Manual {
-    /// For and Try: the latest skill audit's when it has them and is newer
-    /// than the vet or there is no vet, else the vet's from the lockfile;
-    /// with neither, `description` and no Try.
     fn guide(
         vet: Option<&Locked>,
         audit: Option<&SkillRecord>,
@@ -160,8 +137,6 @@ impl Manual {
         (r#for, r#try.iter().take(MANUAL_ITEMS).cloned().collect())
     }
 
-    /// For, Your use and Try under a label column, each omitted when empty;
-    /// empty when all three are.
     pub fn text(&self) -> String {
         let mut out = String::new();
         let mut part = |label: &str, rows: Vec<String>| {
@@ -181,63 +156,43 @@ impl Manual {
     }
 }
 
-/// The skill card: what `show` prints and `show --json` emits.
 #[derive(Serialize)]
 pub struct Card<'a> {
     pub skill: &'a str,
     pub manual: Manual,
     pub since: Option<String>,
     pub histogram: Vec<Day>,
-    /// The TUI's chart: strong sessions per day, week or month of the window.
     #[serde(skip)]
     pub activity: Vec<Bucket>,
-    /// The newest `limit` events in the window.
     pub events: Vec<ShownEvent<'a>>,
     pub total_events: usize,
     pub description: Option<String>,
-    /// None for a name in no root without a source.
     pub path: Option<PathBuf>,
-    /// The GitHub repository and commit the skill came from (D24).
     pub origin: Option<SkillOrigin>,
-    /// The [`crate::store::content_hash`] of the skill's directory; None for a name in no root.
     pub content_hash: Option<String>,
-    /// None outside a git worktree.
     pub history: Option<CardHistory<'a>>,
-    /// Newest first.
     pub grades: Vec<GradeOut>,
-    /// Newest first.
     pub retros: Vec<Eval>,
-    /// Grade and retro files skipped, and why ([`Evals::skipped`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<String>,
-    /// Strong events on days after the latest retro, over the whole ledger.
     pub strong_since_retro: Option<usize>,
     pub cites: Vec<Link>,
     pub cited_by: Vec<Link>,
     pub usage: CardUsage,
     pub examples: Examples,
-    /// The latest skill record.
     pub audit: Option<&'a SkillRecord>,
-    /// The verdict `mazo add` recorded when it vetted the skill.
     pub vet: Option<&'a VetVerdict>,
     pub ctx: Ctx,
 }
 
-/// Where a skill came from on GitHub: a store skill's lockfile entry, or the
-/// source repository's `origin` remote at its HEAD.
 #[derive(Serialize)]
 pub struct SkillOrigin {
-    /// `https://github.com/<owner>/<repo>.git`.
     pub repo: String,
-    /// The skill's directory inside `repo`.
     pub subpath: String,
     pub r#ref: Option<String>,
     pub commit: String,
 }
 
-/// `skill`'s [`SkillOrigin`]; None for a local install or one off github.com,
-/// and for a source repository with no `origin` remote on github.com. Read
-/// from the lockfile and git config only, never the network.
 fn origin_of(view: &View, skill: &str) -> Option<SkillOrigin> {
     let inv = view.input.inv;
     if let Some(locked) = vet_of(inv, skill) {
@@ -250,7 +205,6 @@ fn origin_of(view: &View, skill: &str) -> Option<SkillOrigin> {
     }
     let source = inv.source.as_deref().filter(|s| inv.root(skill) == Some(*s))?;
     let worktree = inv.worktree.as_deref()?;
-    // Once per report, whatever the number of cards.
     let (repo, head) = view
         .upstream
         .get_or_init(|| {
@@ -268,18 +222,13 @@ fn origin_of(view: &View, skill: &str) -> Option<SkillOrigin> {
     })
 }
 
-/// `xs` joined with `, `, or `none`.
 fn or_none(xs: Vec<String>) -> String {
     if xs.is_empty() { "none".into() } else { xs.join(", ") }
 }
 
-/// The card lines `show` prints and the HTML report escapes, so the two
-/// read the same fields.
 impl Card<'_> {
-    /// `first <day> <subject>, last …`; None outside a git worktree.
     pub fn history_line(&self) -> Option<String> {
         let h = self.history.as_ref()?;
-        // The committer's own date.
         let commit = |c: &Commit| format!("{} {}", c.date.get(..10).unwrap_or(&c.date), c.subject);
         let mut line = match (h.first, h.last) {
             (Some(first), Some(last)) => format!("first {}, last {}", commit(first), commit(last)),
@@ -291,24 +240,20 @@ impl Card<'_> {
         Some(line)
     }
 
-    /// `claude slash 3, …`: collapsed strong events per agent and channel.
     pub fn strong_line(&self) -> String {
         or_none(
             self.usage.strong.iter().map(|b| format!("{} {} {}", name(b.agent), name(b.channel), b.events)).collect(),
         )
     }
 
-    /// `~/p 2, …`: the top cwds and their sessions.
     pub fn projects_line(&self) -> String {
         or_none(self.usage.projects.iter().map(|p| format!("{} {}", tilde(&p.cwd), p.sessions)).collect())
     }
 
-    /// `none`, or the strong events since the latest retro.
     pub fn retro_note(&self) -> String {
         self.strong_since_retro.map_or("none".into(), |n| format!("{n} strong since the latest"))
     }
 
-    /// The latest audit's lines, its day in `tz`; None when not audited.
     pub fn audit_lines(&self, tz: &TimeZone) -> Option<AuditLines<'_>> {
         let a = self.audit?;
         let billing = a.judge.billing.map_or("unknown".into(), name);
@@ -325,29 +270,21 @@ impl Card<'_> {
     }
 }
 
-/// The card's audit section, which `show` and the HTML report lay out.
 pub struct AuditLines<'a> {
-    /// `<day>, N sessions, <billing> billing`.
     pub run: String,
     pub verdict: &'a str,
-    /// `label rate, …`: the rates mazo computed.
     pub rates: String,
-    /// The top [`AUDIT_IMPROVEMENTS`] improvements.
     pub improvements: &'a [Improvement],
 }
 
-/// `cites` or `cited by`: each skill as `skill` writes it, `(held)` after a held one.
 pub fn links(ls: &[Link], skill: impl Fn(&str) -> String) -> String {
     or_none(ls.iter().map(|l| if l.held { format!("{} (held)", skill(&l.skill)) } else { skill(&l.skill) }).collect())
 }
 
-/// A name `show` accepts: any known name (canonical names are known).
 pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
     if inv.known.contains(skill) { Ok(()) } else { Err(crate::Error::Usage(format!("unknown skill: {skill}"))) }
 }
 
-/// `skill`'s card over the events `args` keeps; `graph` is the inventory's
-/// citation graph.
 pub(super) fn card<'a>(
     view: &View<'a>,
     graph: &inventory::Graph,
@@ -384,7 +321,6 @@ pub(super) fn card<'a>(
         })
         .collect();
 
-    // A name only in history keeps its place in the source.
     let path = inv.root(skill).or(inv.source.as_deref()).map(|r| r.join(skill));
     let description = inv.description(skill);
     let history = inv.history.as_ref().map(|h| CardHistory {
@@ -404,7 +340,6 @@ pub(super) fn card<'a>(
             .len()
     });
 
-    // A skill is held when a skill citing it was used in the window.
     let used = view.used(start);
     let link =
         |b: &str| Link { skill: b.to_string(), held: citers(graph, b).iter().any(|a| used.contains(a.as_str())) };
@@ -449,12 +384,10 @@ pub(super) fn card<'a>(
         examples,
         audit,
         vet: vet.and_then(|l| l.verdict.as_ref()),
-        // `show` takes only a known name, never a project-only one, so a card is a global skill's.
         ctx: view.ctx().of(inv, skill, Scope::Global),
     }
 }
 
-/// The card's usage section for the events of `skill` that `f` keeps at or after `start`.
 fn card_usage(view: &View, f: &Filter, skill: &str, start: Option<Timestamp>) -> CardUsage {
     let mut by: BTreeMap<(Agent, Channel), HashSet<&str>> = BTreeMap::new();
     let mut projects: BTreeMap<&str, HashSet<(Agent, &str)>> = BTreeMap::new();
@@ -476,42 +409,34 @@ fn card_usage(view: &View, f: &Filter, skill: &str, start: Option<Timestamp>) ->
     }
 }
 
-/// The usage section of `skill`'s card over `show`'s default window, which
-/// the audit's stage 2 reads.
 pub fn usage_section(input: &Input, skill: &str) -> serde_json::Value {
     let view = View::new(input);
     serde_json::to_value(card_usage(&view, &Filter::default(), skill, view.start(SINCE))).expect("usage serialises")
 }
 
-/// `$HOME` as `~`, [`inert_line`](crate::render::inert_line): a transcript
-/// names its cwd.
 pub fn tilde(path: &str) -> String {
     let home = crate::config::home_dir().ok();
     let rest = home.as_deref().and_then(|h| path.strip_prefix(h)).filter(|r| r.is_empty() || r.starts_with('/'));
     crate::render::inert_line(&rest.map_or_else(|| path.to_string(), |r| format!("~{r}")))
 }
 
-/// A transcript locator as `<agent>:<file name>:<line>`.
 fn locator(e: &ShownEvent) -> String {
     let (file, line) = e.src.rsplit_once(':').unwrap_or((e.src, ""));
     let file = Path::new(file).file_name().map_or(file.into(), |n| n.to_string_lossy());
     format!("{}:{}:{line}", name(e.agent), crate::render::inert_line(&file))
 }
 
-/// Rendered `mazo show <skill>` output; Err for an unknown skill.
 pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
     check_skill(input.inv, skill)?;
     let card = skill_card(input, skill, &UsageArgs::new(since), limit);
     Ok(if json { json_line(&card) } else { card_text(input, &card, tty) })
 }
 
-/// `skill`'s card over the events `args` keeps, listing the newest `limit`.
 pub fn skill_card<'a>(input: &'a Input<'a>, skill: &'a str, args: &UsageArgs, limit: usize) -> Card<'a> {
     let graph = inventory::fan_in(input.inv);
     card(&View::new(input), &graph, skill, args, limit)
 }
 
-/// `show`'s text for `card`.
 pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
     let mut out = card.manual.text();
     if !out.is_empty() {

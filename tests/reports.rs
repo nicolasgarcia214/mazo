@@ -1,6 +1,3 @@
-//! Fan-in, held and evals, plus the report rules (filters,
-//! collapse, sess, authoring) on small fixture ledgers.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -17,7 +14,6 @@ use mazo::report::{self, Since, UsageArgs};
 use mazo::{evals, render};
 use serde_json::Value;
 
-/// The last line of the fixture's `usage`: only the marks its table shows.
 const LEGEND: &str = "legend: agents C Claude, X Codex, P Pi; \
                       ● name and description in context: Claude on, every Codex skill, Pi by default";
 
@@ -25,7 +21,6 @@ fn args() -> UsageArgs {
     UsageArgs { since: Since::Days(30), agent: None, channel: None, all: false, authoring: false }
 }
 
-/// The `--json` usage row of one skill.
 fn row(out: &str, skill: &str) -> Value {
     let v: Value = serde_json::from_str(out).unwrap();
     v["rows"]
@@ -41,14 +36,6 @@ fn counts(r: &Value) -> [u64; 6] {
     ["sess", "slash", "tool", "typed", "read", "ref"].map(|k| r[k].as_u64().unwrap())
 }
 
-// ---------------------------------------------------------------- fan-in
-
-/// One skill per citation rule in `tests/fixtures/skills`: diagnose-bug cites
-/// `the blast-radius skill`, review-audit-fixes the same broken across lines,
-/// triage-finding `owned by grade`, unslop the `writing-for-agents/` path (not
-/// `upgrade/` or `x-grade/`), and writing-for-agents `the goal-smart skill` in
-/// a reference file. interrogate's description and its `owned by graders`, and
-/// grade's self-mentions, yield nothing.
 #[test]
 fn fan_in_on_the_fixture_tree_matches_each_rule() {
     let src = common::fixture("skills");
@@ -66,7 +53,6 @@ fn fan_in_on_the_fixture_tree_matches_each_rule() {
     );
 }
 
-/// Only with `MAZO_TEST_SKILLS`: invariants that hold on any skills repository.
 #[test]
 fn fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
     let Some(src) = common::test_skills_env() else {
@@ -102,8 +88,6 @@ fn fan_in_on_fixtures_ignores_frontmatter_and_name_suffixes() {
     );
 }
 
-// ---------------------------------------------------------------- held
-
 #[test]
 fn unused_reports_clusters_held_new_and_weak_only() {
     let repo = report_repo();
@@ -111,7 +95,6 @@ fn unused_reports_clusters_held_new_and_weak_only() {
     let events = vec![
         event("u1", "unslop", Channel::Tool, "s1", &ago(10)),
         event("p1", "goal-plan", Channel::Read, "s2", &ago(5)),
-        // Outside the 60-day window: does not make goal-execute used.
         event("x1", "goal-execute", Channel::Slash, "s0", &ago(90)),
     ];
     let input = w.input(&events);
@@ -134,10 +117,8 @@ fn unused_reports_clusters_held_new_and_weak_only() {
 
     assert_eq!(by["writing-for-agents"]["status"], "held");
     assert_eq!(names(&by["writing-for-agents"]["holders"]), ["unslop"]);
-    // Held is not transitive: wfa-helper's only citer is held, not used.
     assert_eq!(by["wfa-helper"]["status"], "unused");
     assert_eq!(names(&by["wfa-helper"]["cluster"]), ["writing-for-agents"]);
-    // new wins over held: unslop cites the uncommitted fresh.
     assert_eq!(by["fresh"]["status"], "new");
     assert!(names(&by["fresh"]["holders"]).is_empty());
 
@@ -168,8 +149,6 @@ fn a_skill_first_committed_inside_the_window_is_new() {
     assert_eq!(new.len(), 7, "the 2026-01-01 commit is inside a 400-day window: {new:?}");
 }
 
-/// Store skills installed 10 and 90 days ago and one missing from the
-/// lockfile, beside the report fixture's source skills.
 #[test]
 fn a_store_skill_is_new_from_its_install_date() {
     let repo = report_repo();
@@ -197,15 +176,10 @@ fn a_store_skill_is_new_from_its_install_date() {
     assert_eq!(status["late"], "new");
     assert_eq!(status["early"], "unused");
     assert_eq!(status["unlisted"], "new", "an unknown install date is new");
-    // Source skills keep their git dates: committed 2026-01-01, and never.
     assert_eq!(status["goal-smart"], "unused");
     assert_eq!(status["fresh"], "new");
 }
 
-// ---------------------------------------------------------------- named by
-
-/// unslop names goal-plan in prose (`x-goal-plan/` is not a word); every
-/// other whole-word name in the tree is already an edge, so none repeats.
 #[test]
 fn mentions_on_fixtures_are_whole_words_that_are_not_edges() {
     let repo = report_repo();
@@ -217,8 +191,6 @@ fn mentions_on_fixtures_are_whole_words_that_are_not_edges() {
     assert_eq!(m.keys().cloned().collect::<BTreeSet<_>>(), inv.skills);
 }
 
-/// `router` names wfa-helper in a routing table and is used; wfa-helper
-/// stays unused, with the namer noted, and is never held by it.
 #[test]
 fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
     let repo = report_repo();
@@ -243,7 +215,6 @@ fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
     assert_eq!(wfa["status"], "unused");
     assert_eq!(wfa["named_by"], serde_json::json!(["router"]));
     assert_eq!(wfa["holders"], serde_json::json!([]));
-    // unslop names goal-plan but is not used in the window.
     let plan = rows.iter().find(|r| r["skill"] == "goal-plan").unwrap();
     assert_eq!(plan["named_by"], serde_json::json!([]));
 
@@ -252,8 +223,6 @@ fn unused_notes_a_skill_named_by_a_used_skill_and_keeps_it_unused() {
     assert!(line.contains(" unused ") && line.contains("named by router"), "{text}");
 }
 
-/// On a terminal, `unused` paints its status words and the `named by` note
-/// and `usage` only a stale grade's mark; `NO_COLOR=1` turns all of it off.
 #[test]
 fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     let repo = report_repo();
@@ -290,10 +259,6 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     assert!(!report::usage(&input, &args(), false, off).contains('\x1b'));
 }
 
-// ---------------------------------------------------------------- usage
-
-/// 7d and 30d count strong sessions over local days, whatever the window,
-/// under the usage filters; trend compares 30d with the 30 days before.
 #[test]
 fn usage_counts_sessions_over_7_and_30_local_days_and_their_trend() {
     let repo = report_repo();
@@ -303,11 +268,10 @@ fn usage_counts_sessions_over_7_and_30_local_days_and_their_trend() {
     let mut probe = event("p", "unslop", Channel::Tool, "P", &ago(1));
     probe.actor = Actor::Probe;
     let events = vec![
-        event("a", "unslop", Channel::Tool, "A", "2026-10-07T00:30:00Z"), // 6 days ago
-        event("b1", "unslop", Channel::Slash, "B", "2026-10-06T23:59:00Z"), // 7 days ago
+        event("a", "unslop", Channel::Tool, "A", "2026-10-07T00:30:00Z"),
+        event("b1", "unslop", Channel::Slash, "B", "2026-10-06T23:59:00Z"),
         event("b2", "unslop", Channel::Tool, "B", &ago(1)),
         event("c", "unslop", Channel::Tool, "C", &ago(29)),
-        // Inside the 30d window by the hour, but 30 local days ago.
         event("e", "unslop", Channel::Tool, "E", "2026-09-13T13:00:00Z"),
         event("d", "unslop", Channel::Tool, "D", &ago(59)),
         event("r", "unslop", Channel::Read, "R", &ago(1)),
@@ -356,10 +320,10 @@ fn usage_collapses_and_applies_default_filters() {
     codex_b.agent = Agent::Codex;
     let events = vec![
         event("t1", "unslop", Channel::Tool, "A", &d1),
-        event("t2", "unslop", Channel::Tool, "A", &d1), // same (agent, session, skill, channel)
+        event("t2", "unslop", Channel::Tool, "A", &d1),
         event("s1", "unslop", Channel::Slash, "A", &d1),
         event("r1", "unslop", Channel::Read, "A", &d1),
-        event("r2", "unslop", Channel::Read, "A", &d1), // a second chunk of the same file
+        event("r2", "unslop", Channel::Read, "A", &d1),
         event("f1", "unslop", Channel::Ref, "A", &d1),
         sub,
         codex_a,
@@ -367,22 +331,18 @@ fn usage_collapses_and_applies_default_filters() {
         probe,
         other,
         stored_authoring,
-        // Report-time authoring: session D also loads `grade`.
         event("g1", "grade", Channel::Tool, "D", &d1),
         event("dr", "unslop", Channel::Read, "D", &d1),
-        event("dt", "unslop", Channel::Tool, "D", &d1), // strong events are never authoring
+        event("dt", "unslop", Channel::Tool, "D", &d1),
         event("old", "unslop", Channel::Tool, "Z", &ago(40)),
         event("ty", "unslop", Channel::Typed, "Y", typed),
-        // goal-execute's only strong event is older than the window.
         event("gx", "goal-execute", Channel::Tool, "Q", &ago(40)),
-        // A pruned skill: in the ledger, not in the inventory.
         event("pr", "pruned", Channel::Tool, "R", &ago(90)),
     ];
     let input = w.input(&events);
 
     let out = report::usage(&input, &args(), true, false);
     let r = row(&out, "unslop");
-    // sess: A, B, D. tool: A, B, D. read: claude A, codex A.
     assert_eq!(counts(&r), [3, 1, 3, 0, 2, 1]);
     assert_eq!(r["agents"], "CX");
     assert_eq!(r["last"], d1.as_str());
@@ -445,10 +405,6 @@ fn usage_collapses_and_applies_default_filters() {
     assert!(report::usage(&input, &args(), false, true).starts_with("\x1b[1mskill"));
 }
 
-/// The audit column marks a vet security finding `!`, else an audit `✓`,
-/// else a vet `vet`, else `-`; `--json` carries the latest audit's verdict,
-/// else the vet's led by any security finding, and its source apart. The
-/// card prints the vet verdict whenever there is one.
 #[test]
 fn usage_audit_marks_a_security_finding_else_an_audit_else_a_vet() {
     let repo = report_repo();
@@ -478,7 +434,6 @@ fn usage_audit_marks_a_security_finding_else_an_audit_else_a_vet() {
     assert!(line("vetted").ends_with(" vet"), "{text}");
     assert!(line("goal-plan").ends_with(" -"), "{text}");
 
-    // A security finding leads the vet verdict and marks the cell.
     let lock = data.path().join("mazo.lock");
     let text = std::fs::read_to_string(&lock).unwrap();
     write(&lock, &text.replace("[skill.verdict]\n", "[skill.verdict]\nsecurity = \"Sends files to a remote host.\"\n"));
@@ -489,7 +444,6 @@ fn usage_audit_marks_a_security_finding_else_an_audit_else_a_vet() {
     let text = report::usage(&input, &args(), false, true);
     assert!(text.lines().any(|l| l.starts_with("vetted ") && l.ends_with(" \x1b[31m!\x1b[0m")), "{text}");
 
-    // An audit wins over the vet's verdict, not over its security mark, and the card prints both.
     write(
         &data.path().join("audits.jsonl"),
         &(audits + &skill_record("Fine.", NOW).replace("\"unslop\"", "\"vetted\"")),
@@ -506,7 +460,6 @@ fn usage_audit_marks_a_security_finding_else_an_audit_else_a_vet() {
     assert!(card.contains(": Fine.\n"), "{card}");
 }
 
-/// The `--json` usage row of `skill` in `scope`.
 fn scoped(out: &str, skill: &str, scope: &str) -> Option<Value> {
     let v: Value = serde_json::from_str(out).unwrap();
     v["rows"].as_array().unwrap().iter().find(|r| r["skill"] == skill && r["scope"] == scope).cloned()
@@ -515,7 +468,6 @@ fn scoped(out: &str, skill: &str, scope: &str) -> Option<Value> {
 #[test]
 fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     let repo = report_repo();
-    // A git project whose store holds `vetted`, vetted in its `mazo.lock`, and an `unslop` of its own.
     let project = tempfile::tempdir().unwrap();
     let p = project.path();
     git(p, &["init", "-q"], NOW);
@@ -539,12 +491,10 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
             Some("/elsewhere/.claude/skills/vetted/SKILL.md".into()),
         ),
     ];
-    // The same project reached through a symlink.
     let alias = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(p, alias.path().join("p")).unwrap();
     let through = alias.path().join("p/.mazo/skills/unslop/SKILL.md").display().to_string();
     events.push(other(event("pa", "unslop", Channel::Read, "s6", &ago(1)), Some(through)));
-    // AC10: the global skill's grade is not the project skill's.
     grade(&repo.path().join(".evals"), "unslop", "2026-09-01", "9", None);
     let mut w = report_world(repo.path());
     let outside = report::usage(&w.input(&events), &args(), true, false);
@@ -575,7 +525,6 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     }
     assert!(text.lines().any(|l| l.starts_with("vetted (project) ") && l.ends_with(" vet")));
 
-    // Outside the project every row is global, and the text names no project.
     let rows = serde_json::from_str::<Value>(&outside).unwrap()["rows"].as_array().unwrap().clone();
     assert!(rows.iter().all(|r| r["scope"] == "global"), "{outside}");
     assert_eq!(counts(&row(&outside, "unslop")), [1, 0, 1, 0, 0, 0]);
@@ -585,7 +534,6 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     );
 }
 
-/// The text and JSON grade of `skill` in a fresh report, which hashes the skill again.
 fn grade_of(source: &Path, skill: &str) -> (String, Value) {
     let w = report_world(source);
     let input = w.input(&[]);
@@ -597,8 +545,6 @@ fn grade_of(source: &Path, skill: &str) -> (String, Value) {
     )
 }
 
-/// AC6, AC11: the score alone while the grade's `content_hash` is the
-/// skill's, then `stale` once the skill changes; a grade with no hash is stale.
 #[test]
 fn usage_grade_shows_the_score_then_stale_when_the_skill_changed() {
     let repo = report_repo();
@@ -623,8 +569,6 @@ fn usage_grade_shows_the_score_then_stale_when_the_skill_changed() {
     assert_eq!((cell.as_str(), summary(&g)), ("9.1 stale", (true.into(), "stale".into(), hash.into())), "edited");
 }
 
-/// AC2, AC3: a store skill's grade comes from `evals_dir`, as a source
-/// skill's does, and `<source>/.grades` is not read.
 #[test]
 fn grades_come_from_evals_dir_for_source_and_store_skills_only() {
     let repo = report_repo();
@@ -650,8 +594,6 @@ fn grades_come_from_evals_dir_for_source_and_store_skills_only() {
     let text = report::show(&input, "vetted", Since::Days(30), 20, false, false).unwrap();
     assert!(text.contains("grades:\ndate       score mark\n2026-09-01   8.6\n"), "{text}");
 }
-
-// ---------------------------------------------------------------- show
 
 #[test]
 fn show_lists_events_with_expired_locators_and_retro_counts() {
@@ -692,10 +634,6 @@ fn show_lists_events_with_expired_locators_and_retro_counts() {
     assert!(text.contains("retros: 2 strong since the latest\n"), "{text}");
 }
 
-/// D5: the card's chart counts distinct (agent, session) pairs with a strong
-/// event per day over 30 days, per ISO week from Monday over 60, and per
-/// calendar month over all time, the bucket of today last and partial. NOW
-/// is Tuesday 2026-10-13, in ISO week 42.
 #[test]
 fn the_cards_chart_buckets_strong_sessions_by_day_week_and_month() {
     let repo = report_repo();
@@ -704,13 +642,13 @@ fn the_cards_chart_buckets_strong_sessions_by_day_week_and_month() {
     codex.agent = Agent::Codex;
     let events = vec![
         event("a1", "unslop", Channel::Tool, "A", &ago(0)),
-        event("a2", "unslop", Channel::Slash, "A", &ago(0)), // the same pair
+        event("a2", "unslop", Channel::Slash, "A", &ago(0)),
         codex,
-        event("r1", "unslop", Channel::Read, "R", &ago(0)),   // weak
-        event("c1", "unslop", Channel::Tool, "C", &ago(1)),   // Monday of week 42
-        event("d1", "unslop", Channel::Tool, "D", &ago(2)),   // Sunday of week 41
-        event("e1", "unslop", Channel::Tool, "E", &ago(45)),  // 2026-08-29, week 35
-        event("f1", "unslop", Channel::Tool, "F", &ago(100)), // 2026-07-05
+        event("r1", "unslop", Channel::Read, "R", &ago(0)),
+        event("c1", "unslop", Channel::Tool, "C", &ago(1)),
+        event("d1", "unslop", Channel::Tool, "D", &ago(2)),
+        event("e1", "unslop", Channel::Tool, "E", &ago(45)),
+        event("f1", "unslop", Channel::Tool, "F", &ago(100)),
     ];
     let input = w.input(&events);
     let chart = |since| {
@@ -738,8 +676,6 @@ fn the_cards_chart_buckets_strong_sessions_by_day_week_and_month() {
     );
 }
 
-/// The card's sections after the events, in display order, with `$HOME` as
-/// `~` and short locators in text and full paths in `--json`.
 #[test]
 fn show_prints_the_card() {
     let repo = report_repo();
@@ -869,7 +805,6 @@ fn show_prints_the_card() {
     assert_eq!(v["audit"], Value::Null);
 }
 
-/// Not a repository: no history section, and the grade still reads.
 #[test]
 fn show_outside_a_git_worktree_omits_history() {
     let dir = tempfile::tempdir().unwrap();
@@ -887,10 +822,6 @@ fn show_outside_a_git_worktree_omits_history() {
     assert_eq!(v["grades"][0]["stale"], false);
 }
 
-// ---------------------------------------------------------------- examples
-
-/// Real examples, on Claude transcripts whose line `n` is
-/// the user message `msgs[n - 1]`.
 #[test]
 fn show_lists_written_and_real_examples() {
     let repo = report_repo();
@@ -963,8 +894,6 @@ fn show_lists_written_and_real_examples() {
         .map(|r| (r["cwd"].as_str().unwrap(), r["text"].as_str().unwrap()))
         .collect();
     let cut: String = long.chars().take(300).collect();
-    // /a skips the bare invocation and "yes" for the cut long prompt; /c's
-    // transcript expired; /d is the fourth project.
     assert_eq!(real, [("/a", cut.as_str()), ("/b", msgs[3])]);
     assert_eq!(ex["real"][0]["ts"], ago(3));
 
@@ -979,7 +908,6 @@ fn show_lists_written_and_real_examples() {
         assert!(!text.contains(m), "{m}: {text}");
     }
 
-    // A 25-character prompt that is only the invocation gives way too.
     let v: Value = serde_json::from_str(
         &report::show(&input, "a-skill-with-a-long-name", Since::Days(30), 20, true, false).unwrap(),
     )
@@ -988,7 +916,6 @@ fn show_lists_written_and_real_examples() {
     assert_eq!(v["examples"]["real"].as_array().unwrap().len(), 1);
 }
 
-/// No events, no manifest: the invocations alone.
 #[test]
 fn show_without_events_has_no_real_examples() {
     let repo = report_repo();
@@ -1002,11 +929,6 @@ fn show_without_events_has_no_real_examples() {
     assert_eq!(v["examples"]["real"], serde_json::json!([]));
 }
 
-// ---------------------------------------------------------------- manual
-
-/// A store skill the judge vetted: For and Try from its lockfile entry, not
-/// its description, and Your use from transcripts, each prompt's first line
-/// cut to 100 characters. The manual opens the card.
 #[test]
 fn show_opens_a_vetted_store_skill_with_its_manual() {
     let repo = report_repo();
@@ -1065,8 +987,6 @@ fn show_opens_a_vetted_store_skill_with_its_manual() {
     assert!(text.starts_with(&manual.concat()), "{text}");
 }
 
-/// A source skill with no vet record and no events: For is its description,
-/// and the empty Your use and Try are left out.
 #[test]
 fn show_gives_an_unvetted_source_skill_its_description_alone() {
     let repo = report_repo();
@@ -1079,8 +999,6 @@ fn show_gives_an_unvetted_source_skill_its_description_alone() {
     assert!(text.starts_with("for:      Removes slop from prose.\n\nunslop: since "), "{text}");
 }
 
-/// A description cannot drive the terminal: its controls print as U+FFFD,
-/// in For, in the card and in `--json`.
 #[test]
 fn show_prints_a_descriptions_terminal_controls_inert() {
     let dir = tempfile::tempdir().unwrap();
@@ -1096,9 +1014,6 @@ fn show_prints_a_descriptions_terminal_controls_inert() {
     assert_eq!(v["description"], "Hi\u{fffd}]52;c;eA==\u{fffd}\u{fffd}[2J.");
 }
 
-/// For and Try come from the latest skill audit when it is newer than the
-/// vet or there is no vet, else from the vet; a source skill with no audit
-/// keeps its description.
 #[test]
 fn the_manual_takes_for_and_try_from_the_newer_of_the_audit_and_the_vet() {
     let repo = report_repo();
@@ -1142,8 +1057,6 @@ fn the_manual_takes_for_and_try_from_the_newer_of_the_audit_and_the_vet() {
     assert_eq!(manual("unslop", &[]), description, "a source skill with no audit");
 }
 
-/// Every part at its longest, words and one unbroken run: the manual stays
-/// within 15 lines of 80 columns, cutting with `…`.
 #[test]
 fn a_full_manual_fits_fifteen_lines_at_eighty_columns() {
     let manual = report::Manual {
@@ -1158,8 +1071,6 @@ fn a_full_manual_fits_fifteen_lines_at_eighty_columns() {
     assert_eq!(lines.iter().filter(|l| l.ends_with('…')).count(), 4, "For and every Try item are cut: {text}");
     assert!(lines[3].starts_with("your use: - xxx") && lines[9].starts_with("try:      - Try"), "{text}");
 }
-
-// ---------------------------------------------------------------- evals
 
 #[test]
 fn evals_latest_date_and_staleness() {
@@ -1201,7 +1112,6 @@ fn evals_latest_date_and_staleness() {
     assert!(skipped[0].starts_with("bad.md: "), "{skipped:?}");
     let mut retro_skips = skipped[1..].to_vec();
     retro_skips.sort();
-    // r5.md has the right shape, but no such day.
     assert_eq!(retro_skips, ["r4.md: no YYYY-MM-DD date", "r5.md: no YYYY-MM-DD date"]);
 
     write(&src.join("s/SKILL.md"), "---\nname: s\ndescription: v2\n---\n");
@@ -1212,9 +1122,6 @@ fn evals_latest_date_and_staleness() {
     assert_eq!(load("gone"), evals::Evals::default(), "a name in no root");
 }
 
-/// `show --json`'s origin (D24): a store skill's lockfile entry when its
-/// origin is on github.com, a source skill's `origin` remote on github.com
-/// at HEAD, else null.
 #[test]
 fn show_gives_the_github_origin_of_store_and_source_skills() {
     let repo = report_repo();
@@ -1260,8 +1167,6 @@ fn show_gives_the_github_origin_of_store_and_source_skills() {
     assert_eq!(origin("unslop"), Value::Null, "a remote off github.com");
 }
 
-/// The usage guide's `mazo usage` sample is what the binary prints for its
-/// scenario: three skills linked into one Claude home, two of them loaded.
 #[test]
 fn the_usage_guide_sample_is_current() {
     let source = tempfile::tempdir().unwrap();

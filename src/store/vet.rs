@@ -1,7 +1,3 @@
-//! The vet gate: one judge call on a skill, within byte caps that withhold
-//! what cannot be sent, and its verdict obeyed; [`no_judge`] when there is
-//! no judge to call.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,22 +8,15 @@ use crate::audit::{self, Caller, Vet};
 use crate::inventory::Inventory;
 use crate::ledger::Ledger;
 
-/// The most bytes of one file, and of all files, the vet judge is sent; a
-/// file past either, or one that is not text, is withheld.
 const VET_FILE_BYTES: u64 = 64 * 1024;
 const VET_TOTAL_BYTES: u64 = 256 * 1024;
 
-/// The judges any setup can configure, each as a `[judge]` table to paste
-/// into the config, after a TOML comment saying what it calls.
 const JUDGE_EXAMPLES: [&str; 2] = [
     "# command: any CLI that reads the prompt on stdin\n[judge]\nagent = \"command\"\nargv = [\"llm\", \"-m\", \"gpt-5\"]\n",
     "# http: an OpenAI-compatible endpoint\n[judge]\nagent = \"http\"\nurl = \"https://api.openai.com/v1\"\n\
      model = \"gpt-5\"\napi_key_env = \"OPENAI_API_KEY\"\n",
 ];
 
-/// What to do with no `[judge]`, after an untrusted add or update is
-/// refused for want of one: [`JUDGE_EXAMPLES`], and a prefilled issue asking
-/// for a judge for the user's harness.
 pub(super) fn no_judge() -> String {
     let body = "mazo refuses an untrusted add or update without a [judge], and none of its judges fits the harness I use.\n\n\
                 Harness: <name and version>\n\
@@ -43,7 +32,6 @@ pub(super) fn no_judge() -> String {
     )
 }
 
-/// Every file of `files` under `dir` as `(relative path, bytes)`.
 pub(super) fn contents(dir: &Path, files: &[PathBuf]) -> Result<Vec<(String, Vec<u8>)>> {
     let files = files.iter().filter(|rel| !dir.join(rel).is_dir());
     files
@@ -54,17 +42,6 @@ pub(super) fn contents(dir: &Path, files: &[PathBuf]) -> Result<Vec<(String, Vec
         .collect()
 }
 
-/// The vet gate, before anything is installed: one judge call on `files` of
-/// the skill `name` and, for an update, the `diff` from the installed copy,
-/// with the names and descriptions of every other source and store skill
-/// and the [`work::summary`] of the user's recent work; its verdict shown,
-/// then obeyed. A file or diff withheld from the judge (not text, or past
-/// [`VET_FILE_BYTES`] or [`VET_TOTAL_BYTES`]) was never reviewed, so it is a
-/// security finding of mazo's own. A security finding
-/// refuses (exit 1) unless `--force`, a withheld one before the judge is
-/// called; then the user is asked y/N, defaulting to the verdict's
-/// [`VetVerdict::default_yes`](audit::VetVerdict::default_yes), unless
-/// `--yes`. A judge that gives no valid answer, or a No, refuses.
 pub(super) fn gate(
     c: &Caller,
     inv: &Inventory,
@@ -90,7 +67,6 @@ pub(super) fn gate(
                 text
             }
             Err(why) => {
-                // A file name is the skill author's, so it reaches the terminal inert.
                 withheld.push(format!("{} ({size} bytes, {why})", crate::render::inert(label)));
                 format!("(withheld: {size} bytes, {why})")
             }

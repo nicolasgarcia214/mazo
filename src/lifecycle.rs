@@ -1,5 +1,3 @@
-//! Lifecycle of a skill in the source: `new`, `retire`, `prune`.
-
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -13,14 +11,8 @@ use crate::render::PathExt;
 use crate::{Error, Result, outln};
 use crate::{links, policy, report, scan, store, yaml};
 
-/// `mazo new <name> --description <text>`: writes
-/// `<source>/<name>/SKILL.md`, and `agents/openai.yaml` under `codex_manifest`,
-/// then prints the `name-only` line for each Claude home under `claude_name_only`.
-/// A name or description the always-on rules reject is a usage error; an
-/// existing entry, or a store skill of that name, is a refusal. It never runs `sync`.
 pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Result<ExitCode> {
     let skill_md = format!("---\nname: {name}\ndescription: {}\n---\n\n# {name}\n", quoted(description));
-    // Parsed back through the rules `sync` runs, so what is written passes them.
     let checked = yaml::frontmatter(&skill_md).and_then(|meta| {
         policy::always_on(&meta, name)?;
         match yaml::get(&meta, "description").and_then(yaml::string) {
@@ -61,8 +53,6 @@ pub fn new(cfg: &Config, inv: &Inventory, name: &str, description: &str) -> Resu
     Ok(ExitCode::SUCCESS)
 }
 
-/// A YAML double-quoted scalar: `"` and `\` escaped, and every control or
-/// line-separating character as `\uXXXX`, so the value stays on one line.
 fn quoted(s: &str) -> String {
     let mut out = String::from('"');
     for c in s.chars() {
@@ -81,9 +71,6 @@ fn quoted(s: &str) -> String {
     out
 }
 
-/// `mazo prune [<name>] [--yes] [--force]`: permanently deletes
-/// `<source>/.archive/<name>`, or every archived entry. A refusal or a
-/// declined confirmation deletes nothing and exits 1.
 pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: bool) -> Result<ExitCode> {
     let archive = source.join(".archive");
     let names = match name {
@@ -125,7 +112,6 @@ pub fn prune(source: &Path, name: Option<&str>, yes: bool, force: bool, tty: boo
     Ok(ExitCode::SUCCESS)
 }
 
-/// A single plain component naming a directory in the archive.
 fn is_entry(archive: &Path, name: &str) -> bool {
     matches!(Path::new(name).components().collect::<Vec<_>>()[..], [Component::Normal(_)])
         && archive.join(name).symlink_metadata().is_ok_and(|m| m.is_dir())
@@ -142,10 +128,6 @@ fn entries(archive: &Path) -> Vec<String> {
     names
 }
 
-/// Archived files, relative to the source, whose blob (`git hash-object`, which
-/// ignores `.gitignore`) equals neither `HEAD:./<name>/<file>` nor
-/// `HEAD:./.archive/<name>/<file>`. A symlink, dangling or not, is the blob of
-/// its link text and matches only a `120000` entry. Empty outside a git repository.
 fn unsaved(source: &Path, names: &[String]) -> Result<Vec<String>> {
     if git(source, &["rev-parse", "--is-inside-work-tree"]).is_none() {
         return Ok(Vec::new());
@@ -167,7 +149,6 @@ fn unsaved(source: &Path, names: &[String]) -> Result<Vec<String>> {
     let mut ls = vec!["ls-tree", "-r", "-z", "HEAD", "--"];
     let roots: Vec<String> = names.iter().flat_map(|n| [n.clone(), format!(".archive/{n}")]).collect();
     ls.extend(roots.iter().map(String::as_str));
-    // No HEAD (no commit yet): nothing is saved.
     let tree = git(source, &ls).unwrap_or_default();
     let head: BTreeMap<&str, (&str, &str)> = tree
         .split('\0')
@@ -194,8 +175,6 @@ fn unsaved(source: &Path, names: &[String]) -> Result<Vec<String>> {
     Ok(unsaved)
 }
 
-/// The blob git stores for the symlink `<source>/<rel>`: `git hash-object
-/// --stdin` of its link text.
 fn link_blob(source: &Path, rel: &str) -> Result<String> {
     let path = source.join(rel);
     let target = std::fs::read_link(&path).map_err(crate::at(&path))?;
@@ -218,7 +197,6 @@ fn link_blob(source: &Path, rel: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
-/// Every non-directory under `dir`, as a path relative to `source`.
 fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     let entries = std::fs::read_dir(dir).map_err(crate::at(dir))?;
     let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
@@ -233,31 +211,14 @@ fn walk(source: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// A strong event in this many days, the skill's, a holder's or a namer's, makes `retire` refuse.
 const RETIRE_DAYS: u32 = 30;
 
-/// What [`retire`] did. Nothing is written unless it is `Done`.
 pub enum Retired {
-    /// Why it refused without `force`: a strong event in the last 30 days of
-    /// the skill, a holder or a namer.
     Blocked(Vec<String>),
-    /// The errors of the sync plan without the skill.
     Refused(Vec<String>),
-    /// The lines reporting what it wrote.
     Done(Vec<String>),
 }
 
-/// `mazo retire <name> [--force]`: scans first, refuses a held, named or
-/// recently used skill unless `force`, and refuses any conflict or policy error
-/// in the sync plan as if the skill were gone, all before any write. Then
-/// moves a source skill `<source>/<name>` to `<source>/.archive/<name>` (`git
-/// mv` when tracked) and applies that plan; or, for a store skill, applies
-/// that plan, drops its lockfile entry and deletes `<store>/<name>`. With
-/// `project`, it retires only a skill of the project at the current
-/// directory's git root, its blockers found with the project's skills: its
-/// links in the project skill dirs go instead of the homes', then its
-/// project lockfile entry and directory. Never commits. Prints nothing: the
-/// scan's warnings go to `warnings`, kept even when a later step fails.
 pub fn retire(
     cfg: &Config,
     data: &Path,
@@ -289,8 +250,6 @@ pub fn retire(
             return Ok(Retired::Blocked(blockers));
         }
     }
-    // Held from the plan on, as `add` holds it, and the inventory read again
-    // under it, so a concurrent `add`, `update` or `retire` cannot stale the plan.
     let _lock = ledger::lock(data)?;
     let (mut rest, root) = located(cfg, data, name, project.as_deref())?;
     let to = archive(cfg, &root, name)?;
@@ -316,7 +275,6 @@ pub fn retire(
         }
         None => target.remove(&from, name, &plan)?,
     };
-    // The homes' settings name only global skills.
     if cfg.policy.claude_name_only && project.is_none() {
         for h in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
             for (path, settings) in policy::settings(h) {
@@ -329,12 +287,9 @@ pub fn retire(
     Ok(Retired::Done(out))
 }
 
-/// The inventory `retire` reads, with the project's skills under `project`,
-/// and the root of the skill `name` in it.
 fn located(cfg: &Config, data: &Path, name: &str, project: Option<&Path>) -> Result<(Inventory, PathBuf)> {
     let inv = store::scoped_inventory(store::inventory(cfg.source.as_deref(), data)?, project)?;
     let root = match project {
-        // The global store may hold a skill of the same name, ahead of it.
         Some(p) => {
             let store = store::project_dir(p);
             let roots = inv.origins.get(name).into_iter().flatten();
@@ -346,7 +301,6 @@ fn located(cfg: &Config, data: &Path, name: &str, project: Option<&Path>) -> Res
         None => {
             let Some(root) = inv.root(name) else {
                 let hint = store::project_hint(name);
-                // Only a store skill retires without a source.
                 if hint.is_empty() {
                     cfg.need_source(&format!("retire {name}"))?;
                 }
@@ -358,8 +312,6 @@ fn located(cfg: &Config, data: &Path, name: &str, project: Option<&Path>) -> Res
     Ok((inv, root))
 }
 
-/// Where `retire` moves the skill `name` of `root`: a source skill to the
-/// archive, refused when that entry exists; a store skill, removed, nowhere.
 fn archive(cfg: &Config, root: &Path, name: &str) -> Result<Option<PathBuf>> {
     let to = (cfg.source.as_deref() == Some(root)).then(|| root.join(".archive").join(name));
     if let Some(to) = to.as_ref().filter(|t| t.symlink_metadata().is_ok()) {

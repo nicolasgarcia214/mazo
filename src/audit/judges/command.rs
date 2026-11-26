@@ -1,7 +1,3 @@
-//! The command judge: any CLI given as `[judge] argv`, the prompt, the answer
-//! schema and the input on stdin, its stdout the answer, and no dollar cost.
-//! It is a program mazo knows nothing of, so no login is checked.
-
 use std::process::Output;
 
 use super::{Reply, Subprocess, exited, prompted};

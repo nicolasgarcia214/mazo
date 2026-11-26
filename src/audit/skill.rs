@@ -1,6 +1,3 @@
-//! Stage 2: one call over every session record of a skill, the rates mazo
-//! computes, and the skill record the card shows.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -18,24 +15,20 @@ use crate::Result;
 use crate::inventory::git;
 use crate::ledger::Agent;
 
-/// The stage-2 judge prompt, and the version skill records name.
 pub const SKILL_PROMPT: &str = include_str!("../../prompts/skill.md");
 pub const SKILL_PROMPT_VERSION: &str = "skill-v2";
 
-/// Stage 2, one call per skill.
 pub static SKILL: Stage = Stage { prompt: SKILL_PROMPT, schema: &SKILL_SCHEMA };
 
 const VERDICT_CHARS: usize = 400;
 const REPORT_CHARS: usize = 300;
 const REPORT_ITEMS: usize = 5;
 const REPORT_EXAMPLES: usize = 3;
-/// Stage 2's input cuts.
 const COMMITS: &str = "-30";
 const GRADE_BODY_CHARS: usize = 6_000;
 const RETRO_BODIES: usize = 3;
 const RETRO_BODY_CHARS: usize = 4_000;
 
-/// The JSON schema of the stage-2 answer, passed as `--json-schema`.
 pub static SKILL_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     let sessions = json!({"type": "array", "minItems": 1, "items": {"type": "string"}});
     let cited = object(vec![("text", text(REPORT_CHARS)), ("sessions", sessions.clone())]);
@@ -70,7 +63,6 @@ pub static SKILL_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     object(fields).to_string()
 });
 
-/// A finding of the skill report and the sessions behind it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Cited {
@@ -86,7 +78,6 @@ pub struct Improvement {
     pub sessions: Vec<String>,
 }
 
-/// A curated example: paraphrased, citing one session.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Example {
@@ -97,7 +88,6 @@ pub struct Example {
     pub session: String,
 }
 
-/// The stage-2 judge's answer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SkillReport {
@@ -105,20 +95,15 @@ pub struct SkillReport {
     pub patterns: Vec<String>,
     pub works: Vec<Cited>,
     pub failures: Vec<Cited>,
-    /// Ranked, most important first.
     pub improvements: Vec<Improvement>,
     pub versus_grades: String,
     pub examples: Vec<Example>,
-    /// What the skill is for, one or two sentences; none in a record written
-    /// before the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#for: Option<String>,
-    /// Up to three uses to try that the audited sessions did not show.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r#try: Vec<String>,
 }
 
-/// `n of N`, and the sessions counted in `n`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Rate {
     pub n: usize,
@@ -132,7 +117,6 @@ impl Rate {
     }
 }
 
-/// The rates mazo computes from session records, never the judge.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Rates {
     pub followed: Rate,
@@ -153,13 +137,11 @@ impl Rates {
         }
     }
 
-    /// Each rate with the words it is printed with.
     pub fn labeled(&self) -> [(&'static str, &Rate); 3] {
         [("followed", &self.followed), ("achieved", &self.achieved), ("abandoned or redone", &self.abandoned_or_redone)]
     }
 }
 
-/// A skill record of `audits.jsonl`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SkillRecord {
     pub v: u32,
@@ -173,13 +155,10 @@ pub struct SkillRecord {
     pub result: SkillReport,
 }
 
-/// The latest skill record of each skill in `<data>/audits.jsonl`; older ones
-/// stay in the file.
 pub fn latest(data: &Path) -> Result<BTreeMap<String, SkillRecord>> {
     Ok(parsed::<SkillRecord>(data)?.into_iter().filter(|r| r.kind == "skill").map(|r| (r.skill.clone(), r)).collect())
 }
 
-/// A session record as stage 2 reads it.
 #[derive(Serialize, Deserialize)]
 pub(super) struct Judged {
     #[serde(skip_serializing)]
@@ -193,8 +172,6 @@ pub(super) struct Judged {
     result: Verdict,
 }
 
-/// The stage-2 answer checked against its schema and the session records it
-/// may cite. The error says what failed.
 fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<SkillReport, String> {
     let r: SkillReport = serde_json::from_value(answer).map_err(|e| format!("not the answer schema: {e}"))?;
     let over = |s: &String, max: usize| s.chars().count() > max;
@@ -230,16 +207,11 @@ fn validate_report(answer: Value, judged: &[Judged]) -> std::result::Result<Skil
     Ok(r)
 }
 
-/// The stage-2 judge's input: the current `SKILL.md`, its last
-/// 30 commits, every grade's and retro's frontmatter with the latest grade
-/// body and the latest three retro bodies cut, the card's usage section,
-/// every session record of the skill, and the uses those records show.
 fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
     let dir = a.source.join(a.skill);
     let path = dir.join("SKILL.md");
     let skill = fs::read_to_string(&path).map_err(crate::at(&path))?;
     let commits = git(&dir, &["log", COMMITS, "--format=%as %s", "--", "."]).unwrap_or_default();
-    // Each file's frontmatter and body; one that no longer reads is left out.
     let split = |file: &Path| fs::read_to_string(file).ok().and_then(|t| crate::yaml::split_frontmatter(&t).ok());
     let cut = |body: &str, max: usize| body.chars().take(max).collect::<String>();
     let fronts = |files: &mut dyn Iterator<Item = &Path>| -> String {
@@ -278,16 +250,10 @@ fn synthesis_input(a: &Audit, judged: &[Judged]) -> Result<String> {
     .join("\n"))
 }
 
-/// Every session record of the skill.
 pub(super) fn session_records(a: &Audit) -> Result<Vec<Judged>> {
     Ok(parsed::<Judged>(a.data)?.into_iter().filter(|j| j.kind == "session" && j.skill == a.skill).collect())
 }
 
-/// Stage 2: one call over every session record of the skill; with
-/// a budget, capped at it minus what is spent, and skipped when that is under
-/// a cent. A valid answer is appended as the skill record with the rates mazo
-/// computes; an invalid one is retried once, then dropped. A judge that
-/// failed without an answer stops the run.
 pub(super) fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
     let judged = session_records(a)?;
     if judged.is_empty() {

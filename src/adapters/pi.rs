@@ -1,6 +1,3 @@
-//! Pi sessions: `/skill:` expansions, `read` tool calls and `bash`
-//! reads, keyed by entry id and timestamp so fork copies collapse.
-
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -13,7 +10,6 @@ use crate::tail::Chunk;
 
 pub struct Pi;
 
-/// The opening of the `/skill:name` expansion Pi injects as a user message.
 pub const MARKER: &str = "<skill name=";
 
 static SKILL_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
@@ -34,7 +30,6 @@ impl Adapter for Pi {
                 continue;
             }
             let Some(id) = v["id"].as_str() else { continue };
-            // A missing timestamp reaches classify, which counts the load it drops.
             let ts = v["timestamp"].as_str().unwrap_or_default();
             let entry = Entry { roots, session: &session, id, ts, line: *line };
             let msg = &v["message"];
@@ -52,8 +47,6 @@ impl Adapter for Pi {
     }
 }
 
-/// What the judge keeps of an entry: the user's text without
-/// `/skill:` bodies, assistant text, tool calls and tool results.
 fn render(v: &Value) -> Vec<String> {
     if let Some(text) = user_turn(v) {
         return vec![format!("user: {text}")];
@@ -78,9 +71,6 @@ fn render(v: &Value) -> Vec<String> {
     }
 }
 
-/// A user `message` entry. A `/skill:` expansion stands for
-/// `/skill:name args`, and a bare one for nothing, so the walk goes on to the
-/// message before it.
 fn user_turn(v: &Value) -> Option<String> {
     let msg = &v["message"];
     if v["type"] != "message" || msg["role"] != "user" {
@@ -94,7 +84,6 @@ fn user_turn(v: &Value) -> Option<String> {
     }
 }
 
-/// One message entry being parsed.
 struct Entry<'a> {
     roots: &'a SkillRoots,
     session: &'a Session,
@@ -118,8 +107,6 @@ impl Entry<'_> {
         }
     }
 
-    /// A user message whose first text item opens with a `<skill …>` block naming
-    /// an absolute `…/SKILL.md` location (placeholders fail the location check).
     fn slash(&self, content: &Value) -> Option<Raw> {
         let text = match content {
             Value::String(s) => s.as_str(),
@@ -135,8 +122,6 @@ impl Entry<'_> {
         Some(self.raw(key, name.to_string(), Channel::Slash, location.to_string()))
     }
 
-    /// `read` and `bash` tool calls on skill files, one event per skill file
-    /// keyed by its index among the files read.
     fn tool_calls(&self, content: &Value, out: &mut Parsed) {
         let cwd = self.session.cwd.as_deref();
         for (ci, fi, sf) in super::tool_reads(self.roots, &TOOLS, content, cwd, &mut out.unparsed) {
@@ -146,7 +131,6 @@ impl Entry<'_> {
     }
 }
 
-/// The session a Pi session header line describes; `None` for any other line.
 pub fn session_of_header(line: &[u8]) -> Option<Session> {
     let v: Value = serde_json::from_slice(line).ok()?;
     if v["type"] != "session" {

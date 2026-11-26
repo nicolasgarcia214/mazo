@@ -1,6 +1,3 @@
-//! Cost and not a repository: one `git log` and one `git status` per
-//! report give every skill's first and last commit and its uncommitted changes.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -13,7 +10,6 @@ use common::{Mazo, World, git, stderr, write};
 use mazo::inventory::Inventory;
 use mazo::report::{self, Since};
 
-/// `git add -A` and commit everything under `repo` on `date`.
 fn commit(repo: &Path, subject: &str, date: &str) {
     git(repo, &["add", "-A"], date);
     git(repo, &["commit", "-q", "-m", subject], date);
@@ -23,7 +19,6 @@ fn skill(dir: &Path, name: &str) {
     write(&dir.join(name).join("SKILL.md"), &format!("---\nname: {name}\ndescription: d\n---\n"));
 }
 
-/// `repo/skills` is the source; `repo/other` lies outside it.
 fn known_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
@@ -83,15 +78,11 @@ fn outside_a_worktree_history_is_absent() {
     assert_eq!(v["skills"][0]["status"], "unused", "no new flag without history");
 }
 
-/// The first `git` on PATH that is not in `skip`.
 fn real_git(skip: &Path) -> PathBuf {
     let path = std::env::var_os("PATH").unwrap();
     std::env::split_paths(&path).map(|d| d.join("git")).find(|g| g.is_file() && !g.starts_with(skip)).unwrap()
 }
 
-/// AC: a report starts the same few git processes whatever the number of
-/// skills: `rev-parse` for the worktree, then one `status` and one `log`;
-/// `show` adds one `config` for the origin remote, which this repository lacks.
 #[test]
 fn a_report_runs_one_log_and_one_status_whatever_the_skill_count() {
     for n in [1, 6] {

@@ -8,13 +8,15 @@ agent. Back to the [README](README.md).
 CI runs these on Linux and macOS with Rust 1.98.1:
 
 ```sh
+node scripts/lint_comments.js
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 TZ=Pacific/Kiritimati cargo test --locked
 TZ=Pacific/Pago_Pago cargo test --locked
 ```
 
-The two `TZ` values are UTC+14 and UTC-11.
+The two `TZ` values are UTC+14 and UTC-11. The first command enforces the comment
+ban in [ADR 0001](docs/adr/0001-comment-ban.md).
 
 The suite includes sync's linking and policy cases and ingest
 properties such as "a fresh scan equals an incremental one". The tests read the synthetic

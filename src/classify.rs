@@ -1,6 +1,3 @@
-//! Identity, actor, root session, origin and the stored authoring tag,
-//! computed once for every adapter.
-
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -12,43 +9,30 @@ use crate::config::Home;
 use crate::inventory::Inventory;
 use crate::ledger::{self, Actor, Agent, Event, Origin};
 
-/// `<data dir>/roots.json`: Codex rollout id or Pi session id → its root session id.
 const ROOTS: &str = "roots.json";
 
-/// Walks session chains to their root. A root a walk reaches is stored and
-/// used without walking from then on, so a session keeps it after a file in
-/// its chain is deleted; header lookups are cached for one scan.
 #[derive(Default)]
 pub struct Roots {
     stored: BTreeMap<String, String>,
-    /// Codex rollout id → its file, per transcripts dir, built lazily from file names.
     codex_files: HashMap<PathBuf, HashMap<String, PathBuf>>,
     headers: HashMap<PathBuf, Option<Session>>,
 }
 
 impl Roots {
-    /// The roots stored in `data`; `None` when `roots.json` is missing or
-    /// corrupt and must be rebuilt with [`Roots::visit`].
     pub fn load(data: &Path) -> Result<Option<Roots>> {
         Ok(ledger::read_derived(&data.join(ROOTS))?.map(|stored| Roots { stored, ..Roots::default() }))
     }
 
-    /// Writes the stored roots to `data`; the caller holds the scan lock.
     pub fn save(&self, data: &Path) -> Result<()> {
         ledger::write_json(&data.join(ROOTS), &self.stored)
     }
 
-    /// Walks the session in the transcript `file` of `home` to its root.
     pub fn visit(&mut self, home: &Home, file: &Path) {
         if let Some(s) = self.header(home.agent, file) {
             self.root(home, &s.id, s.parent.as_ref());
         }
     }
 
-    /// The root of session `id`: its stored root, else the end of the walk up
-    /// its parents. A walk that reaches a session with no parent, or a stored
-    /// root, stores that root for every session it passed; one that reaches a
-    /// missing file ends at that file's id and stores nothing.
     pub fn root(&mut self, home: &Home, id: &str, parent: Option<&Parent>) -> String {
         let Some(parent) = parent else { return id.to_string() };
         if let Some(root) = self.stored.get(id) {
@@ -62,22 +46,18 @@ impl Roots {
                 return self.store(passed, root);
             }
             match header.map(|s| s.parent) {
-                // A missing file ends the walk at its id and stores nothing.
                 None => return id,
                 Some(None) => return self.store(passed, id),
                 Some(Some(p)) => parent = p,
             }
             passed.push(id);
         }
-        // A walk cut off at 64 steps stores nothing: Codex ends at the next
-        // unread parent's id, Pi at the last session whose header was read.
         match parent {
             Parent::Codex(id) => id,
             Parent::Pi(_) => passed.pop().unwrap_or_default(),
         }
     }
 
-    /// Stores `root` for every session in `passed` that has none yet.
     fn store(&mut self, passed: Vec<String>, root: String) -> String {
         for id in passed {
             self.stored.entry(id).or_insert_with(|| root.clone());
@@ -85,8 +65,6 @@ impl Roots {
         root
     }
 
-    /// The id of the session `parent` names, and its header while its file is
-    /// on disk. A missing Pi file's id comes from its name, `<ts>_<id>.jsonl`.
     fn session(&mut self, home: &Home, parent: &Parent) -> (String, Option<Session>) {
         match parent {
             Parent::Codex(id) => {
@@ -109,7 +87,6 @@ impl Roots {
                 .into_iter()
                 .filter_map(|p| {
                     let stem = p.file_stem()?.to_str()?.to_string();
-                    // rollout-<start time>-<id>: the id is the trailing UUID (36 chars).
                     let id = stem.get(stem.len().checked_sub(36)?..)?.to_string();
                     Some((id, p))
                 })
@@ -132,28 +109,19 @@ pub struct Classifier<'a> {
     pub inv: &'a Inventory,
     pub home: &'a Home,
     pub homes: &'a [Home],
-    /// `<data dir>/audit-runs`, where the judge runs.
     pub audit_runs: &'a Path,
-    /// When the scan started: a record dated more than [`SKEW`] after it is corrupt.
     pub now: Timestamp,
 }
 
-/// How far ahead of the scan's clock a record may be dated, for transcripts
-/// synced from a machine whose clock runs ahead.
 const SKEW: SignedDuration = SignedDuration::from_hours(24);
 
-/// Why [`Classifier::event`] makes no event of a raw one.
 #[derive(Debug, PartialEq)]
 pub enum Dropped {
-    /// The session's cwd is inside `<data dir>/audit-runs/`: the judge's own
-    /// runs are never usage.
     AuditRun,
-    /// The record's timestamp does not parse or lies past `now` and [`SKEW`].
     Timestamp,
 }
 
 impl Classifier<'_> {
-    /// The event for `raw`, or why there is none.
     pub fn event(&self, roots: &mut Roots, raw: Raw, file: &Path) -> std::result::Result<Event, Dropped> {
         if raw.session.cwd.as_deref().is_some_and(|c| Path::new(c).starts_with(self.audit_runs)) {
             return Err(Dropped::AuditRun);
@@ -169,23 +137,18 @@ impl Classifier<'_> {
             Key::Plain(s) => s.clone(),
             Key::Codex { hash, index } => format!("cx:{session}:{hash}:{index}"),
         };
-        // A Skill result keeps its name-based origin even after the meta record adds a
-        // path, so a merged event equals a split-then-upgraded one.
         let origin = if raw.name_origin {
             self.name_origin(&raw.skill, raw.channel)
         } else {
             self.path_origin(&raw.skill, raw.path.as_deref())
         };
         let cwd = raw.cwd.or(raw.session.cwd.clone());
-        // Only weak reads can be authoring; the stored part is the cwd rule.
         let authoring = !raw.channel.strong()
             && cwd.as_deref().is_some_and(|c| {
                 let c = Path::new(c);
                 self.inv.worktree.as_deref().is_some_and(|w| c.starts_with(w))
                     || self.homes.iter().any(|h| c.starts_with(h.skills_dir()))
             });
-        // Transcript fields are anyone's text: stored inert, so no report,
-        // card or TUI can print a control character from one.
         let inert = |s: Option<String>| s.as_deref().map(crate::render::inert);
         Ok(Event {
             v: 1,
@@ -206,11 +169,6 @@ impl Classifier<'_> {
         })
     }
 
-    /// Claude Skill results and typed history: the name alone decides. A Skill
-    /// result needs a known name, so renamed or pruned skills keep their
-    /// events; a typed line needs a skill canonical now, because history has
-    /// no path to check and a name such as `argus` can be an old skill or a
-    /// later plugin command.
     fn name_origin(&self, skill: &str, channel: crate::ledger::Channel) -> Origin {
         let names = if channel == crate::ledger::Channel::Typed { &self.inv.skills } else { &self.inv.known };
         if names.contains(skill) { Origin::Canonical } else { Origin::Other }
@@ -221,7 +179,6 @@ impl Classifier<'_> {
             return if self.inv.known.contains(skill) { Origin::Canonical } else { Origin::Other };
         };
         let p = Path::new(path);
-        // Under any skill root, the store's included, whether reached through a home link or not.
         let rooted = |r: PathBuf| self.inv.roots.iter().any(|root| r.starts_with(root));
         if std::fs::canonicalize(p).is_ok_and(rooted) {
             return Origin::Canonical;
@@ -236,7 +193,6 @@ impl Classifier<'_> {
     }
 }
 
-/// The actor, first matching rule wins.
 pub fn actor(agent: Agent, a: &crate::adapters::ActorInputs) -> Actor {
     let ep = a.entrypoint.as_deref();
     if agent == Agent::Claude && ep.is_some_and(|e| e != "cli" && e != "sdk-cli") {

@@ -1,7 +1,3 @@
-//! The multi-select `mazo add` opens at a terminal, or in the TUI's add
-//! dialog, on a source holding several skills: each skill's path and
-//! description, and the ones to install.
-
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -11,23 +7,18 @@ use ratatui::widgets::Paragraph;
 
 use crate::theme;
 
-/// The keys, as the footer lists them.
 const KEYS: &str = "↑↓/jk move · Space select · a all · Enter install · Esc/q cancel";
 
-/// The skills on offer, the cursor and which are selected; no rendering state.
 #[derive(Debug)]
 pub struct Picker {
-    /// Each skill's path and description, in list order.
     items: Vec<(String, String)>,
     cursor: usize,
     selected: Vec<bool>,
 }
 
-/// Where a key leaves the picker.
 #[derive(Debug, PartialEq)]
 pub enum Step {
     Open,
-    /// The selected paths in list order; none when cancelled.
     Done(Vec<String>),
 }
 
@@ -37,9 +28,6 @@ impl Picker {
         Picker { items, cursor: 0, selected }
     }
 
-    /// Applies `key`: ↑↓ or jk move, Space toggles the skill under the
-    /// cursor, `a` selects every skill or, when all are, none; Enter confirms;
-    /// Esc, `q` and Ctrl-C cancel.
     pub fn key(&mut self, key: KeyEvent) -> Step {
         if key.kind != KeyEventKind::Press {
             return Step::Open;
@@ -71,7 +59,6 @@ impl Picker {
         self.items.iter().zip(&self.selected).filter(|(_, s)| **s).map(|((n, _), _)| n.clone()).collect()
     }
 
-    /// Draws the list and its footer into `area`.
     pub fn draw(&self, frame: &mut Frame, area: Rect) {
         let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(2)]).areas(area);
         let count = self.selected.iter().filter(|s| **s).count();
@@ -82,7 +69,6 @@ impl Picker {
         ]);
         frame.render_widget(Paragraph::new(vec![status, theme::hints(KEYS)]), footer);
         let width = self.items.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0);
-        // The rows from the one that keeps the cursor in view.
         let first = self.cursor.saturating_sub(usize::from(body.height).saturating_sub(1));
         let lines: Vec<Line> = self
             .items
@@ -106,9 +92,6 @@ impl Picker {
     }
 }
 
-/// Runs a [`Picker`] over `items` until it is confirmed or cancelled: the
-/// selected paths. The terminal is restored on every return, and on a panic
-/// by the hook `ratatui::try_init` installs.
 pub fn pick(items: Vec<(String, String)>) -> std::io::Result<Vec<String>> {
     let mut picker = Picker::new(items);
     let result = ratatui::try_init().and_then(|mut terminal| {
@@ -135,7 +118,6 @@ mod tests {
         Picker::new(["one", "two", "three"].iter().map(|n| (n.to_string(), format!("The {n} skill."))).collect())
     }
 
-    /// Applies each key in turn: the last step.
     fn keys(p: &mut Picker, codes: &[KeyCode]) -> Step {
         codes.iter().map(|c| p.key(KeyEvent::new(*c, KeyModifiers::NONE))).last().unwrap()
     }

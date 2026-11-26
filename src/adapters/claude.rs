@@ -1,11 +1,3 @@
-//! Claude Code transcripts.
-//!
-//! Every event comes from the harness's own structured record: a Skill result
-//! (`toolUseResult.commandName`), an `isMeta` record carrying `Base directory
-//! for this skill`, or an assistant `Read`/`Bash` tool call. Text inside
-//! `tool_result` content, `<command-name>` records and skill attachments are
-//! never read.
-
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
@@ -18,7 +10,6 @@ use crate::tail::Chunk;
 
 pub struct Claude;
 
-/// The line opening a loaded skill's body, before `: DIR`.
 pub const MARKER: &str = "Base directory for this skill";
 const TOOLS: ToolNames =
     ToolNames { block: "tool_use", input: "input", read: "Read", path: "file_path", shell: "Bash" };
@@ -27,7 +18,6 @@ impl Adapter for Claude {
     fn parse(&self, roots: &SkillRoots, path: &Path, _header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let in_subagents = path.to_string_lossy().contains("/subagents/");
         let mut out = Parsed::default();
-        // tool_use id → index in `out.raws` of the event that id already produced.
         let mut loads: HashMap<String, usize> = HashMap::new();
         for (line, bytes) in &chunk.lines {
             let Ok(rec) = serde_json::from_slice::<Value>(bytes) else { continue };
@@ -46,9 +36,6 @@ impl Adapter for Claude {
     }
 }
 
-/// What the judge keeps of a record: the user's text, assistant
-/// text, tool calls and tool results. Meta records, which carry skill bodies,
-/// keep nothing.
 fn render(v: &Value) -> Vec<String> {
     if let Some(text) = authored(v) {
         return vec![format!("user: {text}")];
@@ -70,7 +57,6 @@ fn render(v: &Value) -> Vec<String> {
     }
 }
 
-/// One transcript record with the fields every event takes from it.
 struct Record<'a> {
     v: &'a Value,
     line: u64,
@@ -92,7 +78,6 @@ impl<'a> Record<'a> {
             cwd: s("cwd"),
             version: s("version"),
         };
-        // A missing timestamp reaches classify, which counts the load it drops.
         Some(Record { v, line, ts: s("timestamp").unwrap_or_default(), session })
     }
 
@@ -115,7 +100,6 @@ impl<'a> Record<'a> {
     }
 }
 
-/// Rows 1–3: the Skill result, and the meta record that carries the skill body.
 fn user(r: &Record, loads: &mut HashMap<String, usize>, out: &mut Parsed) {
     let v = r.v;
     let result = &v["toolUseResult"];
@@ -137,9 +121,6 @@ fn user(r: &Record, loads: &mut HashMap<String, usize>, out: &mut Parsed) {
     let skill_md = format!("{}/SKILL.md", dir.trim_end_matches('/'));
     let Some(name) = Path::new(dir).file_name().and_then(|n| n.to_str()) else { return };
     match v["sourceToolUseID"].as_str() {
-        // The meta record of a Skill call: it supplies the path of the result's
-        // event, or stands alone when the result is elsewhere or has no
-        // `toolUseResult` (subagents).
         Some(id) => match loads.get(id) {
             Some(&i) => {
                 out.raws[i].path.get_or_insert(skill_md);
@@ -156,8 +137,6 @@ fn user(r: &Record, loads: &mut HashMap<String, usize>, out: &mut Parsed) {
     }
 }
 
-/// The `<dir>` of the first text block starting `Base directory for this skill:`.
-/// A plain-string `content` counts as block 0.
 fn base_dir(content: &Value) -> Option<&str> {
     let texts: Box<dyn Iterator<Item = &str>> = match content {
         Value::String(s) => Box::new(std::iter::once(s.as_str())),
@@ -173,10 +152,6 @@ fn blocks(content: &Value) -> impl Iterator<Item = &Value> {
     content.as_array().into_iter().flatten()
 }
 
-/// A `typed` history line's `display`, or a user record that is
-/// neither a `tool_result` nor `isMeta`. A slash command record stands for
-/// `/name args`, and a bare `/name` for nothing, so the walk goes on to the
-/// message before it.
 fn authored(v: &Value) -> Option<String> {
     if let Some(display) = v["display"].as_str() {
         return super::strip_injected(display);
@@ -194,14 +169,11 @@ fn authored(v: &Value) -> Option<String> {
     }
 }
 
-/// The text between `<name>` and `</name>`.
 fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     let (_, rest) = text.split_once(&format!("<{name}>"))?;
     Some(rest.split_once(&format!("</{name}>"))?.0)
 }
 
-/// Rows 4–5: `Read` and `Bash` tool calls on skill files, one event per skill
-/// file keyed by its index among the files read.
 fn assistant(roots: &SkillRoots, r: &Record, out: &mut Parsed) {
     let Some(uuid) = r.v["uuid"].as_str() else { return };
     for (ci, fi, sf) in super::tool_reads(roots, &TOOLS, r.content(), r.session.cwd.as_deref(), &mut out.unparsed) {
@@ -209,9 +181,6 @@ fn assistant(roots: &SkillRoots, r: &Record, out: &mut Parsed) {
     }
 }
 
-/// One-time `typed` events from `<home>/history.jsonl` (the history backfill).
-/// A line counts when its `display` is `/<known name>` followed by whitespace or
-/// the end, and no `<sessionId>.jsonl` transcript exists under the home.
 pub fn backfill(home: &Home, known: &BTreeSet<String>) -> Vec<Raw> {
     let Ok(bytes) = std::fs::read(home.path.join("history.jsonl")) else { return Vec::new() };
     let transcripts: HashSet<String> = super::jsonl_files(&home.transcripts())
