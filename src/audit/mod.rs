@@ -31,18 +31,16 @@ pub use skill::{
 use skill::{session_records, synthesize};
 pub use vet::{Quality, VET_PROMPT, VET_SCHEMA, Vet, VetVerdict, Worth, vet, vet_input};
 
-use crate::Result;
 use crate::config::{Billing, Judge, JudgeAgent};
 use crate::durable;
 use crate::evals::Evals;
 use crate::ledger::{Agent, name};
 use crate::render::{self, Align, Diag, Note};
+use crate::{Error, Result};
 
 pub const CENT: u64 = 10_000;
 
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
-
-pub(crate) const CANCELLED: &str = "cancelled";
 
 #[derive(Deserialize)]
 struct Recorded {
@@ -320,7 +318,7 @@ fn judge<T>(
             return Ok(Ruling::Unfunded(why));
         }
         if c.cancelled() {
-            return Err(CANCELLED.into());
+            return Err(Error::Cancelled);
         }
         if c.pane.is_some() || std::io::stderr().is_terminal() {
             let cap = cap.map(|cap| format!(" (cap {})", c.usd(cap))).unwrap_or_default();

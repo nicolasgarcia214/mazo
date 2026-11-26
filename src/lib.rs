@@ -31,13 +31,14 @@ pub mod yaml;
 pub enum Error {
     Usage(String),
     Failed(String),
+    Cancelled,
 }
 
 impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Error::Usage(_) => 2,
-            Error::Failed(_) => 1,
+            Error::Failed(_) | Error::Cancelled => 1,
         }
     }
 }
@@ -46,6 +47,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Error::Usage(m) | Error::Failed(m) => f.write_str(m),
+            Error::Cancelled => f.write_str("cancelled"),
         }
     }
 }
@@ -105,5 +107,12 @@ mod tests {
         let names: Vec<String> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
         let distinct: std::collections::BTreeSet<_> = names.iter().collect();
         assert_eq!(distinct.len(), names.len());
+    }
+
+    #[test]
+    fn a_cancelled_run_exits_1_and_says_cancelled() {
+        let err = super::Error::Cancelled;
+        assert_eq!(err.exit_code(), 1);
+        assert_eq!(err.to_string(), "cancelled");
     }
 }

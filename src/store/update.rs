@@ -41,7 +41,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
     let tagged = OnceCell::new();
     for l in lock.skills.iter().filter(|l| names.is_empty() || names.contains(&l.name)) {
         if out.cancelled() {
-            return Err(audit::CANCELLED.into());
+            return Err(Error::Cancelled);
         }
         let mut remote = match l.remote() {
             Ok(Some(remote)) => remote,
@@ -158,7 +158,7 @@ fn refresh(
         .into());
     }
     if out.cancelled() {
-        return Err(audit::CANCELLED.into());
+        return Err(Error::Cancelled);
     }
     recover(&to, &old).map_err(crate::at(&old))?;
     let fresh = if target.project.is_none() { Some(inventory(cfg.source.as_deref(), data)?) } else { None };
