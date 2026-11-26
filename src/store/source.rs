@@ -210,7 +210,7 @@ impl Remote {
         let spawned = git.spawn().and_then(|child| audit::wait(child, None, CLONE_LIMIT, cancel));
         let Some(out) = spawned.map_err(|e| format!("git: {e}"))? else {
             if cancel() {
-                return Err(audit::CANCELLED.into());
+                return Err(crate::Error::Cancelled);
             }
             let minutes = CLONE_LIMIT.as_secs() / 60;
             return Err(format!("git {verb} {}: not done within {minutes} minutes; it was killed", self.url).into());

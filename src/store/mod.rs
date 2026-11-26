@@ -143,7 +143,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
     let mut outcome = Outcome::Done;
     for child in children {
         if out.cancelled() {
-            return Err(audit::CANCELLED.into());
+            return Err(Error::Cancelled);
         }
         if let Err(e) = install(cfg, &mut inv, target, args, caller.as_ref(), &from, child) {
             out.error(Diag::error(e.to_string()).into());

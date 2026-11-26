@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::session::{SESSION, SESSION_PROMPT, SESSION_SCHEMA};
-use super::{CANCELLED, Stage, cents, frame};
-use crate::Result;
+use super::{Stage, cents, frame};
 use crate::config::{Billing, Home, Judge, JudgeAgent};
 use crate::ledger::Agent;
+use crate::{Error, Result};
 
 pub trait Backend {
     fn call(
@@ -259,7 +259,7 @@ fn spawn(
     homed.map_err(crate::at(&home))?;
     let Some(output) = output else {
         if cancel() {
-            return Err(CANCELLED.into());
+            return Err(Error::Cancelled);
         }
         let minutes = JUDGE_TIMEOUT.as_secs() / 60;
         let answer = Err(NoAnswer::Retry(format!("no answer within {minutes} minutes; the judge was killed")));
