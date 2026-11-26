@@ -243,7 +243,7 @@ impl Drop for Progress {
 }
 
 fn has_canary(chunk: &tail::Chunk) -> bool {
-    chunk.lines.iter().any(|(_, l)| adapters::MARKERS.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
+    chunk.lines.iter().any(|(_, l)| adapters::markers().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
 }
 
 pub(crate) fn first_timestamp(path: &Path) -> Option<jiff::Timestamp> {

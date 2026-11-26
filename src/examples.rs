@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use clap::ValueEnum;
 use serde::Serialize;
 
 use crate::adapters::{self, Transcripts};
@@ -74,7 +75,7 @@ fn real<'e>(skill: &str, events: impl IntoIterator<Item = &'e Event>, memo: &mut
             None => {}
         }
     }
-    let bare = [Agent::Claude, Agent::Codex, Agent::Pi].map(|a| invocation(a, skill));
+    let bare: Vec<String> = Agent::value_variants().iter().map(|&a| invocation(a, skill)).collect();
     projects
         .into_iter()
         .filter_map(|(_, list)| {
