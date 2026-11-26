@@ -36,7 +36,7 @@ use crate::config::{Billing, Judge, JudgeAgent};
 use crate::durable;
 use crate::evals::Evals;
 use crate::ledger::{Agent, name};
-use crate::render::{self, Align};
+use crate::render::{self, Align, Diag, Note};
 
 pub const CENT: u64 = 10_000;
 
@@ -217,7 +217,7 @@ pub struct Audit<'a> {
 }
 
 pub struct Pane {
-    pub lines: mpsc::Sender<String>,
+    pub lines: mpsc::Sender<Note>,
     pub cancel: Arc<AtomicBool>,
 }
 
@@ -249,9 +249,10 @@ impl Caller<'_> {
         usd(self.judge, micros)
     }
 
-    fn note(&self, line: &str) {
+    fn note(&self, line: impl Into<Note>) {
+        let line = line.into();
         match self.pane {
-            Some(pane) => _ = pane.lines.send(line.into()),
+            Some(pane) => _ = pane.lines.send(line),
             None => eprintln!("{line}"),
         }
     }
@@ -323,7 +324,7 @@ fn judge<T>(
         }
         if c.pane.is_some() || std::io::stderr().is_terminal() {
             let cap = cap.map(|cap| format!(" (cap {})", c.usd(cap))).unwrap_or_default();
-            c.note(&format!("{progress}{cap}"));
+            c.note(format!("{progress}{cap}"));
         }
         let input = retry(input, rejected.as_deref());
         let reply = c.backend.call(c.data, c.judge.billing, stage, cap, &input, &|| c.cancelled())?;
@@ -378,7 +379,8 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                 run.judged += 1;
             }
             Ruling::Dropped(why) => {
-                a.caller().note(&format!("warning: {}: judge answer dropped after one retry: {why}", c.event.session));
+                a.caller()
+                    .note(Diag::warning(format!("{}: judge answer dropped after one retry: {why}", c.event.session)));
                 run.dropped += 1;
             }
             Ruling::Unfunded(_) => {
@@ -386,7 +388,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                 break;
             }
             Ruling::Stopped(why) => {
-                a.caller().note(&format!("ERROR: {}: {why}", c.event.session));
+                a.caller().note(Diag::error(format!("{}: {why}", c.event.session)));
                 a.caller().hint();
                 run.left = &candidates[i..];
                 run.stopped = true;

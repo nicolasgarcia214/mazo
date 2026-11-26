@@ -16,7 +16,7 @@ use crate::ledger::name;
 use crate::lifecycle::{self, Retired};
 use crate::links::{self, Plan};
 use crate::pick::Picker;
-use crate::render::PathExt;
+use crate::render::{Diag, Level, Note, PathExt};
 use crate::store;
 use crate::theme;
 
@@ -37,17 +37,25 @@ pub(super) enum Ask {
 }
 
 pub(super) struct Dialog {
-    pub(super) lines: Vec<String>,
+    pub(super) lines: Vec<Note>,
     pub(super) ask: Option<Ask>,
 }
 
-fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<String>> {
+pub(super) fn notes(lines: Vec<impl Into<Note>>) -> Vec<Note> {
+    lines.into_iter().map(Into::into).collect()
+}
+
+pub(super) fn refused(errors: Vec<Diag>) -> Vec<Note> {
+    [vec!["sync refused:".into()], notes(errors)].concat()
+}
+
+fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<Note>> {
     let _lock = durable::lock(&d.dir)?;
     let inv = store::inventory(d.cfg.source.as_deref(), &d.dir)?;
     let homes: Vec<&Home> = d.cfg.homes.iter().collect();
     match links::checked(&d.cfg, &inv, &homes) {
-        Ok(now) if now.actions == plan.actions => links::apply(plan),
-        Err(errors) => Ok([vec!["sync refused:".into()], errors].concat()),
+        Ok(now) if now.actions == plan.actions => links::apply(plan).map(notes),
+        Err(errors) => Ok(refused(errors)),
         Ok(_) => Err("sync refused: the links changed since the plan; press s to plan again".into()),
     }
 }
@@ -59,7 +67,7 @@ impl App {
         }
         let d = &self.data;
         match audit::plan(&d.cfg, &d.inv, &skill, None) {
-            Err(e) => Dialog { lines: vec![format!("ERROR: {e}")], ask: None },
+            Err(e) => Dialog { lines: vec![Diag::error(e.to_string()).into()], ask: None },
             Ok(p) => {
                 let judge = name(p.judge.agent);
                 let cap = match p.budget {
@@ -68,14 +76,14 @@ impl App {
                 };
                 let lines =
                     vec![format!("audit {skill} with the {judge} judge in the background?"), format!("cap: {cap}")];
-                Dialog { lines, ask: Some(Ask::Audit(skill)) }
+                Dialog { lines: notes(lines), ask: Some(Ask::Audit(skill)) }
             }
         }
     }
 
     pub(super) fn one_job(&self) -> Option<Dialog> {
         let job = self.running()?;
-        let lines = vec![format!("the {} of {} is running; one job at a time", job.verb, job.target)];
+        let lines = vec![format!("the {} of {} is running; one job at a time", job.verb, job.target).into()];
         Some(Dialog { lines, ask: None })
     }
 
@@ -89,7 +97,7 @@ impl App {
             Some(l) => (!l.updatable()).then_some("installed from a local path"),
         });
         if let (Some(s), Some(why)) = (&skill, why) {
-            return Dialog { lines: vec![format!("{s}: not updatable; {why}")], ask: None };
+            return Dialog { lines: vec![format!("{s}: not updatable; {why}").into()], ask: None };
         }
         let what = skill.as_deref().unwrap_or("every store skill");
         let lines = match &d.cfg.judge {
@@ -100,7 +108,7 @@ impl App {
             Some(judge) => {
                 let judge_name = name(judge.agent);
                 let cap = match audit::backend(judge, &d.cfg.homes) {
-                    Err(e) => format!("ERROR: {e}"),
+                    Err(e) => Diag::error(e.to_string()).to_string(),
                     Ok(b) if b.budget_flag().is_some() => {
                         format!("cap: {} per call", audit::usd(judge, audit::DEFAULT_BUDGET))
                     }
@@ -113,7 +121,7 @@ impl App {
                 ]
             }
         };
-        Dialog { lines, ask: Some(Ask::Update(skill)) }
+        Dialog { lines: notes(lines), ask: Some(Ask::Update(skill)) }
     }
 
     pub(super) fn retire(&mut self, skill: String) {
@@ -127,28 +135,31 @@ impl App {
             }
             _ => "remove it from the store".into(),
         };
-        let lines = vec![format!("retire {skill}: {what} and prune its links?")];
+        let lines = vec![format!("retire {skill}: {what} and prune its links?").into()];
         self.dialog = Some(Dialog { lines, ask: Some(Ask::Act(Act::Retire(skill))) });
     }
 
-    pub(super) fn act(&mut self, act: Act) -> Vec<String> {
+    pub(super) fn act(&mut self, act: Act) -> Vec<Note> {
         self.clear = true;
         let d = &self.data;
-        let mut out = Vec::new();
+        let mut warnings = Vec::new();
         let ran = match act {
             Act::Retire(skill) => {
-                lifecycle::retire(&d.cfg, &d.dir, &skill, false, false, &mut out).map(|retired| match retired {
-                    Retired::Blocked(lines) | Retired::Refused(lines) => {
-                        [vec![format!("retire {skill} refused:")], lines].concat()
+                lifecycle::retire(&d.cfg, &d.dir, &skill, false, false, &mut warnings).map(|retired| {
+                    let head = |lines| [vec![format!("retire {skill} refused:").into()], lines].concat();
+                    match retired {
+                        Retired::Blocked(lines) => head(notes(lines)),
+                        Retired::Refused(lines) => head(notes(lines)),
+                        Retired::Done(lines) => notes(lines),
                     }
-                    Retired::Done(lines) => lines,
                 })
             }
             Act::Sync(plan) => synced(d, &plan),
         };
-        out.extend(ran.unwrap_or_else(|e| vec![format!("ERROR: {e}")]));
+        let mut out = notes(warnings);
+        out.extend(ran.unwrap_or_else(|e| vec![Diag::error(e.to_string()).into()]));
         if let Err(e) = self.reload() {
-            out.push(format!("ERROR: {e}"));
+            out.push(Diag::error(e.to_string()).into());
         }
         out
     }
@@ -165,7 +176,13 @@ impl Dialog {
             Some(Ask::Source(_) | Ask::Pick(..)) => ("add", theme::ACCENT),
             Some(Ask::Answer(..)) => ("confirm", theme::WARN),
             Some(Ask::Help(_)) => ("help", theme::ACCENT),
-            None if self.lines.iter().any(|l| l.contains("ERROR:") || l.contains(" refused")) => ("error", theme::BAD),
+            None if self
+                .lines
+                .iter()
+                .any(|l| l.level() == Some(Level::Error) || l.to_string().contains(" refused")) =>
+            {
+                ("error", theme::BAD)
+            }
             None => ("mazo", theme::ACCENT),
         }
     }
@@ -185,16 +202,17 @@ pub(super) fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
         frame.render_widget(block, modal);
         return;
     }
-    let raw: Vec<&str> = dialog.lines.iter().flat_map(|l| l.lines()).collect();
-    let mut wide = raw.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let raw: Vec<(Option<Level>, String)> =
+        dialog.lines.iter().flat_map(Note::split).map(|l| (l.level(), l.to_string())).collect();
+    let mut wide = raw.iter().map(|(_, l)| l.chars().count()).max().unwrap_or(0);
     if let Some(Ask::Source(source)) = &dialog.ask {
         wide = wide.max(source.chars().count() + 3);
     }
     let width = (wide as u16 + 6).clamp(area.width.min(48), area.width);
     let mut lines: Vec<Line> = Vec::new();
-    for (i, line) in raw.iter().enumerate() {
-        for piece in wrap(line, width.saturating_sub(6).into()) {
-            let piece = status_line(&piece);
+    for (i, (level, line)) in raw.iter().enumerate() {
+        for (j, piece) in wrap(line, width.saturating_sub(6).into()).into_iter().enumerate() {
+            let piece = status_line(level.filter(|_| j == 0), &piece);
             lines.push(if i == 0 && dialog.ask.is_some() { piece.bold() } else { piece });
         }
     }
@@ -219,7 +237,7 @@ pub(super) fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), modal);
 }
 
-pub(super) fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize, area: Rect) -> usize {
+pub(super) fn draw_help(frame: &mut Frame, lines: &[Note], scroll: &mut usize, area: Rect) -> usize {
     let modal = area.inner(Margin::new(2, 1));
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -242,10 +260,10 @@ pub(super) fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize,
         inner = rest;
     }
     let mut text: Vec<Line> = Vec::new();
-    for line in lines {
+    for line in lines.iter().map(Note::to_string) {
         let indent = line.len() - line.trim_start().len();
         let term = line[indent..].find("  ").map(|at| indent + at);
-        for (i, piece) in wrap(line, inner.width.saturating_sub(1).into()).into_iter().enumerate() {
+        for (i, piece) in wrap(&line, inner.width.saturating_sub(1).into()).into_iter().enumerate() {
             text.push(match term {
                 Some(at) if i == 0 && at < piece.len() => Line::from(vec![
                     Span::raw(piece[..at].to_string()).fg(theme::ACCENT),
@@ -297,4 +315,28 @@ fn typed_line(source: &str, width: usize) -> String {
         return line;
     }
     format!("…{}", line.chars().skip(n + 1 - width.max(1)).collect::<String>())
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::Color;
+
+    use super::Dialog;
+    use crate::render::{Diag, Level};
+    use crate::theme;
+    use crate::tui::draw::status_line;
+
+    #[test]
+    fn the_frame_and_the_head_colour_come_from_the_diag_level() {
+        let frame = |lines| Dialog { lines, ask: None }.frame();
+        assert_eq!(frame(vec![Diag::error("x").into()]), ("error", theme::BAD));
+        assert_eq!(frame(vec![Diag::warning("x").into()]), ("mazo", theme::ACCENT));
+        assert_eq!(frame(vec!["ERROR: x".into()]), ("mazo", theme::ACCENT));
+        assert_eq!(frame(vec!["update refused".into()]), ("error", theme::BAD));
+        let head = |level, line| status_line(level, line).spans[0].style.fg;
+        assert_eq!(head(Some(Level::Error), "ERROR: x"), Some(theme::BAD));
+        assert_eq!(head(Some(Level::Warning), "warning: x"), Some(theme::WARN));
+        assert_eq!(head(None, "ERROR: x"), None::<Color>);
+        assert_eq!(head(None, "held x"), Some(theme::WARN));
+    }
 }

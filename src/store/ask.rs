@@ -4,12 +4,13 @@ use std::path::Path;
 use super::Add;
 use crate::audit::Pane;
 use crate::inventory::description;
+use crate::render::Note;
 use crate::{Error, Result, outln};
 
 pub trait Io {
     fn pane(&self) -> Option<&Pane>;
     fn line(&self, line: &str);
-    fn error(&self, line: &str);
+    fn error(&self, line: Note);
     fn cancelled(&self) -> bool;
     fn can_ask(&self) -> bool;
     fn confirms_calls(&self) -> bool;
@@ -28,7 +29,7 @@ impl Io for Terminal {
         outln!("{line}");
     }
 
-    fn error(&self, line: &str) {
+    fn error(&self, line: Note) {
         eprintln!("{line}");
     }
 

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::audit::{self, Caller};
 use crate::config::{self, Config, Home};
 use crate::inventory::Inventory;
-use crate::render::PathExt;
+use crate::render::{Diag, PathExt};
 use crate::{Error, Result};
 use crate::{durable, links};
 
@@ -146,7 +146,7 @@ pub fn add(cfg: &Config, inv: &Inventory, data: &Path, args: &Add) -> Result<Out
             return Err(audit::CANCELLED.into());
         }
         if let Err(e) = install(cfg, &mut inv, target, args, caller.as_ref(), &from, child) {
-            out.error(&format!("ERROR: {e}"));
+            out.error(Diag::error(e.to_string()).into());
             outcome = outcome.max(if let Error::Usage(_) = e { Outcome::Usage } else { Outcome::Failed });
         }
     }
@@ -160,7 +160,7 @@ pub struct Target<'a> {
 }
 
 impl Target<'_> {
-    pub fn home_sync(self, cfg: &Config, inv: &Inventory, gone: Option<&Path>) -> (links::Plan, Vec<String>) {
+    pub fn home_sync(self, cfg: &Config, inv: &Inventory, gone: Option<&Path>) -> (links::Plan, Vec<Diag>) {
         if self.project.is_some() {
             return Default::default();
         }
@@ -297,7 +297,7 @@ fn install(
     };
     if let Err(e) = recorded {
         for e in &errors {
-            out.error(e);
+            out.error(e.clone().into());
         }
         let undone = made
             .iter()

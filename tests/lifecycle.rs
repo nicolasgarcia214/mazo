@@ -291,7 +291,7 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
         judge: None,
     };
     let inv = mazo::inventory::Inventory::load(&hs.source).unwrap();
-    assert_eq!(mazo::policy::per_skill(&cfg, &inv), Vec::<String>::new());
+    assert_eq!(mazo::policy::per_skill(&cfg, &inv), Vec::<mazo::render::Diag>::new());
 
     let stdout = stdout(&out);
     let lines: Vec<(&str, &str)> = stdout.lines().filter_map(|l| l.split_once(": add to skillOverrides: ")).collect();

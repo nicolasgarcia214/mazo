@@ -12,6 +12,7 @@ use crate::classify::{Classifier, Dropped, Roots};
 use crate::config::Config;
 use crate::inventory::Inventory;
 use crate::ledger::{self, Agent, Channel, Event, Ledger};
+use crate::render::Diag;
 use crate::tail::{self, Cursors, Prefilter};
 
 #[derive(Debug, Default, Serialize)]
@@ -33,15 +34,15 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
-    pub fn warnings(&self) -> Vec<String> {
+    pub fn warnings(&self) -> Vec<Diag> {
         let mut out = Vec::new();
         for (home, h) in &self.homes {
-            out.extend(h.io_errors.iter().map(|e| format!("warning: {home}: {e}")));
+            out.extend(h.io_errors.iter().map(|e| Diag::warning(format!("{home}: {e}"))));
             if h.malformed > 0 {
-                out.push(format!(
-                    "warning: {home}: transcript lines that are not JSON: {}; a load in one is not counted",
+                out.push(Diag::warning(format!(
+                    "{home}: transcript lines that are not JSON: {}; a load in one is not counted",
                     h.malformed
-                ));
+                )));
             }
         }
         out
