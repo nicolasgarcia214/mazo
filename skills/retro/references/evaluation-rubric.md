@@ -26,7 +26,7 @@ Dimensions are grouped into four tiers reflecting their relative importance: **O
 | D4: Token Economy | 1.0 | Efficiency |
 | D7: Knowledge Generalizability | 1.0 | Integrity |
 
-**Weighted composite formula**: `sum(score_i × weight_i) / 11`, rounded to 1 decimal. Weights sum to 11. Verdict mapping uses the weighted composite score.
+**Weighted composite formula**: `sum(score_i × weight_i) / sum(weight_i)` over the scored dimensions, rounded to 1 decimal. The weights sum to 11 when all seven are scored and to 10 when D7 is `N/A`. Verdict mapping uses the weighted composite score.
 
 ## D1: Goal Achievement
 
@@ -131,16 +131,18 @@ Dimensions are grouped into four tiers reflecting their relative importance: **O
 
 ## D7: Knowledge Generalizability
 
-**What it measures**: Are the skill's outgoing recommendations root-cause abstractions that transfer to unseen contexts, and were prior recommendations implemented in a structural way (generalizable) or a reactive way (only recovers the specific incident that prompted them)?
+**What it measures**: Were the prior retro's recommendations implemented in a structural way (the fix generalizes) or a reactive way (it only recovers the incident that prompted it)?
+
+**When it is scored**: only when the Prior Retro Record carries recommendations and at least one has been implemented. Otherwise D7 is `N/A`, and the composite runs over the other six dimensions. The recommendations this retro writes are not scored here: the evaluator wrote them under a rule that already forces them to generalize, so a score would grade the evaluator's own prose. They are classified in the report as a check, and the recommendation review tests them.
 
 | Score | Criteria |
 |-------|----------|
-| 5 | All outgoing recommendations are root-cause abstractions with no project-specific language in the prescription. All implemented prior recommendations are structural — they would catch variant bugs in unrelated codebases. |
-| 4 | Recommendations mostly generalized; 1–2 contain project-specific language in the description but the underlying rule is transferable. Implemented prior recommendations are mostly structural. |
-| 3 | Mix: some recommendations abstract the root cause, others directly copy the missed-finding's shape. At least one implemented prior recommendation would only re-find the exact incident that prompted it. |
-| 2 | Most recommendations are benchmark-reactive — stated in terms of specific contracts, function names, or issue numbers. Implemented prior recommendations are narrowly scoped and would not transfer to a different codebase. |
-| 1 | All recommendations function only as pattern-matching against the evaluated context. Prior implementations show no generalization — they are verbatim copies of the missed finding's surface form. |
+| 5 | All implemented prior recommendations are structural — they would catch variant failures in unrelated codebases. |
+| 4 | Implemented prior recommendations are mostly structural; one is narrower than the failure class it answers. |
+| 3 | Mixed. At least one implemented prior recommendation would only re-find the exact incident that prompted it. |
+| 2 | Most implemented prior recommendations are narrowly scoped and would not transfer to a different codebase. |
+| 1 | Prior implementations show no generalization — they are verbatim copies of the missed finding's surface form. |
 
-**Evidence required**: For each outgoing recommendation, classify as **STRUCTURAL** (general rule applicable across unrelated codebases) or **REACTIVE** (only recovers the specific scenario that prompted it). For each prior recommendation marked ADDRESSED-STRUCTURAL or ADDRESSED-REACTIVE, state the evidence. Report the structural ratio (STRUCTURAL / total).
+**Evidence required**: For each prior recommendation marked ADDRESSED-STRUCTURAL or ADDRESSED-REACTIVE, state the evidence. Report the structural ratio (STRUCTURAL / implemented).
 
 **Scoring guidance**: REACTIVE implementations count as negative evidence. A skill with a 100% closure rate on prior recommendations but 80% REACTIVE adoptions should not score above 2. The goal is durable improvement, not metric-gaming.

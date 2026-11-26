@@ -7,6 +7,7 @@ Use this template to structure the retrospective report. Fill in all bracketed s
 skill: "[skill-name]"
 date: "[YYYY-MM-DD]"
 content_hash: "[content_hash from mazo show <skill-name> --json]"
+mode: "[fresh | in-context | artifact-based]"
 verdict: "[EXCELLENT | GOOD | ADEQUATE | POOR | FAILED]"
 score: [X.X weighted composite]
 score_raw: [X.X unweighted mean]
@@ -17,10 +18,11 @@ dimensions:
   token_economy: [X]
   output_quality: [X]
   error_handling: [X]
-  knowledge_generalizability: [X]
-tokens_measured: [sum from <usage> tags; "none" if no subagents; "unavailable" when the platform provides no usage tags]
+  knowledge_generalizability: [X, or "n/a"]
+tokens_measured: [sum from <usage> tags; "unavailable" when there are none (no subagents, or the platform provides no usage tags)]
 tokens_estimated: [total estimate including orchestrator]
 spot_check_claims: [X/Y confirmed, or "n/a" if no subagents]
+review: "[X/Y supported; written by the orchestrator after Phase 3.5, omitted when that phase was skipped]"
 prior_retro_count: [N]
 prior_retro_latest: "[YYYY-MM-DD or none]"
 trend: "[improving | stable | declining | first_run]"
@@ -44,8 +46,8 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 | Tool Efficiency | X/5 | 1.5 | [X.XX] | [label] |
 | Error Handling | X/5 | 1.5 | [X.XX] | [label] |
 | Token Economy | X/5 | 1.0 | [X.XX] | [label] |
-| Knowledge Generalizability | X/5 | 1.0 | [X.XX] | [label] |
-| **Composite** | **X.X/5** (raw) | | **X.X/5** (weighted, /11) | **[VERDICT]** |
+| Knowledge Generalizability | [X/5, or N/A] | 1.0 | [X.XX, or —] | [label] |
+| **Composite** | **X.X/5** (raw) | | **X.X/5** (weighted, over the scored weights) | **[VERDICT]** |
 
 ## Dimension Analysis
 
@@ -76,7 +78,7 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 
 ### D4: Token Economy (X/5 — [Label])
 
-**Measured tokens**: [total from `<usage>` tags; "no subagents"; or "unavailable — platform provides no usage tags, all figures below are estimates"]
+**Measured tokens**: [total from `<usage>` tags; or "unavailable — no usage tags (no subagents, or the platform provides none), all figures below are estimates"]
 **Estimated orchestrator tokens**: [estimate]
 **Efficiency metric**: [tokens per output unit, if applicable]
 
@@ -116,9 +118,9 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 
 [If Phase 1.7 was skipped: "N/A — no command failures during execution."]
 
-### D7: Knowledge Generalizability (X/5 — [Label])
+### D7: Knowledge Generalizability ([X/5 — Label], or N/A — no implemented prior recommendation)
 
-**Outgoing recommendation classification**:
+**Outgoing recommendation classification** (a check, not scored):
 | # | Recommendation (short title) | Classification | Rationale |
 |---|------------------------------|---------------|-----------|
 | 1 | [title] | [STRUCTURAL / REACTIVE] | [why it transfers or doesn't] |
@@ -146,22 +148,30 @@ github_issues: "[filed and duplicate issue numbers, or omit if Phase 4 skipped]"
 ## Recommendations
 
 Write every recommendation as a root-cause abstraction or reusable process rule. Use project-specific incidents only as evidence for why the recommendation exists, not as the recommendation text itself.
-Format every recommendation bullet as `- **Short title**: prescription`. Keep the title stable enough to reuse as a GitHub issue title, and keep supporting evidence in the sections above.
+Format every recommendation bullet as `- **Short title**: prescription Evidence: L<n>, L<n>.` Keep the title stable enough to reuse as a GitHub issue title. The evidence is the trace lines that show the failure; the discussion of them stays in the sections above.
 
 ### Immediate (before next run)
-- **[Short action title]**: [Concrete action as a reusable rule. Add 1-3 sentences describing the change and expected outcome.]
+- **[Short action title]**: [Concrete action as a reusable rule. Add 1-3 sentences describing the change and expected outcome.] Evidence: [L<n>, L<n>].
 
 ### Structural (skill design changes)
-- **[Short action title]**: [SKILL.md or reference file improvement as a reusable control. Add 1-3 sentences describing the change and expected outcome.]
+- **[Short action title]**: [SKILL.md or reference file improvement as a reusable control. Add 1-3 sentences describing the change and expected outcome.] Evidence: [L<n>, L<n>].
 
 ### Process (workflow improvements)
-- **[Short action title]**: [Workflow or invocation improvement as a reusable rule. Add 1-3 sentences describing the change and expected outcome.]
+- **[Short action title]**: [Workflow or invocation improvement as a reusable rule. Add 1-3 sentences describing the change and expected outcome.] Evidence: [L<n>, L<n>].
+
+## Recommendation Review
+
+[Written by the orchestrator after Phase 3.5. Omit this section when that phase was skipped.]
+
+| # | Recommendation | Verdict | Reviewer's reason |
+|---|----------------|---------|-------------------|
+| 1 | [recommendation title] | [SUPPORTED / PARTLY SUPPORTED / REFUTED / UNVERIFIABLE] | [one or two sentences] |
 
 ## Filed Issues
 
 [Omit this section entirely if Phase 4 was skipped or no issues were created.]
 
-Each recommendation filed as an issue also gets an inline `[TRACKED](issue-url)` marker appended to its bullet above.
+Each recommendation filed as an issue, or matched to a duplicate, also gets an inline `[TRACKED](issue-url)` marker appended to its bullet above.
 
 | # | Recommendation | Issue | Labels |
 |---|----------------|-------|--------|
@@ -175,13 +185,14 @@ Each recommendation filed as an issue also gets an inline `[TRACKED](issue-url)`
 
 [Omit this section entirely on first run.]
 
-| Date | Verdict | Score | D1 | D5 | D2 | D3 | D6 | D4 | D7 |
-|------|---------|-------|----|----|----|----|----|-----|----|
-| [prior date] | [verdict] | [score] | [X] | [X] | [X] | [X] | [X] | [X] | [X] |
-| [current date] | [verdict] | [score] | [X] | [X] | [X] | [X] | [X] | [X] | [X] |
+| Date | Mode | Verdict | Score | D1 | D5 | D2 | D3 | D6 | D4 | D7 |
+|------|------|---------|-------|----|----|----|----|----|-----|----|
+| [prior date] | [mode; in-context when the retro has none] | [verdict] | [score] | [X] | [X] | [X] | [X] | [X] | [X] | [X] |
+| [current date] | [mode] | [verdict] | [score] | [X] | [X] | [X] | [X] | [X] | [X] | [X] |
 
 **Trend**: [improving / stable / declining] — [one-line evidence, e.g., "weighted score rose from 3.2 to 3.8 (+0.6), driven by D1 improvement"]
 **Dimension flags**: [dimensions with |delta| >= 1.0, or "none"]
+**Judge**: [Omit if all compared retros share one mode. Otherwise say that a delta across modes may be the judge changing, not the skill.]
 **Measurement basis**: [Omit if all compared retros share the same token measurement basis. Otherwise state which used measured `<usage>` totals vs. estimates — D4 deltas across mixed bases are not directly comparable.]
 
 ## Recommendation Tracking
@@ -196,5 +207,5 @@ Each recommendation filed as an issue also gets an inline `[TRACKED](issue-url)`
 
 ## Context Notes
 
-[Compression status, estimation confidence, evaluation limitations, incomplete phases. If Phase 1.5 ran in direct mode, note "direct verification (no subagent isolation)".]
+[The mode and the evidence read: the trace's span, or conversation context. Compression status, estimation confidence, evaluation limitations, incomplete phases. If Phase 1.5 ran in direct mode, note "direct verification (no subagent isolation)".]
 ```

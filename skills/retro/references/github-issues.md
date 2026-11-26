@@ -13,15 +13,23 @@ Write mode only. Create (or update) these labels with `gh label create --force -
 | `retro:structural` | `fbca04` | Skill design change |
 | `retro:process` | `0e8a16` | Workflow improvement |
 
-If any label creation fails, log the warning but continue — issue creation can proceed without the tier label.
+The category labels are not the retro's to restyle. `bug` and `enhancement` are GitHub defaults; create `performance` without `--force`, so a label the repository already has keeps its color and description:
+
+```
+gh label create -R {repo} "performance" --color 5319e7 --description "Token, time, or tooling efficiency"
+```
+
+An "already exists" error from that command is expected. Log any other creation failure and continue.
+
+Then run `gh label list -R {repo} --limit 200 --json name` and keep the names as the **available labels**. Every create command passes `--label` only for available labels: `gh issue create` rejects the whole issue when it names a label the repository lacks.
 
 ## Recommendation Parsing — Field Definitions
 
-From the Phase 3 report (already in memory), extract for each recommendation bullet:
+From `{report}`, extract for each recommendation bullet:
 
 1. **Tier**: from the subsection header (Immediate / Structural / Process).
 2. **Title**: the bold text between `**...**`.
-3. **Prescription**: the text after the bold title.
+3. **Prescription**: the text after the bold title, up to `Evidence:`. The `L<n>` ids after it point into a private transcript and mean nothing to an issue's reader: use them to find the facts for field 5, and keep them out of the issue body.
 4. **Failure summary**: identify the most relevant entry from `## What Went Wrong` and capture the core problem plus its impact in 1-2 sentences.
 5. **Supporting evidence**: pull 2-4 concrete facts from the report sections most related to this recommendation. Prefer, in order:
    - the matching `## What Went Wrong` item
@@ -42,9 +50,11 @@ In write mode each issue gets three labels: `retro` + tier label (`retro:immedia
 ```
 gh issue create -R {repo} \
   --title "[retro] {title}" \
-  --body "{body}" \
+  --body-file {retros-dir}/{report-stem}.{n}.issue.md \
   --label "retro" --label "{tier-label}" --label "{category-label}"
 ```
+
+The body goes in by file, never as a `--body` argument: it contains backticks and `$`, which the shell would expand inside double quotes. Write the file with the Write tool, before the Step 4.4 gate; `{n}` is the recommendation's `#` in the gate table. Drop any `--label` flag whose label is not among the available labels.
 
 ## Issue Body Requirements
 
@@ -53,6 +63,7 @@ gh issue create -R {repo} \
 - Prefer concrete facts over generic prose. Reuse report evidence, commands, phases, file names, and metrics whenever available.
 - If the issue is about efficiency or process, include the wasted time/token/tooling impact so the tradeoff is explicit.
 - Omit empty sections, but do not collapse the issue into a one-paragraph summary.
+- When `{visibility}` is `PUBLIC`, omit the `Retro report:` line from References. The report filename's slug names the project the evaluated run worked on.
 
 ## Issue Body Format
 
@@ -110,9 +121,9 @@ gh issue create -R {repo} --title "{title}" --body-file {retros-dir}/{report-ste
 
 ## Report Update Mechanics
 
-Update the retro report written in Phase 3 step 9 (prefer `Edit` for targeted changes over rewriting the whole file):
+Update `{report}` (prefer `Edit` for targeted changes over rewriting the whole file):
 
-1. **Inline annotation**: Append `[TRACKED](issue-url)` to each recommendation bullet that was filed:
+1. **Inline annotation**: Append `[TRACKED](issue-url)` to each recommendation bullet that was filed or matched a duplicate:
    ```
    - **Fix report rendering**: Investigate why... [TRACKED](https://github.com/owner/repo/issues/42)
    ```
