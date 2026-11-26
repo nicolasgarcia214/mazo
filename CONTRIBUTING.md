@@ -54,15 +54,16 @@ and the JetBrains Mono font) to redraw the README's `docs/assets/tui.png`.
 Each agent is:
 
 - one module in `src/adapters/` implementing `Adapter`, with its arm in
-  `adapters::for_agent` and its `MARKER` in `adapters::MARKERS` (the scan's
-  prefilter drops every line that holds no marker);
+  `adapters::for_agent` and its `MARKER` arm in `adapters::markers` (the
+  scan's prefilter drops every line that holds no marker);
 - one module in `src/audit/judges/` implementing `Backend`, with its arm in
   `judges::backend`;
-- one `Agent` variant and one `JudgeAgent` variant, with a `JudgeAgent::ALL`
-  entry and an `AGENT_HOMES` entry in `src/config.rs` so `init` finds its
-  judge and its home.
+- one `Agent` variant, with its arm in `config::agent_homes` so `init` finds
+  its home, and one `JudgeAgent` variant with a `JudgeAgent::ALL` entry so
+  `init` finds its judge.
 
-The compiler checks the match arms but not those three arrays.
+The compiler checks the match arms, which every per-agent list iterates
+through `Agent::value_variants()`, but not `JudgeAgent::ALL`.
 
 Adapters only turn transcript records into events, prompts and condensed
 sessions. `classify.rs` computes identity, actor, root session and authoring

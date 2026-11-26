@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
 use serde::Serialize;
 
 use crate::config::{Config, Home};
@@ -46,7 +47,7 @@ impl Invocation {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Ctx {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude: Option<Invocation>,
@@ -57,10 +58,22 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    fn slot(&mut self, agent: Agent) -> &mut Option<Invocation> {
+        match agent {
+            Agent::Claude => &mut self.claude,
+            Agent::Codex => &mut self.codex,
+            Agent::Pi => &mut self.pi,
+        }
+    }
+
+    pub fn get(mut self, agent: Agent) -> Option<Invocation> {
+        *self.slot(agent)
+    }
+
     pub fn cell(&self) -> String {
-        [(Agent::Claude, self.claude), (Agent::Codex, self.codex), (Agent::Pi, self.pi)]
-            .into_iter()
-            .filter_map(|(agent, state)| state.map(|s| format!("{}{}", agent.letter(), s.glyph())))
+        Agent::value_variants()
+            .iter()
+            .filter_map(|&agent| self.get(agent).map(|s| format!("{}{}", agent.letter(), s.glyph())))
             .collect()
     }
 }
@@ -73,18 +86,37 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    pub fn total(&self) -> usize {
-        self.claude + self.codex + self.pi
+    fn slot(&mut self, agent: Agent) -> &mut usize {
+        match agent {
+            Agent::Claude => &mut self.claude,
+            Agent::Codex => &mut self.codex,
+            Agent::Pi => &mut self.pi,
+        }
     }
 
-    pub fn agents(&self, context_window: usize) -> [(Agent, usize, bool); 3] {
+    pub fn get(mut self, agent: Agent) -> usize {
+        *self.slot(agent)
+    }
+
+    pub fn total(&self) -> usize {
+        Agent::value_variants().iter().map(|&agent| self.get(agent)).sum()
+    }
+
+    pub fn agents(&self, context_window: usize) -> Vec<(Agent, usize, bool)> {
         let near =
             |tokens: usize, percent: usize| tokens.saturating_mul(500) >= context_window.saturating_mul(percent * 4);
-        [
-            (Agent::Claude, self.claude, near(self.claude, 1)),
-            (Agent::Codex, self.codex, near(self.codex, 2)),
-            (Agent::Pi, self.pi, false),
-        ]
+        Agent::value_variants()
+            .iter()
+            .map(|&agent| {
+                let tokens = self.get(agent);
+                let near = match agent {
+                    Agent::Claude => near(tokens, 1),
+                    Agent::Codex => near(tokens, 2),
+                    Agent::Pi => false,
+                };
+                (agent, tokens, near)
+            })
+            .collect()
     }
 }
 
@@ -119,8 +151,13 @@ impl Contexts {
             Scope::Project => {
                 let claude: Vec<Option<&str>> = self.overrides.keys().map(|h| Some(h.as_str())).collect();
                 let claude = if claude.is_empty() { vec![None] } else { claude };
-                let homes =
-                    claude.into_iter().map(|h| (Agent::Claude, h)).chain([(Agent::Codex, None), (Agent::Pi, None)]);
+                let homes = Agent::value_variants().iter().flat_map(|&agent| {
+                    let homes = match agent {
+                        Agent::Claude => claude.clone(),
+                        Agent::Codex | Agent::Pi => vec![None],
+                    };
+                    homes.into_iter().map(move |h| (agent, h))
+                });
                 (inv.project.as_ref().map(|p| store::project_dir(&p.root).join(skill)), homes.collect())
             }
         };
@@ -135,7 +172,11 @@ impl Contexts {
             Agent::Pi => Invocation::On,
         };
         let of = |agent: Agent| homes.iter().filter(|(a, _)| *a == agent).map(|(a, h)| state(*a, *h)).min();
-        Ctx { claude: of(Agent::Claude), codex: of(Agent::Codex), pi: of(Agent::Pi) }
+        let mut ctx = Ctx::default();
+        for &agent in Agent::value_variants() {
+            *ctx.slot(agent) = of(agent);
+        }
+        ctx
     }
 
     pub fn tokens(&self, inv: &Inventory) -> Tokens {
@@ -144,16 +185,19 @@ impl Contexts {
             let dir = store::project_dir(&p.root);
             p.skills.iter().map(move |s| (s, Scope::Project, inventory::description(&dir.join(s))))
         });
-        let mut chars = [0; 3];
+        let mut chars = Tokens::default();
         for (skill, scope, description) in global.chain(project) {
             let ctx = self.of(inv, skill, scope);
             let description = description.unwrap_or_default();
-            for (n, state) in chars.iter_mut().zip([ctx.claude, ctx.codex, ctx.pi]) {
-                *n += state.map_or(0, |s| s.chars(skill, &description));
+            for &agent in Agent::value_variants() {
+                *chars.slot(agent) += ctx.get(agent).map_or(0, |s| s.chars(skill, &description));
             }
         }
-        let [claude, codex, pi] = chars.map(|n| n / 4);
-        Tokens { claude, codex, pi }
+        let mut tokens = Tokens::default();
+        for &agent in Agent::value_variants() {
+            *tokens.slot(agent) = chars.get(agent) / 4;
+        }
+        tokens
     }
 }
 
@@ -253,7 +297,7 @@ mod tests {
         let codex = Config { homes: cfg.homes.iter().filter(|h| h.agent == Agent::Codex).cloned().collect(), ..cfg };
         let ctx = Contexts::new(&codex, &inv).of(&inv, "named", Scope::Global);
         assert_eq!(ctx, Ctx { codex: Some(Invocation::On), ..Ctx::default() });
-        assert_eq!(serde_json::to_value(&ctx).unwrap(), serde_json::json!({"codex": "on"}));
+        assert_eq!(serde_json::to_value(ctx).unwrap(), serde_json::json!({"codex": "on"}));
         let names = ["on", "name-only", "user-invocable-only", "off"];
         let all = [Invocation::On, Invocation::NameOnly, Invocation::UserInvocableOnly, Invocation::Off];
         assert_eq!(all.map(|s| serde_json::to_value(s).unwrap()), names.map(serde_json::Value::from));
@@ -306,12 +350,14 @@ mod tests {
 
     #[test]
     fn an_agent_nears_its_budget_at_80_percent_of_its_share_of_the_window_and_pi_never() {
-        let near = |claude, codex, pi| Tokens { claude, codex, pi }.agents(200_000).map(|(_, _, near)| near);
+        let nears =
+            |tokens: Tokens, window| tokens.agents(window).into_iter().map(|(_, _, near)| near).collect::<Vec<_>>();
+        let near = |claude, codex, pi| nears(Tokens { claude, codex, pi }, 200_000);
         assert_eq!(near(1599, 3199, 1_000_000), [false, false, false]);
         assert_eq!(near(1600, 3200, 0), [true, true, false]);
         assert_eq!(Tokens { claude: 8, codex: 0, pi: 0 }.agents(1000)[0], (Agent::Claude, 8, true));
-        let huge = Tokens { claude: usize::MAX, codex: 1, pi: 0 }.agents(usize::MAX);
-        assert_eq!(huge.map(|(_, _, near)| near), [true, false, false], "saturates instead of overflowing");
+        let huge = Tokens { claude: usize::MAX, codex: 1, pi: 0 };
+        assert_eq!(nears(huge, usize::MAX), [true, false, false], "saturates instead of overflowing");
     }
 
     #[test]

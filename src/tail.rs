@@ -31,12 +31,11 @@ impl Prefilter {
     const MARKERS: [&'static str; 4] = ["\"Skill\"", "\"commandName\"", "SKILL.md", "/skills/"];
 
     pub fn new<'a>(extra: impl IntoIterator<Item = &'a str>) -> Prefilter {
-        let alts: Vec<String> = adapters::MARKERS
-            .into_iter()
+        let alts: Vec<String> = adapters::markers()
             .chain(Self::MARKERS)
-            .chain(extra)
-            .filter(|s| !s.is_empty())
             .map(regex::escape)
+            .chain(extra.into_iter().map(regex::escape))
+            .filter(|s| !s.is_empty())
             .collect();
         Prefilter(Regex::new(&alts.join("|")).expect("escaped literals form a valid regex"))
     }

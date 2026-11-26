@@ -4,9 +4,10 @@ use std::io::{BufRead, ErrorKind, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::ledger::Agent;
+use crate::ledger::{self, Agent};
 use crate::render::PathExt;
 use crate::{Error, Result};
 
@@ -324,11 +325,10 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
         None => None,
     };
     let home = PathBuf::from(home_dir()?);
-    let homes: Vec<RawHome> = AGENT_HOMES
-        .into_iter()
-        .filter(|(_, _, rel)| home.join(rel).exists())
-        .map(|(name, agent, rel)| RawHome {
-            name: name.into(),
+    let homes: Vec<RawHome> = agent_homes()
+        .filter(|(_, rel)| home.join(rel).exists())
+        .map(|(agent, rel)| RawHome {
+            name: ledger::name(agent),
             agent,
             path: format!("~/{rel}"),
             links: BTreeMap::new(),
@@ -350,14 +350,22 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
     })?;
     file.write_all(text.as_bytes()).map_err(crate::at(path))?;
     if no_homes {
-        let dirs: Vec<String> = AGENT_HOMES.iter().map(|(_, _, rel)| format!("~/{rel}")).collect();
+        let dirs: Vec<String> = agent_homes().map(|(_, rel)| format!("~/{rel}")).collect();
         eprintln!("warning: found no agent home at {}; {}", dirs.join(", "), add_home(path));
     }
     Ok(judge)
 }
 
-const AGENT_HOMES: [(&str, Agent, &str); 3] =
-    [("claude", Agent::Claude, ".claude"), ("codex", Agent::Codex, ".codex"), ("pi", Agent::Pi, ".pi/agent")];
+fn agent_homes() -> impl Iterator<Item = (Agent, &'static str)> {
+    Agent::value_variants().iter().map(|&agent| {
+        let rel = match agent {
+            Agent::Claude => ".claude",
+            Agent::Codex => ".codex",
+            Agent::Pi => ".pi/agent",
+        };
+        (agent, rel)
+    })
+}
 
 pub fn add_home(path: &Path) -> String {
     format!("add a [[home]] table with name, agent and path to {}", path.inert())
@@ -607,7 +615,7 @@ mod tests {
             assert_eq!(serde_json::to_value(agent).unwrap(), name, "{name}");
         }
         let homes = JudgeAgent::ALL.into_iter().filter(|a| a.home()).map(JudgeAgent::name);
-        assert!(homes.eq(AGENT_HOMES.map(|(name, _, _)| name)));
+        assert!(homes.eq(agent_homes().map(|(agent, _)| ledger::name(agent))));
     }
 
     #[test]

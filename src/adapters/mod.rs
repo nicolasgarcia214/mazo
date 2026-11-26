@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use clap::ValueEnum;
 use regex::Regex;
 use serde_json::Value;
 
@@ -247,7 +248,13 @@ pub struct Records {
     pub render: fn(&Value) -> Vec<String>,
 }
 
-pub const MARKERS: [&str; 3] = [claude::MARKER, codex::MARKER, pi::MARKER];
+pub fn markers() -> impl Iterator<Item = &'static str> {
+    Agent::value_variants().iter().map(|agent| match agent {
+        Agent::Claude => claude::MARKER,
+        Agent::Codex => codex::MARKER,
+        Agent::Pi => pi::MARKER,
+    })
+}
 
 pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
     match agent {
