@@ -20,8 +20,8 @@ use serde_json::{Value, json};
 
 pub use command::{Args, LIMIT, Planned, command, plan};
 use judges::NoAnswer;
-pub(crate) use judges::wait;
 pub use judges::{Backend, backend};
+pub(crate) use judges::{KILL_GRACE, wait};
 pub use select::{Candidate, MAX_CHARS, SkillText, input, select, skill_at};
 pub use session::{Finding, Followed, Outcome, SESSION_PROMPT, SESSION_SCHEMA, Verdict, validate};
 use session::{SESSION, SESSION_PROMPT_VERSION};
