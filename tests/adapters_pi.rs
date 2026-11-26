@@ -5,7 +5,7 @@ mod common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use mazo::adapters::{Adapter, Key, Parent, Parsed, SkillRoots, pi};
+use mazo::adapters::{Adapter, Key, Parent, Parsed, SkillRoots, Transcripts, pi};
 use mazo::classify::{self, Roots};
 use mazo::config::Home;
 use mazo::ledger::{Actor, Agent, Channel};
@@ -205,7 +205,7 @@ fn fork_copies_share_keys_and_the_child_roots_to_the_parent() {
 #[test]
 fn skill_block_prompt_is_the_invocation_and_its_arguments() {
     let src = format!("{}:2", fixture("slash.jsonl").display());
-    assert_eq!(pi::Pi.prompt_at(&src).as_deref(), Some("/skill:goal-smart [scrubbed]"));
+    assert_eq!(pi::Pi.prompt_at(&mut Transcripts::default(), &src).as_deref(), Some("/skill:goal-smart [scrubbed]"));
 }
 
 #[test]
@@ -221,12 +221,17 @@ fn bare_skill_block_prompt_is_the_message_before_it() {
     let path = dir.path().join("s.jsonl");
     let text = [String::from_utf8(header).unwrap(), user("a", "Plan the scrubbed work."), user("b", block)].join("\n");
     std::fs::write(&path, text).unwrap();
-    assert_eq!(pi::Pi.prompt_at(&format!("{}:3", path.display())).as_deref(), Some("Plan the scrubbed work."));
+    assert_eq!(
+        pi::Pi.prompt_at(&mut Transcripts::default(), &format!("{}:3", path.display())).as_deref(),
+        Some("Plan the scrubbed work.")
+    );
 }
 
 #[test]
 fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
-    let got = pi::Pi.condense(&format!("{}:4", fixture("condense.jsonl").display()), 60_000).unwrap();
+    let got = pi::Pi
+        .condense(&mut Transcripts::default(), &format!("{}:4", fixture("condense.jsonl").display()), 60_000)
+        .unwrap();
     let want = [
         "L4: user: /skill:unslop tidy the prose".to_string(),
         "L5: assistant: Working on it.".into(),

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use mazo::adapters::codex::{self, Codex};
-use mazo::adapters::{Adapter, Key, Parent, Parsed, Raw, SkillRoots};
+use mazo::adapters::{Adapter, Key, Parent, Parsed, Raw, SkillRoots, Transcripts};
 use mazo::classify::Roots;
 use mazo::config::{Config, Home};
 use mazo::inventory::Inventory;
@@ -304,7 +304,7 @@ fn golden_codex_id() {
 }
 
 fn prompt(name: &str, line: u64) -> Option<String> {
-    Codex.prompt_at(&format!("{}:{line}", fixtures().join(name).display()))
+    Codex.prompt_at(&mut Transcripts::default(), &format!("{}:{line}", fixtures().join(name).display()))
 }
 
 #[test]
@@ -320,7 +320,9 @@ fn bare_name_prompt_is_the_turn_before_it() {
 
 #[test]
 fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
-    let got = Codex.condense(&format!("{}:7", fixtures().join("condense.jsonl").display()), 60_000).unwrap();
+    let got = Codex
+        .condense(&mut Transcripts::default(), &format!("{}:7", fixtures().join("condense.jsonl").display()), 60_000)
+        .unwrap();
     let want = [
         "L6: user: $unslop tidy the prose".to_string(),
         "L9: assistant: Working on it.".into(),

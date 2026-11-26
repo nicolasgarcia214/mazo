@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use common::judge::{answer, skill_answer, unnonced};
 use common::{Mazo, stderr, stdout};
-use mazo::adapters;
+use mazo::adapters::{self, Transcripts};
 use mazo::audit::{self, Candidate, SkillText};
 use mazo::ledger::{Actor, Agent, Channel, Event};
 
@@ -141,7 +141,9 @@ fn every_agent_is_a_candidate_whatever_the_judge() {
     let agents: Vec<Agent> = got.iter().map(|c| c.event.agent).collect();
     assert_eq!(agents, [Agent::Codex, Agent::Claude, Agent::Pi]);
     for c in &got {
-        let want = adapters::for_agent(c.event.agent).condense(&c.event.src, audit::MAX_CHARS).unwrap();
+        let want = adapters::for_agent(c.event.agent)
+            .condense(&mut Transcripts::default(), &c.event.src, audit::MAX_CHARS)
+            .unwrap();
         assert_eq!(c.condensed, want);
     }
 }
@@ -1218,7 +1220,11 @@ fn an_invalid_answer_is_retried_once_then_dropped() {
 #[test]
 fn validation_checks_schema_lines_and_quotes() {
     let condensed = adapters::for_agent(Agent::Claude)
-        .condense(&format!("{}:{CLAUDE_LOAD}", common::fixture("claude/condense.jsonl").display()), audit::MAX_CHARS)
+        .condense(
+            &mut Transcripts::default(),
+            &format!("{}:{CLAUDE_LOAD}", common::fixture("claude/condense.jsonl").display()),
+            audit::MAX_CHARS,
+        )
         .unwrap();
     let ok = answer(3);
     assert!(audit::validate(ok.clone(), &condensed).is_ok());

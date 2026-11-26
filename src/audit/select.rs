@@ -6,7 +6,7 @@ use jiff::Timestamp;
 
 use super::frame;
 use crate::Result;
-use crate::adapters;
+use crate::adapters::{self, Transcripts};
 use crate::inventory::git;
 use crate::ledger::{Actor, Agent, Event};
 
@@ -48,10 +48,11 @@ pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: O
             None => projects.push((cwd, VecDeque::from([loads]))),
         }
     }
-    let next = |queue: &mut VecDeque<Loads>| {
+    let mut memo = Transcripts::default();
+    let mut next = |queue: &mut VecDeque<Loads>| {
         while let Some(loads) = queue.pop_front() {
             let found = loads.iter().find_map(|(_, e)| {
-                let condensed = adapters::for_agent(e.agent).condense(&e.src, MAX_CHARS)?;
+                let condensed = adapters::for_agent(e.agent).condense(&mut memo, &e.src, MAX_CHARS)?;
                 Some(Candidate { event: (*e).clone(), condensed })
             });
             if let Some(c) = found {
