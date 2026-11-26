@@ -2,7 +2,7 @@ pub mod claude;
 pub mod codex;
 pub mod pi;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::config::{self, Home};
 use crate::ledger::{Agent, Channel};
 use crate::readcmd::{self, Reads};
-use crate::tail::{Chunk, Cursor};
+use crate::tail::{self, Chunk};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Key {
@@ -163,18 +163,17 @@ pub trait Adapter {
     }
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
     fn records(&self) -> Records;
-    fn prompt_at(&self, src: &str) -> Option<String> {
-        let t = transcript(src)?;
-        authored_back(&t.chunk.lines[..t.line], &self.records().authored).map(|(_, text)| text)
+    fn prompt_at(&self, memo: &mut Transcripts, src: &str) -> Option<String> {
+        let (_, chunk, line) = memo.at(src)?;
+        authored_back(upto(&chunk.lines, line), &self.records().authored).map(|(_, text)| text)
     }
-    fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
+    fn condense(&self, memo: &mut Transcripts, src: &str, max_chars: usize) -> Option<String> {
         let Records { authored, render } = self.records();
-        let t = transcript(src)?;
-        let lines = &t.chunk.lines;
-        let strong = strong_loads(self, &t.path, &t.chunk);
-        let load = t.line as u64;
+        let (path, chunk, load) = memo.at(src)?;
+        let lines = &chunk.lines;
+        let strong = strong_loads(self, path, chunk);
         let skill = &strong.iter().find(|r| r.line == load)?.skill;
-        let start = authored_back(&lines[..t.line], &authored).map_or(load, |(n, _)| n);
+        let start = authored_back(upto(lines, load), &authored).map_or(load, |(n, _)| n);
         let other = strong.iter().filter(|r| r.line > load && r.skill != *skill).map(|r| r.line).min();
         let value = |l: &[u8]| serde_json::from_slice::<Value>(l).ok();
         let limit = lines
@@ -187,16 +186,16 @@ pub trait Adapter {
     }
     fn trace(&self, file: &Path, skill: &str, reviewer: &str) -> Option<Trace> {
         let Records { authored, render } = self.records();
-        let chunk = Chunk { lines: lines(file)?, oversized: 0, cursor: Cursor::default() };
+        let chunk = tail::whole(file).ok()?;
         let strong = strong_loads(self, file, &chunk);
         let lines = &chunk.lines;
         let last = |name: &str, before: u64| {
             strong.iter().filter(|r| r.skill == name && r.line < before).map(|r| r.line).max()
         };
-        let eof = lines.len() as u64 + 1;
+        let eof = chunk.cursor.line + 1;
         let reviews = || strong.iter().filter(|r| r.skill == reviewer).map(|r| r.line);
         let load = last(skill, reviews().filter(|l| last(skill, *l).is_some()).max().unwrap_or(eof))?;
-        let prompt = |line: u64| authored_back(&lines[..line as usize], &authored);
+        let prompt = |line: u64| authored_back(upto(lines, line), &authored);
         let start = prompt(load).map_or(load, |(n, _)| n);
         let end = reviews().filter(|l| *l > load).min().map_or(eof, |r| {
             let asked = prompt(r).filter(|(p, text)| *p > load && text.contains(reviewer));
@@ -258,30 +257,20 @@ pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
     }
 }
 
-struct Transcript {
-    path: PathBuf,
-    chunk: Chunk,
-    line: usize,
-}
+#[derive(Default)]
+pub struct Transcripts(HashMap<PathBuf, Option<Chunk>>);
 
-fn transcript(src: &str) -> Option<Transcript> {
-    let (file, line) = src.rsplit_once(':')?;
-    let line: usize = line.parse().ok()?;
-    let lines = lines(Path::new(file))?;
-    if line == 0 || lines.len() < line {
-        return None;
+impl Transcripts {
+    fn at<'m, 's>(&'m mut self, src: &'s str) -> Option<(&'s Path, &'m Chunk, u64)> {
+        let (file, line) = src.rsplit_once(':')?;
+        let (file, line) = (Path::new(file), line.parse().ok()?);
+        let chunk = self.0.entry(file.to_path_buf()).or_insert_with(|| tail::whole(file).ok()).as_ref()?;
+        (1..=chunk.cursor.line).contains(&line).then_some((file, chunk, line))
     }
-    Some(Transcript {
-        path: PathBuf::from(file),
-        chunk: Chunk { lines, oversized: 0, cursor: Cursor::default() },
-        line,
-    })
 }
 
-fn lines(file: &Path) -> Option<Vec<(u64, Vec<u8>)>> {
-    let bytes = std::fs::read(file).ok()?;
-    let body = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
-    Some((1..).zip(body.split(|&b| b == b'\n').map(<[u8]>::to_vec)).collect())
+fn upto(lines: &[(u64, Vec<u8>)], line: u64) -> &[(u64, Vec<u8>)] {
+    &lines[..lines.partition_point(|(n, _)| *n <= line)]
 }
 
 fn authored_back(lines: &[(u64, Vec<u8>)], authored: &impl Fn(&Value) -> Option<String>) -> Option<(u64, String)> {

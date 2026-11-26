@@ -121,6 +121,27 @@ fn open(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
+pub fn whole(path: &Path) -> io::Result<Chunk> {
+    let mut reader = BufReader::with_capacity(1 << 20, open(path)?);
+    let (mut lines, mut oversized, mut line) = (Vec::new(), 0, 0);
+    loop {
+        let mut buf = Vec::new();
+        if (&mut reader).take(MAX_LINE + 1).read_until(b'\n', &mut buf)? == 0 {
+            break;
+        }
+        line += 1;
+        if buf.pop_if(|b| *b == b'\n').is_none() && buf.len() as u64 > MAX_LINE {
+            oversized += 1;
+            if skip_line(&mut reader)?.is_none() {
+                break;
+            }
+            continue;
+        }
+        lines.push((line, buf));
+    }
+    Ok(Chunk { lines, oversized, cursor: Cursor { line, ..Cursor::default() } })
+}
+
 pub fn first_line(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(head(path)?.next())
 }
@@ -215,6 +236,19 @@ mod tests {
         assert_eq!(a.oversized, 0);
         assert_eq!(a.lines, [(2, b"SKILL.md".to_vec())]);
         assert_eq!((a.cursor.offset, a.cursor.line), (text.len() as u64, 2));
+    }
+
+    #[test]
+    fn whole_skips_an_oversized_line_keeps_later_numbers_and_reads_an_unterminated_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.jsonl");
+        let mut text = b"one\n".to_vec();
+        text.extend(vec![b'x'; MAX_LINE as usize + 1]);
+        text.extend(b"\n\nfour");
+        std::fs::write(&p, &text).unwrap();
+        let c = whole(&p).unwrap();
+        assert_eq!(c.lines, [(1, b"one".to_vec()), (3, Vec::new()), (4, b"four".to_vec())]);
+        assert_eq!((c.oversized, c.cursor.line), (1, 4));
     }
 
     #[test]

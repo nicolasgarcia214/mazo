@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::adapters;
+use crate::adapters::{self, Transcripts};
 use crate::ledger::{Actor, Agent, Event};
 use crate::yaml;
 
@@ -46,6 +46,7 @@ pub fn examples<'e>(
     skill: &str,
     events: impl IntoIterator<Item = &'e Event>,
     curated: Vec<crate::audit::Example>,
+    memo: &mut Transcripts,
 ) -> Examples {
     let mut agents: Vec<Agent> = agents.into_iter().collect();
     agents.sort();
@@ -60,10 +61,10 @@ pub fn examples<'e>(
                 .map(str::to_string)
         });
     let written = agents.into_iter().map(|agent| Invocation { agent, text: invocation(agent, skill) }).collect();
-    Examples { written, default_prompt, real: real(skill, events), curated }
+    Examples { written, default_prompt, real: real(skill, events, memo), curated }
 }
 
-fn real<'e>(skill: &str, events: impl IntoIterator<Item = &'e Event>) -> Vec<Real> {
+fn real<'e>(skill: &str, events: impl IntoIterator<Item = &'e Event>, memo: &mut Transcripts) -> Vec<Real> {
     let mut projects: Vec<(Option<&str>, Vec<&Event>)> = Vec::new();
     for e in events.into_iter().filter(|e| e.channel.strong() && e.actor == Actor::Main) {
         let cwd = e.cwd.as_deref();
@@ -78,7 +79,7 @@ fn real<'e>(skill: &str, events: impl IntoIterator<Item = &'e Event>) -> Vec<Rea
         .into_iter()
         .filter_map(|(_, list)| {
             list.into_iter()
-                .map(|e| Some((e, adapters::for_agent(e.agent).prompt_at(&e.src)?)))
+                .map(|e| Some((e, adapters::for_agent(e.agent).prompt_at(memo, &e.src)?)))
                 .take_while(Option::is_some)
                 .flatten()
                 .find(|(_, text)| text.chars().count() >= MIN_CHARS && !bare.iter().any(|b| b == text.trim()))

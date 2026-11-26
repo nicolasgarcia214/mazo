@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use mazo::adapters::claude::{self, Claude};
-use mazo::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots};
+use mazo::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots, Transcripts};
 use mazo::classify::{Classifier, Roots};
 use mazo::config::{Config, Home};
 use mazo::inventory::Inventory;
@@ -514,7 +514,7 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
 }
 
 fn prompt(name: &str, line: u64) -> Option<String> {
-    Claude.prompt_at(&format!("{}:{line}", fixture(name).display()))
+    Claude.prompt_at(&mut Transcripts::default(), &format!("{}:{line}", fixture(name).display()))
 }
 
 #[test]
@@ -552,12 +552,48 @@ fn typed_prompt_is_the_history_display() {
 #[test]
 fn expired_transcript_has_no_prompt() {
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(Claude.prompt_at(&format!("{}:2", dir.path().join("gone.jsonl").display())), None);
+    assert_eq!(
+        Claude.prompt_at(&mut Transcripts::default(), &format!("{}:2", dir.path().join("gone.jsonl").display())),
+        None
+    );
     assert_eq!(prompt("slash.jsonl", 3), None, "a line past the end");
 }
 
+#[test]
+fn a_fifo_transcript_is_refused_without_blocking() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("t.jsonl");
+    let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let src = format!("{}:1", fifo.display());
+        let mut memo = Transcripts::default();
+        let got = (
+            Claude.prompt_at(&mut memo, &src),
+            Claude.condense(&mut memo, &src, 60_000),
+            Claude.trace(&fifo, "grade", "retro"),
+        );
+        tx.send(got).unwrap();
+    });
+    assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap(), (None, None, None));
+}
+
+#[test]
+fn one_memo_reads_a_transcript_once_for_several_examples() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.jsonl");
+    std::fs::copy(fixture("prompt_tool.jsonl"), &path).unwrap();
+    let mut memo = Transcripts::default();
+    let want = Some("Improve the scrubbed skill and check its retros.".to_string());
+    assert_eq!(Claude.prompt_at(&mut memo, &format!("{}:5", path.display())), want);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(Claude.prompt_at(&mut memo, &format!("{}:6", path.display())), want);
+    assert_eq!(Claude.prompt_at(&mut Transcripts::default(), &format!("{}:6", path.display())), None);
+}
+
 fn condense_at(path: &Path, line: u64, max_chars: usize) -> Option<String> {
-    Claude.condense(&format!("{}:{line}", path.display()), max_chars)
+    Claude.condense(&mut Transcripts::default(), &format!("{}:{line}", path.display()), max_chars)
 }
 
 #[test]

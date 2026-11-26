@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use jiff::tz::TimeZone;
 use serde::Serialize;
 
+use crate::adapters::Transcripts;
 use crate::audit::SkillRecord;
 use crate::config::Config;
 use crate::help;
@@ -137,7 +138,8 @@ pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
         .collect();
     let graph = inventory::fan_in(input.inv);
     let args = UsageArgs::new(since);
-    let cards = input.inv.skills.iter().map(|s| card(&view, &graph, s, &args, SHOW_LIMIT)).collect();
+    let mut memo = Transcripts::default();
+    let cards = input.inv.skills.iter().map(|s| card(&view, &graph, s, &args, SHOW_LIMIT, &mut memo)).collect();
     Report {
         generated: input.now.to_string(),
         since: view.start(since).map(|s| view.date(s).to_string()),

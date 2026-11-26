@@ -10,6 +10,7 @@ use super::unused::citers;
 use super::usage::{GradeOut, vet_of};
 use super::view::{Bucket, Filter, Key, View, day, relative};
 use super::{Input, SINCE, Since, UsageArgs, json_line};
+use crate::adapters::Transcripts;
 use crate::audit::{Improvement, SkillRecord, VetVerdict};
 use crate::ctx::Ctx;
 use crate::evals::{self, Eval, Evals};
@@ -291,6 +292,7 @@ pub(super) fn card<'a>(
     skill: &'a str,
     args: &UsageArgs,
     limit: usize,
+    memo: &mut Transcripts,
 ) -> Card<'a> {
     let inv = view.input.inv;
     let f = Filter::from(args);
@@ -351,7 +353,7 @@ pub(super) fn card<'a>(
     let agents = view.input.cfg.homes.iter().map(|h| h.agent);
     let audit = view.input.audits.get(skill);
     let curated = audit.map(|r| r.result.examples.clone()).unwrap_or_default();
-    let examples = examples::examples(agents, path.as_deref(), skill, ledger.iter().copied(), curated);
+    let examples = examples::examples(agents, path.as_deref(), skill, ledger.iter().copied(), curated, memo);
 
     let vet = vet_of(inv, skill);
     let (r#for, r#try) = Manual::guide(vet, audit, description.clone());
@@ -434,7 +436,7 @@ pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, 
 
 pub fn skill_card<'a>(input: &'a Input<'a>, skill: &'a str, args: &UsageArgs, limit: usize) -> Card<'a> {
     let graph = inventory::fan_in(input.inv);
-    card(&View::new(input), &graph, skill, args, limit)
+    card(&View::new(input), &graph, skill, args, limit, &mut Transcripts::default())
 }
 
 pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {
