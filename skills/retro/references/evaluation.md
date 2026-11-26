@@ -155,7 +155,7 @@ For each dimension:
    - The evidence names the trace lines that show the failure or the missed opportunity. An observation with no line to cite is context for the sections above, not a recommendation.
    - Make the short title specific and stable enough to reuse as a GitHub issue title.
    - After the title, write 1-3 sentences that define the change and desired outcome. Avoid single-clause bullets that become ambiguous when promoted into issues.
-   - Phrase each recommendation as a reusable control, invariant, or process rule.
+   - State each recommendation as the behaviour the skill should produce on any target. When the change is to the evaluated skill's text, name the step or reference section it rewrites. Recommend a new step only when no existing one can carry the change, and name the step it follows. A fix that belongs in a script, the workflow or the environment names that instead.
    - Do not recommend copying a benchmark miss, target-project bug, or protocol-specific example into prompts.
    - If an observed failure came from a specific target, first state the underlying failure mode, then recommend the general fix for that failure mode.
    - Keep evidence separate from prescription. Example names or file paths belong in the supporting evidence, not in the recommendation sentence unless the recommendation is explicitly to edit that file in the evaluated skill.
