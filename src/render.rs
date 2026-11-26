@@ -23,15 +23,19 @@ pub enum Colour {
 
 pub fn status_colour(token: &str) -> Option<Colour> {
     match token {
-        "unused" | "ERROR:" | "!" => Some(Colour::Red),
-        "held" | "new" | "warning:" | "stale" => Some(Colour::Yellow),
+        "unused" | "!" => Some(Colour::Red),
+        "held" | "new" | "stale" => Some(Colour::Yellow),
         t if t.starts_with("named by ") => Some(Colour::Yellow),
         _ => None,
     }
 }
 
 pub fn paint(token: &str, on: bool) -> String {
-    let code = match status_colour(token) {
+    tint(token, status_colour(token), on)
+}
+
+fn tint(token: &str, colour: Option<Colour>, on: bool) -> String {
+    let code = match colour {
         Some(Colour::Red) if on => "31",
         Some(Colour::Yellow) if on => "33",
         _ => return token.to_string(),
@@ -39,16 +43,106 @@ pub fn paint(token: &str, on: bool) -> String {
     format!("\x1b[{code}m{token}\x1b[0m")
 }
 
-fn prefixed(line: &str) -> Option<(&str, &str)> {
-    line.split_once(' ').filter(|(head, _)| matches!(*head, "ERROR:" | "warning:"))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Error,
+    Warning,
 }
 
-pub fn paint_prefix(line: &str, on: bool) -> String {
-    prefixed(line).map_or_else(|| line.to_string(), |(head, rest)| format!("{} {rest}", paint(head, on)))
+impl Level {
+    pub fn colour(self) -> Colour {
+        match self {
+            Level::Error => Colour::Red,
+            Level::Warning => Colour::Yellow,
+        }
+    }
+
+    fn head(self) -> &'static str {
+        match self {
+            Level::Error => "ERROR:",
+            Level::Warning => "warning:",
+        }
+    }
 }
 
-pub fn unprefixed(line: &str) -> &str {
-    prefixed(line).map_or(line, |(_, rest)| rest)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Diag {
+    pub level: Level,
+    pub text: String,
+}
+
+impl Diag {
+    pub fn error(text: impl Into<String>) -> Diag {
+        Diag { level: Level::Error, text: text.into() }
+    }
+
+    pub fn warning(text: impl Into<String>) -> Diag {
+        Diag { level: Level::Warning, text: text.into() }
+    }
+
+    pub fn paint(&self, on: bool) -> String {
+        format!("{} {}", tint(self.level.head(), Some(self.level.colour()), on), self.text)
+    }
+}
+
+impl std::fmt::Display for Diag {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.paint(false))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Note {
+    Plain(String),
+    Diag(Diag),
+}
+
+impl Note {
+    pub fn level(&self) -> Option<Level> {
+        match self {
+            Note::Plain(_) => None,
+            Note::Diag(d) => Some(d.level),
+        }
+    }
+
+    pub fn split(&self) -> Vec<Note> {
+        let plain = |l: &str| Note::Plain(l.to_string());
+        match self {
+            Note::Plain(s) => s.lines().map(plain).collect(),
+            Note::Diag(d) => {
+                let mut lines = d.text.lines();
+                let first = Note::Diag(Diag { level: d.level, text: lines.next().unwrap_or("").to_string() });
+                std::iter::once(first).chain(lines.map(plain)).collect()
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Note {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Note::Plain(s) => f.write_str(s),
+            Note::Diag(d) => d.fmt(f),
+        }
+    }
+}
+
+impl From<String> for Note {
+    fn from(s: String) -> Note {
+        Note::Plain(s)
+    }
+}
+
+impl From<&str> for Note {
+    fn from(s: &str) -> Note {
+        Note::Plain(s.to_string())
+    }
+}
+
+impl From<Diag> for Note {
+    fn from(d: Diag) -> Note {
+        Note::Diag(d)
+    }
 }
 
 fn width(s: &str) -> usize {
@@ -199,14 +293,28 @@ mod tests {
         assert_eq!(paint("held", true), "\x1b[33mheld\x1b[0m");
         assert_eq!(paint("stale", true), "\x1b[33mstale\x1b[0m");
         assert_eq!(paint("+12", true), "+12");
-        assert_eq!(status_colour("ERROR:"), Some(Colour::Red));
+        assert_eq!(status_colour("ERROR:"), None);
         assert_eq!(status_colour("named by a"), Some(Colour::Yellow));
         assert_eq!(status_colour("+wip"), None);
         assert_eq!(paint("cluster: a", true), "cluster: a");
         assert_eq!(paint("unused", false), "unused");
-        assert_eq!(paint_prefix("ERROR: x: y", true), "\x1b[31mERROR:\x1b[0m x: y");
-        assert_eq!(paint_prefix("warning: x", true), "\x1b[33mwarning:\x1b[0m x");
-        assert_eq!(paint_prefix("claude: in sync", true), "claude: in sync");
+    }
+
+    #[test]
+    fn a_diag_paints_its_prefix_by_level_only_when_asked() {
+        assert_eq!(Diag::error("x: y").paint(true), "\x1b[31mERROR:\x1b[0m x: y");
+        assert_eq!(Diag::warning("x").paint(true), "\x1b[33mwarning:\x1b[0m x");
+        assert_eq!(Diag::error("x: y").paint(false), "ERROR: x: y");
+        assert_eq!(Diag::warning("x").to_string(), "warning: x");
+    }
+
+    #[test]
+    fn a_split_note_keeps_its_level_on_the_first_line_only() {
+        let lines = Note::from(Diag::error("a\n  b")).split();
+        assert_eq!(lines, [Note::from(Diag::error("a")), Note::from("  b")]);
+        assert_eq!(Note::from(Diag::error("")).split(), [Note::from(Diag::error(""))]);
+        assert_eq!(Note::from("a\nb\n").split(), [Note::from("a"), Note::from("b")]);
+        assert!(Note::from("").split().is_empty());
     }
 
     #[test]

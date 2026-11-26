@@ -7,7 +7,7 @@ use super::{Lock, Locked, Outcome, Target, content_hash, inventory, project_hint
 use crate::audit::{self, Backend, Caller, Vet};
 use crate::config::{Config, Home, Judge};
 use crate::inventory::Inventory;
-use crate::render::PathExt;
+use crate::render::{Diag, PathExt};
 use crate::{Error, Result};
 use crate::{durable, links};
 use std::cell::OnceCell;
@@ -50,7 +50,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
                 continue;
             }
             Err(e) => {
-                out.error(&format!("ERROR: update {}: {e}", l.name));
+                out.error(Diag::error(format!("update {}: {e}", l.name)).into());
                 outcome = outcome.max(Outcome::Failed);
                 continue;
             }
@@ -59,7 +59,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             && match tagged.get_or_init(|| bundled::listed(&remote, &|| out.cancelled()).map_err(|e| e.to_string())) {
                 Ok((tagged, _)) => *tagged,
                 Err(e) => {
-                    out.error(&format!("ERROR: update {}: {e}", l.name));
+                    out.error(Diag::error(format!("update {}: {e}", l.name)).into());
                     outcome = outcome.max(Outcome::Failed);
                     continue;
                 }
@@ -70,11 +70,14 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         let vet = match &revet {
             _ if (project.is_none() && bundled::bundled(l)) || remote.trusted_by(&cfg.trusted) => None,
             None => {
-                out.error(&format!(
-                    "ERROR: update {}: update refused: {} is not trusted and re-vetting it needs a [judge], \
-                     which the config lacks; add it to trusted to update it without vetting",
-                    l.name, l.origin
-                ));
+                out.error(
+                    Diag::error(format!(
+                        "update {}: update refused: {} is not trusted and re-vetting it needs a [judge], \
+                         which the config lacks; add it to trusted to update it without vetting",
+                        l.name, l.origin
+                    ))
+                    .into(),
+                );
                 (unjudged, outcome) = (true, Outcome::Usage);
                 continue;
             }
@@ -89,7 +92,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
             }
             Ok(None) => out.line(&format!("{}: up to date", l.name)),
             Err(e) => {
-                out.error(&format!("ERROR: update {}: {e}", l.name));
+                out.error(Diag::error(format!("update {}: {e}", l.name)).into());
                 outcome = outcome.max(Outcome::Failed);
             }
         }
@@ -98,7 +101,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         let _lock = durable::lock(data)?;
         let (plan, errors) = target.home_sync(cfg, &inventory(cfg.source.as_deref(), data)?, None);
         for e in &errors {
-            out.error(e);
+            out.error(e.clone().into());
         }
         if errors.is_empty() {
             for line in links::apply(&plan)? {
@@ -109,7 +112,7 @@ pub fn update(cfg: &Config, inv: &Inventory, data: &Path, args: &Update) -> Resu
         }
     }
     if unjudged {
-        out.error(&no_judge());
+        out.error(no_judge().into());
     }
     Ok(outcome)
 }
@@ -182,7 +185,7 @@ fn refresh(
     };
     if let Err(e) = recorded {
         for e in &errors {
-            out.error(e);
+            out.error(e.clone().into());
         }
         if let Err(c) = fs::remove_dir_all(&to).and_then(|()| fs::rename(&old, &to)) {
             let why = if errors.is_empty() { e.to_string() } else { "the sync refused it".into() };

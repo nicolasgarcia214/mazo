@@ -8,7 +8,7 @@ use mazo::config::{self, Config, Home};
 use mazo::inventory::{Inventory, Scope};
 use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::lifecycle::{self, Retired};
-use mazo::render::PathExt;
+use mazo::render::{Diag, PathExt};
 use mazo::report::{self, Since, UsageArgs};
 use mazo::{Error, adapters, audit, durable, evals, html, links, out, outln, policy, render, scan, store, tui};
 
@@ -437,7 +437,13 @@ fn cmd_report(
         Ok(format!("wrote {}\n", path.inert()))
     })?;
     if out.is_some() && html::in_worktree(&path) {
-        eprintln!("warning: {} is inside a git worktree; the report shows cwds and prompt excerpts", path.inert());
+        eprintln!(
+            "{}",
+            Diag::warning(format!(
+                "{} is inside a git worktree; the report shows cwds and prompt excerpts",
+                path.inert()
+            ))
+        );
     }
     if open {
         html::open(&path)?;
@@ -533,10 +539,10 @@ fn cmd_status(
             serde_json::json!({"home": e.home, "path": e.path.to_string_lossy(), "state": state, "error": error, "scope": e.scope})
         };
         let entries: Vec<serde_json::Value> = drift.iter().map(|e| row(e)).collect();
-        let bare = |e: &String| render::unprefixed(e).to_string();
-        let policy: Vec<String> = skill_errors.iter().chain(policy_errors.iter().map(|(_, e)| e)).map(bare).collect();
-        let conflicts: Vec<String> = plan.conflicts.iter().map(|(_, e)| bare(e)).collect();
-        let warnings: Vec<String> = warnings.iter().map(bare).collect();
+        let text = |e: &Diag| e.text.clone();
+        let policy: Vec<String> = skill_errors.iter().chain(policy_errors.iter().map(|(_, e)| e)).map(text).collect();
+        let conflicts: Vec<String> = plan.conflicts.iter().map(|(_, e)| text(e)).collect();
+        let warnings: Vec<String> = warnings.iter().map(text).collect();
         let mut v =
             serde_json::json!({"drift": entries, "policy": policy, "conflicts": conflicts, "warnings": warnings});
         if let Some(project) = &project {
@@ -567,7 +573,7 @@ fn cmd_status(
             }
         }
         for e in skill_errors.iter().chain(home_errors().map(|(_, e)| e)).chain(&warnings) {
-            eprintln!("{}", render::paint_prefix(e, colour));
+            eprintln!("{}", e.paint(colour));
         }
     }
     Ok(if failed { ExitCode::from(1) } else { ExitCode::SUCCESS })

@@ -4,18 +4,18 @@ use std::path::{Path, PathBuf};
 use crate::config::{Config, Home, Policy};
 use crate::inventory::Inventory;
 use crate::ledger::{Agent, Coverage};
-use crate::render::PathExt;
+use crate::render::{Diag, PathExt};
 use crate::yaml::{self, Yaml};
 
-pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<String> {
+pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<Diag> {
     if let (true, Some(source)) = (inv.skills.is_empty(), &cfg.source) {
-        return vec![format!("ERROR: no canonical skills found in {}", source.inert())];
+        return vec![Diag::error(format!("no canonical skills found in {}", source.inert()))];
     }
     inv.origins
         .iter()
         .filter_map(|(name, roots)| {
             let dir = roots[0].join(name);
-            check_skill(&cfg.policy, &dir, name).err().map(|e| format!("ERROR: {}: {e}", dir.inert()))
+            check_skill(&cfg.policy, &dir, name).err().map(|e| Diag::error(format!("{}: {e}", dir.inert())))
         })
         .collect()
 }
@@ -72,17 +72,17 @@ pub fn valid_name(name: &str) -> bool {
     name.split('-').all(ok)
 }
 
-pub fn home_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<(String, String)> {
+pub fn home_errors(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Vec<(String, Diag)> {
     homes.iter().flat_map(|h| per_home(&cfg.policy, inv, h).into_iter().map(|e| (h.name.clone(), e))).collect()
 }
 
-fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
+fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<Diag> {
     if !policy.claude_name_only || home.agent != Agent::Claude {
         return Vec::new();
     }
     let profile = home.settings();
     if !profile.exists() {
-        return vec![format!("ERROR: {}: no Claude settings profile", home.path.inert())];
+        return vec![Diag::error(format!("{}: no Claude settings profile", home.path.inert()))];
     }
     let (overrides, errors) = overrides(home);
     if !errors.is_empty() {
@@ -98,7 +98,11 @@ fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<String> {
     }
     let error = |(path, skills): (&Path, Vec<&String>)| {
         let entries: Vec<String> = skills.iter().map(|s| format!("  \"{s}\": \"name-only\"")).collect();
-        format!("ERROR: {}: skillOverrides must set every skill to name-only:\n{}", path.inert(), entries.join(",\n"))
+        Diag::error(format!(
+            "{}: skillOverrides must set every skill to name-only:\n{}",
+            path.inert(),
+            entries.join(",\n")
+        ))
     };
     missing.into_iter().map(error).collect()
 }
@@ -114,7 +118,7 @@ pub(crate) fn settings(home: &Home) -> impl Iterator<Item = (PathBuf, Result<ser
     })
 }
 
-pub fn overrides(home: &Home) -> (BTreeMap<String, (PathBuf, serde_json::Value)>, Vec<String>) {
+pub fn overrides(home: &Home) -> (BTreeMap<String, (PathBuf, serde_json::Value)>, Vec<Diag>) {
     let mut values = BTreeMap::new();
     let mut errors = Vec::new();
     for (path, parsed) in settings(home) {
@@ -129,13 +133,13 @@ pub fn overrides(home: &Home) -> (BTreeMap<String, (PathBuf, serde_json::Value)>
         };
         match set {
             Ok(set) => values.extend(set.into_iter().map(|(skill, v)| (skill, (path.clone(), v)))),
-            Err(e) => errors.push(format!("ERROR: {}: {e}", path.inert())),
+            Err(e) => errors.push(Diag::error(format!("{}: {e}", path.inert()))),
         }
     }
     (values, errors)
 }
 
-pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff::Timestamp) -> Vec<String> {
+pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff::Timestamp) -> Vec<Diag> {
     let mut out = Vec::new();
     for home in cfg.homes.iter().filter(|h| h.agent == Agent::Claude) {
         let set = settings(home).filter_map(|(_, v)| v.ok()?.get("cleanupPeriodDays")?.as_i64());
@@ -151,10 +155,10 @@ pub fn freshness(cfg: &Config, coverage: &BTreeMap<String, Coverage>, now: jiff:
         };
         if stale {
             let when = last.map_or("never".to_string(), |t| t.strftime("%Y-%m-%d").to_string());
-            out.push(format!(
-                "warning: {}: last scanned {when}; Claude deletes transcripts after {days} days. Run `mazo scan`.",
+            out.push(Diag::warning(format!(
+                "{}: last scanned {when}; Claude deletes transcripts after {days} days. Run `mazo scan`.",
                 home.name
-            ));
+            )));
         }
     }
     out

@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::durable;
 use crate::inventory::{Inventory, git};
 use crate::ledger::{self, Agent};
-use crate::render::PathExt;
+use crate::render::{Diag, PathExt};
 use crate::{Error, Result, outln};
 use crate::{links, policy, report, scan, store, yaml};
 
@@ -216,7 +216,7 @@ const RETIRE_DAYS: u32 = 30;
 
 pub enum Retired {
     Blocked(Vec<String>),
-    Refused(Vec<String>),
+    Refused(Vec<Diag>),
     Done(Vec<String>),
 }
 
@@ -226,7 +226,7 @@ pub fn retire(
     name: &str,
     force: bool,
     project: bool,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<Diag>,
 ) -> Result<Retired> {
     let project = if project { Some(store::project_root("retire")?) } else { None };
     let (inv, root) = located(cfg, data, name, project.as_deref())?;

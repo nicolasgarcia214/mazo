@@ -14,6 +14,7 @@ use super::{
 use crate::Result;
 use crate::inventory::git;
 use crate::ledger::Agent;
+use crate::render::Diag;
 
 pub const SKILL_PROMPT: &str = include_str!("../../prompts/skill.md");
 pub const SKILL_PROMPT_VERSION: &str = "skill-v2";
@@ -280,7 +281,7 @@ pub(super) fn synthesize(a: &Audit, spent: &mut u64) -> Result<Synthesis> {
         Ruling::Dropped(why) | Ruling::Unfunded(Some(why)) => Synthesis::Dropped(why),
         Ruling::Unfunded(None) => Synthesis::Skipped,
         Ruling::Stopped(why) => {
-            a.caller().note(&format!("ERROR: skill report: {why}"));
+            a.caller().note(Diag::error(format!("skill report: {why}")));
             a.caller().hint();
             Synthesis::Stopped(why)
         }

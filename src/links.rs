@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{Config, Home};
 use crate::inventory::{Inventory, Scope};
 use crate::policy;
-use crate::render::PathExt;
+use crate::render::{Diag, PathExt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -63,7 +63,7 @@ pub enum Action {
 pub struct Plan {
     pub entries: Vec<Entry>,
     pub actions: Vec<Action>,
-    pub conflicts: Vec<(String, String)>,
+    pub conflicts: Vec<(String, Diag)>,
 }
 
 struct Target {
@@ -73,15 +73,15 @@ struct Target {
 }
 
 impl Target {
-    fn claim(&mut self, name: String, src: PathBuf) -> Option<String> {
+    fn claim(&mut self, name: String, src: PathBuf) -> Option<Diag> {
         match self.entries.iter().find(|(n, _)| *n == name) {
             Some((_, other)) if *other == src => None,
-            Some((_, other)) => Some(format!(
-                "ERROR: {} is claimed by two sources: {} and {}",
+            Some((_, other)) => Some(Diag::error(format!(
+                "{} is claimed by two sources: {} and {}",
                 self.dir.join(&name).inert(),
                 other.inert(),
                 src.inert()
-            )),
+            ))),
             None => {
                 self.entries.push((name, src));
                 None
@@ -95,7 +95,7 @@ fn targets(
     inv: &Inventory,
     homes: &[&Home],
     present: &dyn Fn(&Path) -> bool,
-    conflicts: &mut Vec<(String, String)>,
+    conflicts: &mut Vec<(String, Diag)>,
 ) -> Vec<Target> {
     let (single, shared): (Vec<_>, Vec<_>) = inv.origins.iter().partition(|(_, roots)| roots.len() == 1);
     let mut common: Vec<(String, PathBuf)> =
@@ -113,14 +113,14 @@ fn targets(
             let path = home.skills_dir().join(name);
             conflicts.push((
                 home.name.clone(),
-                format!("ERROR: {} is claimed by several roots: {}", path.inert(), roots.join(", ")),
+                Diag::error(format!("{} is claimed by several roots: {}", path.inert(), roots.join(", "))),
             ));
         }
         out.push(Target { home: home.name.clone(), dir: home.skills_dir(), entries: common.clone() });
         for (key, src) in cfg.source.iter().flat_map(|s| home.links.iter().map(move |(k, v)| (k, s.join(v)))) {
             let path = home.path.join(key);
             if !present(&src) {
-                conflicts.push((home.name.clone(), format!("ERROR: {} is missing", src.inert())));
+                conflicts.push((home.name.clone(), Diag::error(format!("{} is missing", src.inert()))));
                 continue;
             }
             let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { continue };
@@ -171,12 +171,12 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         if let Some(root) = inv.roots.iter().find(|r| *r == physical) {
             plan.conflicts.push((
                 t.home.clone(),
-                format!("ERROR: {} resolves to {}; replace it with a directory", t.dir.inert(), root.inert()),
+                Diag::error(format!("{} resolves to {}; replace it with a directory", t.dir.inert(), root.inert())),
             ));
             continue;
         }
         if let Err(bad) = check_dir(&t.dir) {
-            plan.conflicts.push((t.home.clone(), format!("ERROR: {} is not a directory", bad.inert())));
+            plan.conflicts.push((t.home.clone(), Diag::error(format!("{} is not a directory", bad.inert()))));
             continue;
         }
         let exists = fs::symlink_metadata(&t.dir).is_ok();
@@ -198,11 +198,11 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
                 State::WrongLink | State::Obstructed => {
                     plan.conflicts.push((
                         t.home.clone(),
-                        format!(
-                            "ERROR: {} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
+                        Diag::error(format!(
+                            "{} conflicts with a canonical entry; preserved (resolve manually)\n  {}",
                             path.inert(),
                             hint(&path, state)
-                        ),
+                        )),
                     ));
                 }
                 _ => {}
@@ -215,7 +215,7 @@ pub fn plan(cfg: &Config, inv: &Inventory, homes: &[&Home], gone: Option<&Path>)
         let dir = match fs::read_dir(&t.dir) {
             Ok(dir) => dir,
             Err(e) => {
-                plan.conflicts.push((t.home.clone(), format!("ERROR: {}", crate::at(&t.dir)(e))));
+                plan.conflicts.push((t.home.clone(), Diag::error(crate::at(&t.dir)(e))));
                 continue;
             }
         };
@@ -286,14 +286,14 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) -> Vec<String> {
+pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) -> Vec<Diag> {
     policy::per_skill(cfg, inv)
         .into_iter()
         .chain(policy::home_errors(cfg, inv, homes).into_iter().chain(plan.conflicts.iter().cloned()).map(|(_, e)| e))
         .collect()
 }
 
-pub fn checked(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Result<Plan, Vec<String>> {
+pub fn checked(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Result<Plan, Vec<Diag>> {
     let plan = plan(cfg, inv, homes, None);
     let errors = sync_errors(cfg, inv, homes, &plan);
     if errors.is_empty() { Ok(plan) } else { Err(errors) }
@@ -409,7 +409,7 @@ mod tests {
         std::fs::remove_file(skills.join("mine")).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("store/theirs"), skills.join("mine")).unwrap();
         let p = plan(&cfg, &inv, &homes, None);
-        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        let errors: Vec<String> = p.conflicts.iter().map(|(_, e)| e.to_string()).collect();
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains(&skills.join("mine").display().to_string()), "{}", errors[0]);
     }
@@ -420,7 +420,7 @@ mod tests {
         skill(&tmp.path().join("store"), "mine");
         let (cfg, inv) = setup(tmp.path());
         let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
-        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        let errors: Vec<String> = p.conflicts.iter().map(|(_, e)| e.to_string()).collect();
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].starts_with("ERROR: ") && errors[0].contains("mine"), "{}", errors[0]);
         assert!(!p.actions.iter().any(|a| matches!(a, Action::Link { path, .. } if path.ends_with("mine"))));
@@ -445,7 +445,7 @@ mod tests {
 
         cfg.homes[1].links = [("skills/mine".to_string(), "extra.md".to_string())].into();
         let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
-        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        let errors: Vec<String> = p.conflicts.iter().map(|(_, e)| e.to_string()).collect();
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("claimed by two sources"), "{}", errors[0]);
     }
@@ -458,7 +458,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("home")).unwrap();
         std::os::unix::fs::symlink(tmp.join("source"), tmp.join("home/skills")).unwrap();
         let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
-        let errors: Vec<&String> = p.conflicts.iter().map(|(_, e)| e).collect();
+        let errors: Vec<String> = p.conflicts.iter().map(|(_, e)| e.to_string()).collect();
         let want = format!("ERROR: {} resolves to {}", tmp.join("home/skills").display(), tmp.join("source").display());
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].starts_with(&want), "{}", errors[0]);

@@ -14,7 +14,7 @@ use super::logo::{self, Logo};
 use super::{App, Screen};
 use crate::ctx;
 use crate::ledger::name;
-use crate::render::{self, Align, Colour};
+use crate::render::{self, Align, Colour, Level};
 use crate::report;
 use crate::store;
 use crate::theme;
@@ -71,8 +71,12 @@ fn muted(s: &str) -> Span<'static> {
 }
 
 fn token(t: &str) -> Span<'static> {
+    tinted(t, render::status_colour(t))
+}
+
+fn tinted(t: &str, colour: Option<Colour>) -> Span<'static> {
     let span = Span::raw(t.to_string());
-    match render::status_colour(t) {
+    match colour {
         Some(Colour::Red) => span.fg(theme::BAD),
         Some(Colour::Yellow) => span.fg(theme::WARN),
         None => span,
@@ -423,10 +427,11 @@ fn draw_logo(frame: &mut Frame, area: Rect, used: usize) {
     }
 }
 
-pub(super) fn status_line(line: &str) -> Line<'static> {
+pub(super) fn status_line(level: Option<Level>, line: &str) -> Line<'static> {
+    let colour = |head| level.map(Level::colour).or_else(|| render::status_colour(head));
     match line.split_once(' ') {
-        Some((head, rest)) if render::status_colour(head).is_some() => {
-            Line::from(vec![token(head).bold(), Span::raw(format!(" {rest}"))])
+        Some((head, rest)) if colour(head).is_some() => {
+            Line::from(vec![tinted(head, colour(head)).bold(), Span::raw(format!(" {rest}"))])
         }
         _ => Line::raw(line.to_string()),
     }

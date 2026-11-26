@@ -1,7 +1,7 @@
 use clap::ValueEnum;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use super::dialog::{Act, Ask, Dialog, source_dialog};
+use super::dialog::{Act, Ask, Dialog, notes, refused, source_dialog};
 use super::{App, Screen};
 use crate::config::Home;
 use crate::help;
@@ -156,11 +156,11 @@ impl App {
             KeyCode::Char('s') => {
                 let homes: Vec<&Home> = self.data.cfg.homes.iter().collect();
                 self.dialog = Some(match links::checked(&self.data.cfg, &self.data.inv, &homes) {
-                    Err(errors) => Dialog { lines: [vec!["sync refused:".into()], errors].concat(), ask: None },
+                    Err(errors) => Dialog { lines: refused(errors), ask: None },
                     Ok(plan) if plan.actions.is_empty() => {
                         Dialog { lines: vec!["in sync: nothing to apply".into()], ask: None }
                     }
-                    Ok(plan) => Dialog { lines: links::planned(&plan), ask: Some(Ask::Act(Act::Sync(plan))) },
+                    Ok(plan) => Dialog { lines: notes(links::planned(&plan)), ask: Some(Ask::Act(Act::Sync(plan))) },
                 });
             }
             KeyCode::Char('u') => {
@@ -176,7 +176,7 @@ impl App {
                 }
             }
             KeyCode::Char('H') => {
-                let lines = help::lines(self.list() == Screen::Unused);
+                let lines = notes(help::lines(self.list() == Screen::Unused));
                 self.dialog = Some(Dialog { lines, ask: Some(Ask::Help(0)) });
             }
             _ => {}
@@ -194,7 +194,7 @@ impl App {
     fn quit(&mut self) -> bool {
         let Some(job) = self.running() else { return false };
         if !matches!(self.dialog, Some(Dialog { ask: Some(Ask::Quit(_)), .. })) {
-            let lines = vec![format!("the {} of {} is running; stop its judge and quit?", job.verb, job.target)];
+            let lines = vec![format!("the {} of {} is running; stop its judge and quit?", job.verb, job.target).into()];
             let under = self.dialog.take().map(Box::new);
             self.dialog = Some(Dialog { lines, ask: Some(Ask::Quit(under)) });
         }

@@ -14,6 +14,7 @@ use super::draw::status_line;
 use super::{App, Data};
 use crate::audit;
 use crate::pick::Picker;
+use crate::render::{Diag, Note};
 use crate::store::{self, Outcome};
 use crate::theme;
 
@@ -42,8 +43,8 @@ impl store::Io for Dialogs<'_> {
         _ = self.pane.lines.send(line.into());
     }
 
-    fn error(&self, line: &str) {
-        self.line(line);
+    fn error(&self, line: Note) {
+        _ = self.pane.lines.send(line);
     }
 
     fn cancelled(&self) -> bool {
@@ -74,8 +75,8 @@ impl store::Io for Dialogs<'_> {
 pub(super) struct Job {
     pub(super) verb: &'static str,
     pub(super) target: String,
-    pub(super) lines: Vec<String>,
-    rx: mpsc::Receiver<String>,
+    pub(super) lines: Vec<Note>,
+    rx: mpsc::Receiver<Note>,
     asks: Option<mpsc::Receiver<Question>>,
     cancel: Arc<AtomicBool>,
     pub(super) thread: Option<JoinHandle<bool>>,
@@ -86,7 +87,7 @@ pub(super) struct Job {
 impl App {
     pub(super) fn add(&mut self, source: String) {
         if let Err(e) = store::precheck(&self.data.cfg, &source) {
-            self.dialog = Some(Dialog { lines: vec![format!("ERROR: {e}")], ask: None });
+            self.dialog = Some(Dialog { lines: vec![Diag::error(e.to_string()).into()], ask: None });
             return;
         }
         let (tx, rx) = mpsc::channel();
@@ -104,8 +105,8 @@ impl App {
                 io: &Dialogs { pane, asks: tx },
             };
             match store::add(&data.cfg, &data.inv, &data.dir, &args) {
-                Ok(outcome) => (String::new(), outcome == Outcome::Done),
-                Err(e) => (format!("ERROR: {e}"), false),
+                Ok(outcome) => (String::new().into(), outcome == Outcome::Done),
+                Err(e) => (Diag::error(e.to_string()).into(), false),
             }
         });
     }
@@ -115,7 +116,7 @@ impl App {
         verb: &'static str,
         target: String,
         asks: Option<mpsc::Receiver<Question>>,
-        job: impl FnOnce(&Data, &audit::Pane) -> (String, bool) + Send + 'static,
+        job: impl FnOnce(&Data, &audit::Pane) -> (Note, bool) + Send + 'static,
     ) {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -123,8 +124,8 @@ impl App {
         let data = self.data.clone();
         let thread = std::thread::spawn(move || {
             let (out, ok) = caught(verb, || job(&data, &pane));
-            for line in out.lines() {
-                _ = pane.lines.send(line.into());
+            for line in out.split() {
+                _ = pane.lines.send(line);
             }
             ok
         });
@@ -139,7 +140,7 @@ impl App {
             let args = audit::Args { limit: Some(audit::LIMIT), resynth: false, dry_run: false, json: false };
             let ran = audit::plan(&data.cfg, &data.inv, &name, None)
                 .and_then(|p| audit::command(&p, &args, &data.input(), &data.dir, false, Some(pane)));
-            ran.unwrap_or_else(|e| (format!("ERROR: {e}"), false))
+            ran.map_or_else(|e| (Diag::error(e.to_string()).into(), false), |(out, ok)| (out.into(), ok))
         });
     }
 
@@ -151,8 +152,8 @@ impl App {
             let io = &Dialogs { pane, asks: tx };
             let args = store::Update { names: &names, yes: false, force: false, project: false, io };
             match store::update(&data.cfg, &data.inv, &data.dir, &args) {
-                Ok(outcome) => (String::new(), outcome == Outcome::Done),
-                Err(e) => (format!("ERROR: {e}"), false),
+                Ok(outcome) => (String::new().into(), outcome == Outcome::Done),
+                Err(e) => (Diag::error(e.to_string()).into(), false),
             }
         });
     }
@@ -168,7 +169,10 @@ impl App {
                 }
                 Question::YesNo { mut lines, prompt, default, reply } => {
                     lines.push(prompt);
-                    Dialog { lines, ask: Some(Ask::Answer(reply, default)) }
+                    Dialog {
+                        lines: lines.into_iter().map(Note::from).collect(),
+                        ask: Some(Ask::Answer(reply, default)),
+                    }
                 }
             });
         }
@@ -183,7 +187,7 @@ impl App {
         job.ok = thread.join().unwrap_or(false);
         self.clear = true;
         if let Err(e) = self.reload() {
-            self.job.as_mut().expect("the job just ended").lines.push(format!("ERROR: {e}"));
+            self.job.as_mut().expect("the job just ended").lines.push(Diag::error(e.to_string()).into());
         }
     }
 
@@ -216,8 +220,12 @@ pub(super) fn draw_job(frame: &mut Frame, job: &Job, area: Rect) {
         Span::raw(format!(" {icon}")).fg(colour).bold(),
         Span::raw(format!(" {} {} · {state} ", job.verb, job.target)).bold(),
     ]);
-    let lines: Vec<Line> =
-        job.lines.iter().skip(job.lines.len().saturating_sub(PANE_LINES)).map(|l| status_line(l)).collect();
+    let lines: Vec<Line> = job
+        .lines
+        .iter()
+        .skip(job.lines.len().saturating_sub(PANE_LINES))
+        .map(|l| status_line(l.level(), &l.to_string()))
+        .collect();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(colour))
@@ -226,22 +234,23 @@ pub(super) fn draw_job(frame: &mut Frame, job: &Job, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn caught(verb: &str, job: impl FnOnce() -> (String, bool)) -> (String, bool) {
+fn caught(verb: &str, job: impl FnOnce() -> (Note, bool)) -> (Note, bool) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|panic| {
         let why = panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str));
-        (format!("ERROR: the {verb} panicked: {}", why.unwrap_or("no message")), false)
+        (Diag::error(format!("the {verb} panicked: {}", why.unwrap_or("no message"))).into(), false)
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::caught;
+    use crate::render::Diag;
 
     #[test]
     fn a_job_that_panics_fails_with_its_message() {
         assert_eq!(caught("audit", || ("done".into(), true)), ("done".into(), true));
-        assert_eq!(caught("audit", || panic!("boom")), ("ERROR: the audit panicked: boom".into(), false));
+        assert_eq!(caught("audit", || panic!("boom")), (Diag::error("the audit panicked: boom").into(), false));
         let n = 2;
-        assert_eq!(caught("update", || panic!("boom {n}")), ("ERROR: the update panicked: boom 2".into(), false));
+        assert_eq!(caught("update", || panic!("boom {n}")), (Diag::error("the update panicked: boom 2").into(), false));
     }
 }
