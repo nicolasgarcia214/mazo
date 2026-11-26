@@ -101,7 +101,7 @@ tests, so the code no longer has to carry them.
 - The `wait` test's launcher reaps its worker itself, so `kill -0` cannot mistake an unreaped zombie for a live worker.
 
 ### Live tests (`tests/live.rs`)
-- The live tests run only with `MAZO_LIVE=1`. The three gating tests share one run through `gate`. `assert_recorded` tries up to three times and reports skipped when the model never acts.
+- The live tests are `#[ignore]`d and run with `cargo test --test live -- --ignored`. The three gating tests share one run through `gate`. `assert_recorded` tries up to three times and reports skipped when the model never acts.
 - `gate` builds the gating run once per test binary in a `OnceLock` and catches its panic, so a failed setup fails every gating test without rerunning the agents.
 - The `LIVE` mutex serializes every agent run, because the probes link the real credentials and two agents refreshing one token at once could corrupt it.
 - `run` spawns the agent in its own process group, so a timeout kill reaches every process it started. It feeds stdout and stderr into one channel, so every wait uses `recv_timeout` and stays bounded. It stops waiting at a failed `response` line.

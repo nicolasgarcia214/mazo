@@ -2,6 +2,7 @@
 name = "mazo"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.98.1"
 description = "Personal skill manager: usage from agent transcripts, sync of skill links"
 license = "MIT"
 repository = "https://github.com/nicolasgarcia214/mazo"
