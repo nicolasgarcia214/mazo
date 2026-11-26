@@ -1,28 +1,19 @@
-//! One-pass git history of the source: one `git log` and one
-//! `git status` per report, from which every skill's first and last commit
-//! and uncommitted changes are derived.
-
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::inventory::git;
 
-/// A commit that touched the source, with the paths it changed under it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Commit {
     pub hash: String,
-    /// The committer date, strict ISO 8601 (`%cI`).
     pub date: String,
     pub subject: String,
-    /// Source-relative paths changed against each parent (`-m`): one list for
-    /// a plain commit, one per parent for a merge.
     #[serde(skip)]
     files: Vec<Vec<PathBuf>>,
 }
 
 impl Commit {
-    /// A merge touches `path` only when it differs from every parent there.
     fn touches(&self, path: &Path) -> bool {
         self.files.iter().all(|diff| diff.iter().any(|f| f.starts_with(path)))
     }
@@ -30,26 +21,18 @@ impl Commit {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct History {
-    /// Newest first.
     commits: Vec<Commit>,
-    /// Source-relative paths with uncommitted changes, untracked files included.
     dirty: Vec<PathBuf>,
 }
 
 impl History {
-    /// The history of `source`, which sits in the git worktree `worktree`.
-    /// None when git cannot read it. A repository with no commit yet has an
-    /// empty log.
     pub fn load(source: &Path, worktree: &Path) -> Option<History> {
         let prefix = source.canonicalize().ok()?.strip_prefix(worktree).ok()?.to_path_buf();
-        // Porcelain paths are relative to the worktree whatever the working directory.
         let status = git(source, &["status", "--porcelain", "-z", "--untracked-files=all", "--", "."])?;
         let log = git(source, &["log", "-m", "--relative", "--name-only", "--format=%H%x00%cI%x00%s", "--", "."]);
         Some(History { commits: parse_log(&log.unwrap_or_default()), dirty: parse_status(&status, &prefix) })
     }
 
-    /// The basename of the parent of every `SKILL.md` path in the log
-    /// (nested layouts such as `claude/goal-audit` yield `goal-audit`).
     pub fn skill_names(&self) -> impl Iterator<Item = String> + '_ {
         self.commits
             .iter()
@@ -58,24 +41,19 @@ impl History {
             .filter_map(|f| f.parent()?.file_name()?.to_str().map(str::to_string))
     }
 
-    /// The oldest commit that touched `skill`.
     pub fn first(&self, skill: &str) -> Option<&Commit> {
         self.commits.iter().rev().find(|c| c.touches(Path::new(skill)))
     }
 
-    /// The newest commit that touched `skill`.
     pub fn last(&self, skill: &str) -> Option<&Commit> {
         self.commits.iter().find(|c| c.touches(Path::new(skill)))
     }
 
-    /// `skill` has uncommitted changes.
     pub fn wip(&self, skill: &str) -> bool {
         self.dirty.iter().any(|f| f.starts_with(skill))
     }
 }
 
-/// `%H%x00%cI%x00%s` header lines, each followed by the file names of
-/// one diff. `-m` repeats a merge's header once per parent.
 fn parse_log(log: &str) -> Vec<Commit> {
     let mut commits: Vec<Commit> = Vec::new();
     for line in log.lines().filter(|l| !l.is_empty()) {
@@ -95,8 +73,6 @@ fn parse_log(log: &str) -> Vec<Commit> {
     commits
 }
 
-/// `git status --porcelain -z` entries `XY path`; a rename or copy is followed
-/// by its original path. Paths are made relative to the source.
 fn parse_status(status: &str, prefix: &Path) -> Vec<PathBuf> {
     let mut entries = status.split('\0').filter(|e| !e.is_empty());
     let mut paths = Vec::new();

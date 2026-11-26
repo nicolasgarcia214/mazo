@@ -1,5 +1,3 @@
-//! The binary's surface: help text and colour through pipes.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -8,8 +6,6 @@ use std::fs;
 
 use common::{Mazo, stderr, stdout};
 
-/// A source with one never-used skill and one Claude home never scanned, so
-/// `unused` prints an `unused` row and `status` an `ERROR:` and a `warning:`.
 fn fixture() -> (tempfile::TempDir, Mazo) {
     let temp = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(temp.path()).unwrap();
@@ -47,9 +43,6 @@ fn since_help_names_its_syntax_and_default_window() {
     assert!(unused.contains("<N>d or all") && unused.contains("[default: 60d]"), "{unused}");
 }
 
-/// AC1, AC5: `evals dir` prints the two directories under the default
-/// `<data dir>/evals`, then under a configured `evals_dir` relative to the
-/// config, which `show` reads; an unknown skill exits 2.
 #[test]
 fn evals_dir_prints_the_grade_and_retro_directories() {
     let (temp, mazo) = fixture();
@@ -77,9 +70,6 @@ fn evals_dir_prints_the_grade_and_retro_directories() {
     assert_eq!(card["content_hash"], card["grades"][0]["content_hash"]);
 }
 
-/// `evals trace` finds the transcript by path or by a session id in its file
-/// name, prints the run line-numbered and its span on stderr; a transcript it
-/// cannot place exits 2 and one with no load of the skill exits 1.
 #[test]
 fn evals_trace_prints_the_skills_run_in_a_session() {
     let (temp, mazo) = fixture();
@@ -113,8 +103,6 @@ fn evals_trace_prints_the_skills_run_in_a_session() {
     assert!(stderr(&elsewhere).contains("under no home's transcripts"), "{}", stderr(&elsewhere));
 }
 
-/// A read command parses the ledger once, so an unreadable line warns once,
-/// and its scan drops the line, so the next command does not warn.
 #[test]
 fn an_unreadable_ledger_line_warns_once_and_the_scan_drops_it() {
     let (temp, mazo) = fixture();
@@ -138,7 +126,6 @@ fn a_reader_that_closes_stdout_early_ends_the_command_with_0_and_no_panic() {
 
     let (temp, mazo) = fixture();
     let source = fs::canonicalize(temp.path()).unwrap().join("skills");
-    // About 130 KiB of rows, past a 64 KiB pipe buffer, so the write after the close fails.
     for i in 0..1000 {
         let name = format!("idle-{i:04}-{}", "x".repeat(50));
         common::write(&source.join(&name).join("SKILL.md"), &format!("---\nname: {name}\ndescription: Idle.\n---\n"));
@@ -153,7 +140,6 @@ fn a_reader_that_closes_stdout_early_ends_the_command_with_0_and_no_panic() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }
 
-/// Every subcommand `mazo --help` lists has a row in the command reference.
 #[test]
 fn the_command_reference_lists_every_subcommand() {
     let (_temp, mazo) = fixture();

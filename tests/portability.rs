@@ -1,7 +1,3 @@
-//! A plain Agent Skills directory under the default config: every `[policy]`
-//! rule off, and a fresh `HOME` from config discovery
-//! through `init` to `sync`.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -13,8 +9,6 @@ use std::process::Output;
 
 use common::{Mazo, stderr, stdout};
 
-/// Every configurable rule's violation at once: `disable-model-invocation` in
-/// the frontmatter, no `agents/openai.yaml`, no Claude `settings.json`.
 const PLAIN_SKILL: &str =
     "---\nname: plain\ndescription: A plain skill.\ndisable-model-invocation: true\n---\n\nBody.\n";
 
@@ -38,8 +32,6 @@ struct Tree {
 }
 
 impl Tree {
-    /// One skill directory holding only `SKILL.md`, and `policy` as the config's
-    /// text before the homes.
     fn new(policy: &str) -> Tree {
         let temp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(temp.path()).unwrap();
@@ -125,7 +117,6 @@ fn an_unknown_key_anywhere_is_an_error_naming_it() {
     assert!(!t.home.join(".claude").exists());
 }
 
-/// The skill's `SKILL.md` text, written under `dir`.
 fn skill(t: &Tree, dir: &str, text: &str) {
     fs::remove_dir_all(&t.source).unwrap();
     common::write(&t.source.join(dir).join("SKILL.md"), text);
@@ -177,8 +168,6 @@ fn always_on_rules_hold_with_every_rule_off() {
     assert!(!t.home.join(".codex").exists(), "the links rule applies to the selected homes only");
 }
 
-/// A fresh `HOME` with no config, `MAZO_CONFIG` and `XDG_CONFIG_HOME` unset
-/// unless a test sets them.
 struct Fresh {
     _temp: tempfile::TempDir,
     home: PathBuf,
@@ -199,22 +188,18 @@ impl Fresh {
         run.command(env, args).output().unwrap()
     }
 
-    /// `mazo init --no-skills args…` with only `~/bin`, where a test writes
-    /// its stub agents, on `PATH`.
     fn init(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Output {
         let bin = self.home.join("bin");
         let env: Vec<_> = env.iter().copied().chain([("PATH", bin.as_os_str())]).collect();
         self.mazo(&env, &[&["init", "--no-skills"], args].concat())
     }
 
-    /// `~/skills/plain/SKILL.md` with `name` and `description` only.
     fn plain_skill(&self) -> PathBuf {
         let source = self.home.join("skills");
         common::write(&source.join("plain/SKILL.md"), "---\nname: plain\ndescription: A plain skill.\n---\n");
         source
     }
 
-    /// Each discovery case: the environment, and the config path it selects.
     fn discovery(&self) -> [(Vec<(&'static str, PathBuf)>, PathBuf); 3] {
         let (explicit, xdg) = (self.home.join("explicit.toml"), self.home.join("xdg"));
         [
@@ -232,7 +217,6 @@ fn env_refs<'a>(env: &'a [(&'static str, PathBuf)]) -> Vec<(&'static str, &'a Os
 #[test]
 fn a_missing_config_exits_2_naming_the_discovered_path() {
     let f = Fresh::new();
-    // The removed default is not a fallback.
     common::write(&f.home.join("dotfiles/skills/mazo.toml"), "source = \".\"\n");
     for (env, path) in f.discovery() {
         for cmd in ["status", "sync", "usage", "prune"] {
@@ -252,7 +236,6 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     let f = Fresh::new();
     let source = f.plain_skill();
     for (env, path) in f.discovery() {
-        // A relative `--source` is written absolute.
         assert_ok(&f.init(&env_refs(&env), &["--source", "skills"]));
         let v: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
         assert_eq!(v["source"].as_str(), Some(source.to_str().unwrap()), "{env:?}");
@@ -299,14 +282,12 @@ fn init_writes_the_discovered_path_and_only_existing_homes() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "mine\n");
 }
 
-/// `~/bin/<name>`, a stub agent that prints `out` whatever it is asked.
 fn stub(f: &Fresh, name: &str, out: &str) {
     let path = f.home.join("bin").join(name);
     common::write(&path, &format!("#!/bin/sh\necho '{out}'\n"));
     fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 }
 
-/// The `[judge]` table of the config `init` wrote at `path`, if any.
 fn judge(path: &std::path::Path) -> Option<toml::Value> {
     fs::read_to_string(path).unwrap().parse::<toml::Table>().unwrap().remove("judge")
 }
@@ -314,8 +295,6 @@ fn judge(path: &std::path::Path) -> Option<toml::Value> {
 #[test]
 fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
     const CLAUDE_AI: &str = r#"{"authMethod":"claude.ai"}"#;
-    // Each case: the stubs on PATH with what claude auth status prints, whether
-    // ~/.codex/auth.json holds a ChatGPT login, and the judge written.
     let cases = [
         (&[("claude", CLAUDE_AI), ("codex", ""), ("pi", "")][..], true, "claude"),
         (&[("codex", ""), ("pi", "")], true, "codex"),
@@ -326,7 +305,6 @@ fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
     ];
     for (stubs, codex_login, want) in cases {
         let f = Fresh::new();
-        // A home, for `status` to check.
         fs::create_dir(f.home.join(".claude")).unwrap();
         for (name, out) in stubs {
             stub(&f, name, out);
@@ -344,7 +322,6 @@ fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
         let path = f.home.join(".config/mazo/config.toml");
         let judge = judge(&path).unwrap_or_else(|| panic!("{stubs:?}: no [judge]"));
         assert_eq!(judge["agent"].as_str(), Some(want), "{stubs:?}");
-        // The written config loads.
         assert_ok(&f.mazo(&[], &["status"]));
     }
 }
@@ -352,7 +329,6 @@ fn init_writes_the_first_of_claude_codex_and_pi_that_is_logged_in() {
 #[test]
 fn init_without_a_judge_or_a_terminal_writes_no_judge_and_says_how_to_add_one() {
     let f = Fresh::new();
-    // Neither a claude nor a codex without a subscription login is a judge.
     stub(&f, "claude", r#"{"authMethod":"api_key"}"#);
     stub(&f, "codex", "");
     let tmp = f.home.join("tmp");
@@ -360,7 +336,6 @@ fn init_without_a_judge_or_a_terminal_writes_no_judge_and_says_how_to_add_one() 
     let o = f.init(&[("TMPDIR", tmp.as_os_str())], &[]);
     assert_ok(&o);
     assert!(judge(&f.home.join(".config/mazo/config.toml")).is_none());
-    // The login checks leave no data directory and no scratch directory.
     assert!(!f.home.join("data").exists());
     assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
     assert_eq!(

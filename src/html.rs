@@ -1,6 +1,3 @@
-//! The self-contained HTML report: one file with inline CSS and
-//! inline SVG, rendered from the typed model of `report::report`.
-
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -42,17 +39,14 @@ blockquote { margin: 2px 0 8px; padding-left: 8px; border-left: 2px solid var(--
 ul, ol { margin: 0; padding-left: 18px; }
 ";
 
-/// Escapes text for an element body or a quoted attribute.
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
-/// A timestamp in the report's zone, as `show` prints it; `-` for none.
 fn local(t: Option<&str>, tz: &TimeZone, format: &str) -> String {
     t.map_or("-".into(), |t| esc(&render::local(t, tz, format)))
 }
 
-/// Escaped text, `-` for none.
 fn or_dash(s: Option<&str>) -> String {
     s.map_or("-".into(), esc)
 }
@@ -61,18 +55,15 @@ fn anchor(skill: &str) -> String {
     format!("skill-{}", esc(skill))
 }
 
-/// Markup in the warning colour.
 fn warn(html: String) -> String {
     format!("<span class=\"warn\">{html}</span>")
 }
 
-/// A grade's cell, in the warning colour when stale.
 fn grade(g: &GradeOut) -> String {
     let cell = esc(&g.cell(false));
     if g.grade.stale { warn(cell) } else { cell }
 }
 
-/// The card histogram: one column per day with events, strong below weak.
 fn histogram(days: &[Day]) -> String {
     let (Some(first), Some(last)) = (days.first(), days.last()) else {
         return "<p class=\"muted\">no events in the window</p>".into();
@@ -114,8 +105,6 @@ fn table(header: &[&str], rows: &[Vec<String>]) -> String {
     format!("<div class=\"wrap\"><table><tr>{head}</tr>{body}</table></div>")
 }
 
-/// The usage table: the cells `mazo usage` prints, its last load a day, a
-/// global skill's name a link to its card.
 fn usage(model: &Report) -> String {
     let class = |h: &str, a: &Align| match (h, a) {
         (_, Align::Right) => " class=\"n\"",
@@ -169,13 +158,10 @@ fn grades_due(model: &Report) -> String {
     format!("<h2>Grades to run</h2><ul>{items}</ul>")
 }
 
-/// `cites` or `cited by`, each skill a link to its card.
 fn links(ls: &[Link]) -> String {
     report::links(ls, |skill| format!("<a href=\"#{}\">{}</a>", anchor(skill), esc(skill)))
 }
 
-/// The card's examples: the invocation per agent, the manifest's
-/// default prompt, and real prompts read from transcripts.
 fn examples(ex: &Examples, tz: &TimeZone) -> String {
     let written: Vec<String> =
         ex.written.iter().map(|i| format!("{} <code>{}</code>", esc(&name(i.agent)), esc(&i.text))).collect();
@@ -220,8 +206,6 @@ fn examples(ex: &Examples, tz: &TimeZone) -> String {
     out
 }
 
-/// The latest audit: when and how it ran, its verdict, the rates and the
-/// top improvements.
 fn audit(c: &Card, tz: &TimeZone) -> String {
     let Some(a) = c.audit_lines(tz) else { return "<dt>audit</dt><dd>none</dd>".into() };
     let improvements: String = a
@@ -295,8 +279,6 @@ fn card(c: &Card, tz: &TimeZone) -> String {
     )
 }
 
-/// The report page for `model`, its times shown in the zone its days were
-/// bucketed in.
 pub fn render(model: &Report) -> String {
     let tz = &model.tz;
     let from = model.since.as_deref().map_or("all time".into(), |d| format!("since {}", esc(d)));
@@ -314,8 +296,6 @@ pub fn render(model: &Report) -> String {
     )
 }
 
-/// Writes `html` to `path` with mode 0600, replacing any previous file:
-/// the page shows cwds and prompt excerpts, the one place prompt text is written.
 pub fn write(path: &Path, html: &str) -> crate::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         fs::create_dir_all(dir).map_err(crate::at(dir))?;
@@ -323,13 +303,11 @@ pub fn write(path: &Path, html: &str) -> crate::Result<()> {
     crate::ledger::write_atomic(path, html.as_bytes(), 0o600)
 }
 
-/// Whether the directory holding `path` is inside a git worktree.
 pub fn in_worktree(path: &Path) -> bool {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     crate::inventory::git(dir, &["rev-parse", "--is-inside-work-tree"]).is_some_and(|s| s.trim() == "true")
 }
 
-/// Opens `path` in the default browser with `open` on macOS, `xdg-open` elsewhere.
 pub fn open(path: &Path) -> crate::Result<()> {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     let status = Command::new(opener).arg(path).status().map_err(|e| format!("{opener}: {e}"))?;

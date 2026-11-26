@@ -1,6 +1,3 @@
-//! The keys the TUI takes: on a list, on a card, in the filter and in each
-//! dialog, and a paste.
-
 use clap::ValueEnum;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -13,10 +10,8 @@ use crate::links;
 use crate::pick::Step;
 use crate::report::{self, Since};
 
-/// The windows `w` cycles through.
 const WINDOWS: [Since; 3] = [report::SINCE, report::UNUSED_SINCE, Since::All];
 
-/// The next of `all` after `cur`, `None` (no filter) after the last.
 fn cycle<T: Copy + PartialEq>(all: &[T], cur: Option<T>) -> Option<T> {
     match cur {
         None => all.first().copied(),
@@ -29,7 +24,6 @@ fn next_window(since: Since) -> Since {
 }
 
 impl App {
-    /// Applies `key`; false when it quits.
     pub fn key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
             return true;
@@ -57,14 +51,12 @@ impl App {
                     Step::Done(names) => _ = reply.send(names),
                 },
                 Some(Ask::Answer(reply, default)) => match key.code {
-                    // A Ctrl or Alt chord answers nothing.
                     _ if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                         self.dialog = Some(Dialog { lines, ask: Some(Ask::Answer(reply, default)) })
                     }
                     KeyCode::Enter => _ = reply.send(default),
                     KeyCode::Char('y' | 'Y') => _ = reply.send(true),
                     KeyCode::Char('n' | 'N') | KeyCode::Esc => _ = reply.send(false),
-                    // The unanswered question is No.
                     KeyCode::Char('q') => return self.quit(),
                     _ => self.dialog = Some(Dialog { lines, ask: Some(Ask::Answer(reply, default)) }),
                 },
@@ -112,7 +104,6 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.shift(1),
             KeyCode::Left | KeyCode::Char('h') => self.shift(-(self.page as isize)),
             KeyCode::Right | KeyCode::Char('l') => self.shift(self.page as isize),
-            // An unused store skill is past its install-date window: retire first.
             KeyCode::Enter
                 if self.screen == Screen::Unused
                     && let Some(skill) = self.selected_unused_store() =>
@@ -156,7 +147,6 @@ impl App {
                 }
                 self.refresh();
             }
-            // Its plan is of the inventory a running job may change.
             KeyCode::Char('s') if self.running().is_some() => self.dialog = self.one_job(),
             KeyCode::Char('r') => {
                 if let Some(skill) = self.chosen() {
@@ -194,7 +184,6 @@ impl App {
         true
     }
 
-    /// The card's skill, or the selected one.
     fn chosen(&self) -> Option<String> {
         match &self.card {
             Some((skill, ..)) if self.screen == Screen::Card => Some(skill.clone()),
@@ -202,8 +191,6 @@ impl App {
         }
     }
 
-    /// False, quitting, unless a job is running: then it asks first, over
-    /// the open dialog.
     fn quit(&mut self) -> bool {
         let Some(job) = self.running() else { return false };
         if !matches!(self.dialog, Some(Dialog { ask: Some(Ask::Quit(_)), .. })) {
@@ -214,15 +201,12 @@ impl App {
         true
     }
 
-    /// Inserts pasted `text`, its line breaks dropped, into an open source
-    /// dialog; anywhere else a paste does nothing.
     pub fn paste(&mut self, text: &str) {
         if let Some(Dialog { ask: Some(Ask::Source(source)), .. }) = &mut self.dialog {
             source.extend(text.chars().filter(|c| !matches!(c, '\r' | '\n')));
         }
     }
 
-    /// The selected unused-list skill when it is `unused` and read from the store.
     fn selected_unused_store(&self) -> Option<String> {
         let row = self.unused.skills.iter().filter(|r| self.matches(&r.skill)).nth(self.selected)?;
         let store = self.data.inv.root(&row.skill) != self.data.inv.source.as_deref();

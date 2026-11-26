@@ -1,6 +1,3 @@
-//! The canonical skill set, known names from git history,
-//! the fan-in citation graph and the mentions beside it.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,25 +11,16 @@ use crate::store::{Locked, Project};
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
     pub source: Option<PathBuf>,
-    /// The directories skills are read from: the source, if any, then the store.
     pub roots: Vec<PathBuf>,
-    /// Non-hidden child directories of a root that contain `SKILL.md`.
     pub skills: BTreeSet<String>,
-    /// Each skill's roots, in root order: more than one is a conflict.
     pub origins: BTreeMap<String, Vec<PathBuf>>,
-    /// Canonical skills plus every directory that ever held a `SKILL.md` in git.
     pub known: BTreeSet<String>,
-    /// The git worktree containing the source, for the authoring rule.
     pub worktree: Option<PathBuf>,
-    /// The source's git history; None outside a git worktree.
     pub history: Option<History>,
-    /// Each store skill's lockfile entry.
     pub installed: BTreeMap<String, Locked>,
-    /// The project at the current directory, which `status` and `usage` list.
     pub project: Option<Project>,
 }
 
-/// Where a skill is installed: the source and the store, or a project's store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
@@ -41,7 +29,6 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// What text output appends to a skill's name.
     pub fn suffix(self) -> &'static str {
         match self {
             Scope::Global => "",
@@ -55,11 +42,9 @@ impl Inventory {
         Inventory::load_roots(Some(source), &[source])
     }
 
-    /// The inventory over every root; `source` keeps the history and reports.
     pub fn load_roots(source: Option<&Path>, roots: &[&Path]) -> Result<Inventory> {
         let mut origins: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
         for root in roots {
-            // The store does not exist before the first `add`.
             if Some(*root) != source && !root.exists() {
                 continue;
             }
@@ -87,26 +72,21 @@ impl Inventory {
         })
     }
 
-    /// The root a skill is read from; `None` for a name in no root.
     pub fn root(&self, name: &str) -> Option<&Path> {
         self.origins.get(name).and_then(|r| r.first()).map(PathBuf::as_path)
     }
 
-    /// The `description` of a skill's `SKILL.md` frontmatter, when it reads.
     pub fn description(&self, name: &str) -> Option<String> {
         description(&self.root(name)?.join(name))
     }
 }
 
-/// The `description` of the `SKILL.md` frontmatter in `dir`, when it reads,
-/// made [`inert`](crate::render::inert).
 pub fn description(dir: &Path) -> Option<String> {
     let text = std::fs::read_to_string(dir.join("SKILL.md")).ok()?;
     let meta = crate::yaml::frontmatter(&text).ok()?;
     crate::yaml::get(&meta, "description").and_then(crate::yaml::text).map(crate::render::inert)
 }
 
-/// Any non-hidden child directory of the root that contains `SKILL.md`.
 pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
     let entries = std::fs::read_dir(source).map_err(crate::at(source))?;
     let mut out = BTreeSet::new();
@@ -115,8 +95,6 @@ pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
         if e.file_name().as_encoded_bytes().starts_with(b".") || !path.join("SKILL.md").is_file() {
             continue;
         }
-        // A project's store is anyone's commit, so a name that is not
-        // already inert is skipped; Debug escapes it in the warning.
         match e.file_name().into_string() {
             Ok(name) if crate::render::inert_line(&name) == name => {
                 out.insert(name);
@@ -127,20 +105,13 @@ pub fn canonical_skills(source: &Path) -> Result<BTreeSet<String>> {
     Ok(out)
 }
 
-/// Runs `git -C dir args…` and returns stdout on success.
 pub fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    // Reports run `git status`; without this it may rewrite the index under the user.
     let out = Command::new("git").arg("--no-optional-locks").arg("-C").arg(dir).args(args).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Fan-in edges: citing skill → cited skills. Filled in by `fan_in`.
 pub type Graph = BTreeMap<String, BTreeSet<String>>;
 
-/// A → B when the body of A's `SKILL.md` (frontmatter dropped) or
-/// any `.md` under `A/references/`, with backticks removed and whitespace
-/// collapsed, contains `the B skill`, `owned by B`, or `B/` as a path
-/// component. Self-edges are dropped. Every skill of `inv` gets a key.
 pub fn fan_in(inv: &Inventory) -> Graph {
     let skills = &inv.skills;
     let mut graph = Graph::new();
@@ -156,9 +127,6 @@ pub fn fan_in(inv: &Inventory) -> Graph {
     graph
 }
 
-/// A → B when A's citing text names B as a whole word (case-sensitive) and
-/// A → B is not in `edges`. Mentions mark boundaries between siblings, so they
-/// never hold a skill. Self-mentions are dropped. Every skill of `inv` gets a key.
 pub fn mentions(inv: &Inventory, edges: &Graph) -> Graph {
     let skills = &inv.skills;
     let mut graph = Graph::new();
@@ -173,21 +141,15 @@ pub fn mentions(inv: &Inventory, edges: &Graph) -> Graph {
     graph
 }
 
-/// A character of a skill name.
 fn word(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
 
-/// `b` occurs in `text` after the start or a non-name character, and before
-/// the end or a character that is neither a name character nor `/`: `/b` is a
-/// name, `b/` is a path.
 fn names(text: &str, b: &str) -> bool {
     text.match_indices(b)
         .any(|(i, m)| !text[..i].ends_with(word) && !text[i + m.len()..].starts_with(|c| word(c) || c == '/'))
 }
 
-/// A skill's citing text: the `SKILL.md` body and every `references/**/*.md`,
-/// backticks removed and each whitespace run collapsed to one space.
 fn citing_text(dir: &Path) -> String {
     let skill_md = std::fs::read_to_string(dir.join("SKILL.md")).unwrap_or_default();
     let mut parts = vec![crate::yaml::split_frontmatter(&skill_md).map_or(skill_md, |(_, body)| body)];
@@ -226,7 +188,6 @@ mod tests {
             b"nl\nclaude: in sync",
         ] {
             match std::fs::create_dir(dir(name)) {
-                // APFS refuses a name that is not UTF-8, so macOS never lists one.
                 Err(e) if e.raw_os_error() == Some(libc::EILSEQ) => continue,
                 r => r.unwrap(),
             }

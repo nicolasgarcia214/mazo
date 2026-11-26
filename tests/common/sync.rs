@@ -1,8 +1,3 @@
-//! Shared fixture for `tests/sync_port.rs`, `tests/sync.rs` and `tests/lifecycle.rs`:
-//! a temporary skills source with a `mazo.toml` turning every `[policy]` rule on
-//! and listing four `~`-relative homes, a temporary `HOME`, a Pi directory, and
-//! a private `XDG_DATA_HOME`.
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -44,8 +39,6 @@ path  = "~/.pi/agent"
 links = { "extensions/pi-explicit-skills.ts" = "pi-explicit-skills.ts" }
 "#;
 
-/// `PI_SKILLS`: sorted non-hidden child directories of [`real_skills`] with a
-/// `SKILL.md`.
 pub fn pi_skills() -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(real_skills())
         .expect("the skills directory under test is readable")
@@ -74,7 +67,6 @@ pub struct Fixture {
 impl Fixture {
     pub fn new() -> Fixture {
         let temp = tempfile::tempdir().unwrap();
-        // The links name the physical source, so compare against a physical root.
         let root = fs::canonicalize(temp.path()).unwrap();
         let source = root.join("repo with spaces").join("skills");
         fs::create_dir_all(&source).unwrap();
@@ -117,20 +109,17 @@ impl Fixture {
         skill
     }
 
-    /// Sets `name` to `"name-only"` in both Claude homes' settings.
     pub fn allow(&mut self, name: &str) {
         self.overrides.push(name.to_string());
         self.write_settings(&self.home.clone());
     }
 
-    /// The valid settings text: every added skill is `"name-only"`.
     pub fn valid_settings(&self) -> String {
         let map: serde_json::Map<String, serde_json::Value> =
             self.overrides.iter().map(|n| (n.clone(), "name-only".into())).collect();
         serde_json::json!({ "skillOverrides": map }).to_string()
     }
 
-    /// Writes valid `settings.json` into both Claude homes under `home`.
     pub fn write_settings(&self, home: &Path) {
         for dir in [".claude", ".claude-work"] {
             fs::create_dir_all(home.join(dir)).unwrap();
@@ -154,15 +143,12 @@ impl Fixture {
         Run(self.run.command(&[], args).current_dir(cwd).output().unwrap())
     }
 
-    /// `mazo args…` in the fixture's root, not yet run.
     pub fn command(&self, args: &[&str]) -> std::process::Command {
         let mut cmd = self.run.command(&[], args);
         cmd.current_dir(&self.root);
         cmd
     }
 
-    /// `mazo sync --agent pi` must fail with an `ERROR:` before creating the
-    /// Pi directory.
     pub fn assert_rejected_before_writes(&self) {
         let r = self.mazo(&["sync", "--agent", "pi"]);
         assert_ne!(r.code(), 0, "{}", r.stdout());
@@ -170,7 +156,6 @@ impl Fixture {
         assert!(!exists(&self.agent), "{}", r.stdout());
     }
 
-    /// A snapshot of `$HOME`, the Pi directory and the data directory.
     pub fn snapshot(&self) -> Snapshot {
         snapshot(&[&self.home, &self.agent, &self.data])
     }
@@ -194,8 +179,6 @@ impl Run {
     }
 }
 
-/// Every path under the roots, with its type, link text, and the SHA-1 of every
-/// regular file. A missing root is recorded as missing.
 pub type Snapshot = BTreeMap<PathBuf, String>;
 
 pub fn snapshot(roots: &[&Path]) -> Snapshot {
@@ -231,7 +214,6 @@ fn walk(path: &Path, out: &mut Snapshot) {
     }
 }
 
-/// `lstat` existence: a dangling link exists.
 pub fn exists(p: &Path) -> bool {
     fs::symlink_metadata(p).is_ok()
 }
@@ -251,7 +233,6 @@ pub fn s(p: &Path) -> String {
     p.to_str().expect("utf-8 path").to_string()
 }
 
-/// Python's `Path.as_uri()`: `file://` plus the percent-encoded path.
 pub fn as_uri(p: &Path) -> String {
     let mut out = String::from("file://");
     for b in s(p).bytes() {
@@ -264,7 +245,6 @@ pub fn as_uri(p: &Path) -> String {
     out
 }
 
-/// `os.path.relpath(path, start)` for absolute, lexically clean paths.
 pub fn relpath(path: &Path, start: &Path) -> String {
     let p: Vec<_> = path.components().collect();
     let b: Vec<_> = start.components().collect();

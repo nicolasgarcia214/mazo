@@ -1,8 +1,3 @@
-//! The http judge: an OpenAI-compatible chat completions endpoint, sent the
-//! prompt, the answer schema and the input as one user message, its
-//! `choices[0].message.content` the answer, and no dollar cost. The API key
-//! stays in this process: it is sent as a Bearer token and nowhere else.
-
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -13,17 +8,12 @@ use crate::config::{Billing, Judge};
 use crate::{Error, Result};
 
 pub struct Http {
-    /// `<url>/chat/completions`.
     endpoint: String,
     model: String,
-    /// `[judge] api_key_env` and the key it holds.
     key: Option<(String, String)>,
 }
 
 impl Http {
-    /// The judge of `judge`'s `url` and `model`, which the config's check
-    /// requires, with the key `api_key_env` names; a set `api_key_env` naming
-    /// an unset or empty variable is a usage error.
     pub fn new(judge: &Judge) -> Result<Http> {
         let (url, model) = judge.url.as_ref().zip(judge.model.as_ref()).expect("an http judge has a url and a model");
         let key = match &judge.api_key_env {
@@ -39,9 +29,6 @@ impl Http {
 }
 
 impl super::Backend for Http {
-    /// A connection failure or a non-2xx status stops the run; a reply past
-    /// [`JUDGE_TIMEOUT`] or one without a JSON answer is retried. A request
-    /// in flight is not cancelled: it holds no process to orphan.
     fn call(
         &self,
         _data: &Path,
@@ -92,7 +79,6 @@ impl super::Backend for Http {
     }
 }
 
-/// The answer a chat completion carries as JSON text in `choices[0].message.content`.
 fn content(reply: &str) -> std::result::Result<Value, String> {
     let reply: Value = serde_json::from_str(reply).map_err(|e| format!("the reply is not JSON: {e}"))?;
     let content = reply

@@ -1,6 +1,3 @@
-//! Where a skill comes from: a [`Source`] parsed, a [`Remote`]'s host,
-//! trust and ref, and its shallow clone into a [`Scratch`] directory.
-
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +8,6 @@ use crate::render::PathExt;
 use crate::{Error, Result};
 use crate::{audit, config};
 
-/// Where `mazo add` reads a skill from.
 #[derive(Debug, PartialEq)]
 pub(super) enum Source {
     Local(PathBuf),
@@ -20,27 +16,14 @@ pub(super) enum Source {
 
 #[derive(Debug, PartialEq)]
 pub(super) struct Remote {
-    /// The clone URL, without the subpath.
     pub(super) url: String,
-    /// The URL's path segments, `.git` dropped from the last: owner, repo, ….
     path: Vec<String>,
-    /// The directory inside the repository; empty for its root.
     pub(super) subpath: PathBuf,
-    /// The branch, tag or full commit id to clone; the default branch when none.
     pub(super) r#ref: Option<String>,
-    /// Whether `ref` and `subpath` are a GitHub browser URL's first guess at
-    /// where its ref ends, which [`Remote::resolve`] settles.
     browsed: bool,
 }
 
 impl Source {
-    /// A path that exists or starts with `.`, `/` or `~` is local. Otherwise
-    /// `scheme://…` and `[user@]host:path` are git URLs, and `owner/repo[/sub]`
-    /// is a GitHub repository. In a URL the subpath follows the first
-    /// segment ending in `.git`, except in a GitHub browser URL
-    /// ([`github_browser_url`]). Any other git source holding `?`, `#` or `\`
-    /// is refused: git could fetch from another host than the one trust checks.
-    /// So is git's `<transport>::<address>` form, which runs a remote helper.
     pub(super) fn parse(arg: &str) -> std::result::Result<Source, String> {
         if arg.starts_with('-') {
             return Err("a source must not start with -".into());
@@ -51,7 +34,6 @@ impl Source {
         Source::git(arg)
     }
 
-    /// `arg` read as a git source, whatever the filesystem holds: [`Source::parse`] past its local check.
     pub(super) fn git(arg: &str) -> std::result::Result<Source, String> {
         if let Some(browsed) = github_browser_url(arg) {
             return browsed;
@@ -59,7 +41,6 @@ impl Source {
         if arg.contains(['?', '#', '\\']) {
             return Err(format!("a git source must not contain ?, # or \\: {arg:?}"));
         }
-        // Git reads `<transport>::` as a remote helper, `ext::` running a command.
         let helper = arg.split_once("::").is_some_and(|(transport, _)| {
             transport.starts_with(|c: char| c.is_ascii_alphabetic())
                 && transport.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
@@ -84,21 +65,15 @@ impl Source {
         let segments: Vec<&str> = segments.into_iter().filter(|s| !s.is_empty()).collect();
         let cut = segments.iter().position(|s| s.ends_with(".git")).map_or(segments.len(), |i| i + 1);
         let mut url = format!("{base}{}", segments[..cut].join("/"));
-        // One origin per repository; a `file://` path names the directory as it is.
         if !url.ends_with(".git") && !url.starts_with("file://") {
             url.push_str(".git");
         }
-        // Only the last segment of the repository's path can end in `.git`.
         let path = segments[..cut].iter().map(|s| s.strip_suffix(".git").unwrap_or(s).to_string()).collect();
         Remote::new(url, path, &segments[cut..]).map(Source::Git).ok_or_else(bad)
     }
 }
 
-/// `url`, a git remote URL naming a repository on github.com over https,
-/// ssh or the `git@github.com:` form, as `https://github.com/<owner>/<repo>.git`;
-/// `None` for a local path, `owner/repo` shorthand or another host.
 pub fn github_repo(url: &str) -> Option<String> {
-    // Shorthand has no `:`, and parses as GitHub whatever wrote it; a path is no URL.
     let url_like = url.contains(':') && !url.starts_with(['-', '.', '/', '~']);
     let (true, Ok(Source::Git(remote))) = (url_like, Source::git(url)) else { return None };
     let [owner, repo] = remote.path.as_slice() else { return None };
@@ -107,11 +82,6 @@ pub fn github_repo(url: &str) -> Option<String> {
         .then(|| format!("https://github.com/{owner}/{repo}.git"))
 }
 
-/// A GitHub browser URL, `https://github.com/owner/repo/tree/<ref>/<path>`
-/// or `…/blob/<ref>/<path>/SKILL.md`, naming `<path>` at `<ref>`, its query
-/// or fragment (`?plain=1`, `#L1`) dropped; `None` for any other source. A
-/// ref may hold `/`, so the split of `<ref>/<path>` is a guess until
-/// [`Remote::resolve`].
 fn github_browser_url(arg: &str) -> Option<std::result::Result<Source, String>> {
     const GITHUB: &str = "https://github.com/";
     let url = arg.split(['?', '#']).next()?;
@@ -133,26 +103,18 @@ fn github_browser_url(arg: &str) -> Option<std::result::Result<Source, String>> 
 }
 
 impl Remote {
-    /// `None` when the path names no repository or a segment is empty, `.` or `..`.
     fn new(url: String, path: Vec<String>, subpath: &[&str]) -> Option<Remote> {
         let ok = |s: &str| !s.is_empty() && s != "." && s != "..";
         let valid = path.len() >= 2 && path.iter().all(|s| ok(s)) && subpath.iter().all(|s| ok(s));
         valid.then(|| Remote { url, path, subpath: subpath.iter().collect(), r#ref: None, browsed: false })
     }
 
-    /// A browser URL's repository at `tail`, `<ref>/<path>`, its first
-    /// segment taken for the ref until [`Remote::resolve`]; `None` as
-    /// [`Remote::new`], or when `tail` is empty.
     fn browsed(url: String, path: Vec<String>, tail: &[&str]) -> Option<Remote> {
         let (r#ref, subpath) = tail.split_first()?;
         let remote = Remote::new(url, path, tail)?;
         Some(Remote { subpath: subpath.iter().collect(), r#ref: Some(r#ref.to_string()), browsed: true, ..remote })
     }
 
-    /// Settles a browser URL's ref: the longest branch or tag that
-    /// `git ls-remote` lists and that whole segments of `<ref>/<path>` start
-    /// with, else a full commit id in its first segment. Parsing reads no
-    /// network, so this runs before the clone.
     pub(super) fn resolve(&mut self, cancel: &dyn Fn() -> bool) -> Result<()> {
         let (true, Some(guess)) = (self.browsed, &self.r#ref) else { return Ok(()) };
         let tail = Path::new(guess).join(&self.subpath);
@@ -171,7 +133,6 @@ impl Remote {
         Ok(())
     }
 
-    /// Each `(commit, ref name)` that `git ls-remote <flags…> -- <url> <patterns…>` lists.
     pub(super) fn ls_remote(
         &self,
         flags: &[&str],
@@ -187,7 +148,6 @@ impl Remote {
         Ok(listed.lines().filter_map(|l| l.split_once('\t')).map(|(c, n)| (c.into(), n.into())).collect())
     }
 
-    /// The URL's host, without user or port; none for a `file://` URL.
     fn host(&self) -> Option<&str> {
         let authority = match self.url.split_once("://") {
             Some((scheme, _)) if scheme.eq_ignore_ascii_case("file") => return None,
@@ -198,10 +158,6 @@ impl Remote {
         host.split(':').next()
     }
 
-    /// An entry trusts the repository when it names the repository's host and
-    /// then its owner (the first segment) or owner/repo (the first two),
-    /// ignoring ASCII case. An entry whose first segment has no `.` names a
-    /// GitHub owner or repository; otherwise that segment is the host.
     pub(super) fn trusted_by(&self, trusted: &[String]) -> bool {
         let Some(host) = self.host() else { return false };
         let repo = format!("{}/{}", self.path[0], self.path[1]);
@@ -212,13 +168,10 @@ impl Remote {
         })
     }
 
-    /// The name of the skill at the subpath: its last segment, else the repository's.
     pub(super) fn name(&self) -> String {
         self.subpath.file_name().map_or_else(|| self.path[self.path.len() - 1].clone(), |n| n.to_string_lossy().into())
     }
 
-    /// Shallow-clones the repository at its ref into a [`Scratch`]
-    /// `<data>/.clone-<pid>`: the clone and its commit.
     pub(super) fn clone_in(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<(Scratch, String)> {
         fs::create_dir_all(data).map_err(crate::at(data))?;
         let clone = Scratch::new(data, ".clone");
@@ -228,8 +181,6 @@ impl Remote {
 
     fn clone_into(&self, into: &Path, cancel: &dyn Fn() -> bool) -> Result<String> {
         if let Some(sha) = self.r#ref.as_ref().filter(|r| is_commit(r)) {
-            // `clone --branch` takes no commit, and `--revision` needs git
-            // 2.49, so a commit is fetched alone into an empty repository.
             self.git(None, &[&"init", &"--quiet", &"--", &into], cancel)?;
             self.git(Some(into), &[&"fetch", &"--depth", &"1", &"--quiet", &"--", &self.url, sha], cancel)?;
             self.git(Some(into), &[&"checkout", &"--quiet", &"--detach", &"FETCH_HEAD"], cancel)?;
@@ -245,9 +196,6 @@ impl Remote {
         head.map(|h| h.trim().to_string()).ok_or_else(|| format!("{}: no HEAD commit", self.url).into())
     }
 
-    /// The stdout of `git <args…>`, run in `dir` when there is one. Neither
-    /// git nor ssh may prompt, unless the user's `GIT_SSH_COMMAND` says so.
-    /// It is killed once `cancel` turns true, or after [`CLONE_LIMIT`].
     fn git(&self, dir: Option<&Path>, args: &[&dyn AsRef<OsStr>], cancel: &dyn Fn() -> bool) -> Result<Vec<u8>> {
         let verb = args[0].as_ref().to_string_lossy();
         let mut git = std::process::Command::new("git");
@@ -275,25 +223,17 @@ impl Remote {
     }
 }
 
-/// Whether `r#ref` is a full commit id: 40 hex digits.
 pub(super) fn is_commit(r#ref: &str) -> bool {
     r#ref.len() == 40 && r#ref.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The transports git may fetch over, as `GIT_ALLOW_PROTOCOL` lists them.
 const PROTOCOLS: &str = "https:ssh:git:file";
 
-/// How long a clone or ls-remote may run before it is killed.
 const CLONE_LIMIT: Duration = Duration::from_secs(10 * 60);
 
-/// A directory named for this process, removed when dropped.
 pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Scratch {
-    /// The path `<dir>/<prefix>-<pid>`, not yet created. It first removes any
-    /// directory at that path and every `<prefix>-<pid>` whose process is gone:
-    /// a run interrupted at the judge, the prompt or a clone leaves its own,
-    /// which no later run reuses.
     pub(super) fn new(dir: &Path, prefix: &str) -> Scratch {
         let path = dir.join(format!("{prefix}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
@@ -307,9 +247,7 @@ impl Scratch {
     }
 }
 
-/// Whether no process `pid` exists.
 fn gone(pid: u32) -> bool {
-    // SAFETY: kill(2) with signal 0 only probes; it takes no pointers.
     let signalled = unsafe { libc::kill(pid as libc::pid_t, 0) };
     signalled != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
@@ -320,8 +258,6 @@ impl Drop for Scratch {
     }
 }
 
-/// A local source with `~` and `~/…` expanded against `home`, as config
-/// paths are; `~user` is refused, since nothing expands it.
 pub(super) fn local(path: &Path, home: &str) -> Result<PathBuf> {
     let raw = path.to_string_lossy();
     let expanded = config::expand_tilde(&raw, home);
@@ -390,7 +326,6 @@ mod tests {
 
     #[test]
     fn a_file_named_like_the_remote_does_not_hide_it() {
-        // Tests run in the crate root; the owner directory is this test's alone.
         let (owner, url) = ("git@github.com:cwd-probe", "git@github.com:cwd-probe/r.git");
         std::fs::create_dir_all(url).unwrap();
         let got = github_repo(url);
@@ -432,10 +367,8 @@ mod tests {
             ),
             ("https://github.com/mattpocock/skills/tree/main", "main", ""),
             ("https://github.com/mattpocock/skills/blob/main/SKILL.md", "main", ""),
-            // Until resolved, a ref holding `/` is cut at its first segment.
             ("https://github.com/mattpocock/skills/tree/release/v2/skills/x/", "release", "v2/skills/x"),
             (&format!("https://github.com/mattpocock/skills/tree/{sha}/skills/x"), sha, "skills/x"),
-            // A browser's query or fragment, and a `.git` on the repository, are dropped.
             ("https://github.com/mattpocock/skills/blob/main/skills/x/SKILL.md#L1", "main", "skills/x"),
             ("https://github.com/mattpocock/skills/blob/main/skills/x/SKILL.md?plain=1#L2", "main", "skills/x"),
             ("https://github.com/mattpocock/skills/tree/main/skills/x?tab=readme", "main", "skills/x"),
@@ -449,7 +382,6 @@ mod tests {
             );
         }
         assert_eq!(remote("https://github.com/o/r/tree/main/skills/x").name(), "x");
-        // Elsewhere, and without a ref, `tree` is a directory like any other.
         let r = remote("https://gitlab.com/o/r.git/tree/main/x");
         assert_eq!((r.subpath.to_str(), r.r#ref, r.browsed), (Some("tree/main/x"), None, false));
         for arg in [
@@ -459,7 +391,6 @@ mod tests {
             "https://github.com/o/r/tree/../x",
             "https://github.com/o/r/tree/main/a/../b",
             "https://github.com/o/r/tree/main/x\\y",
-            // A query or fragment is dropped only from a tree or blob URL on github.com.
             "https://github.com/o/r#x",
             "https://github.com.evil.example/o/r/tree/main#x",
             "https://evil.example#@github.com/o/r/tree/main/x",
@@ -529,12 +460,10 @@ mod tests {
             "o/r/../x",
             "https://host",
             "git@host:r.git",
-            // Each would show github.com as its host while git fetches from evil.example.
             "https://evil.example#@github.com/anthropics/x",
             "https://evil.example?@github.com/anthropics/x",
             "https://evil.example\\@github.com/anthropics/x",
             "git@evil.example#@github.com:anthropics/x.git",
-            // Remote helpers: `ext::` runs its command.
             "ext::sh -c true",
             "ext::sh -c true/x",
             "fd::3/x",

@@ -1,8 +1,3 @@
-//! Helpers shared by every integration test binary: fixture paths, the real
-//! skills directory, `Home` builders, the fixed clock, events and the report
-//! `World`, parsing a transcript the way a scan does, running the binary, a
-//! stub judge's answers, and small filesystem and git utilities.
-
 #![allow(dead_code)]
 
 pub mod golden;
@@ -24,25 +19,20 @@ use mazo::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
 use mazo::report::Input;
 use mazo::tail::{self, Chunk, Cursor, Prefilter};
 
-/// The fixed "now" of report tests.
 pub const NOW: &str = "2026-10-13T12:00:00Z";
 
 pub fn now() -> jiff::Timestamp {
     NOW.parse().unwrap()
 }
 
-/// `days` days before NOW, as a ledger timestamp.
 pub fn ago(days: i64) -> String {
     now().checked_sub(jiff::SignedDuration::from_hours(24 * days)).unwrap().to_string()
 }
 
-/// The date of timestamp `ts` in the system zone, as the binary prints it.
 pub fn local_date(ts: &str) -> String {
     ts.parse::<jiff::Timestamp>().unwrap().to_zoned(jiff::tz::TimeZone::system()).date().to_string()
 }
 
-/// A main-actor Claude event of `skill` from `/work`, read from a transcript
-/// that does not exist.
 pub fn event(id: &str, skill: &str, channel: Channel, session: &str, ts: &str) -> Event {
     Event {
         v: 1,
@@ -63,7 +53,6 @@ pub fn event(id: &str, skill: &str, channel: Channel, session: &str, ts: &str) -
     }
 }
 
-/// What a report reads besides the events.
 pub struct World {
     pub cfg: Config,
     pub inv: Inventory,
@@ -72,9 +61,6 @@ pub struct World {
 }
 
 impl World {
-    /// The inventory of `source` and one home per `(name, agent, first)` at
-    /// `<source>/<name>`, covered from `first` to NOW, under the default
-    /// policy, with grades and retros under `<source>/.evals`.
     pub fn new(source: &Path, homes: &[(&str, Agent, &str)]) -> World {
         let cfg = Config {
             source: Some(source.into()),
@@ -106,8 +92,6 @@ impl World {
     }
 }
 
-/// The report fixture: the skills of `fixtures/reports/skills` committed on
-/// 2026-01-01, plus `fresh`, which is never committed.
 pub fn report_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     copy_tree(&fixture("reports/skills"), dir.path(), &|s| s);
@@ -118,19 +102,15 @@ pub fn report_repo() -> tempfile::TempDir {
     dir
 }
 
-/// When the report fixture homes' coverage starts.
 pub const CLAUDE_FIRST: &str = "2026-09-10T08:00:00Z";
 pub const CODEX_FIRST: &str = "2026-03-29T08:00:00Z";
 
-/// The report fixture homes `claude` and `codex`, with the authoring skills.
 pub fn report_world(source: &Path) -> World {
     let mut w = World::new(source, &[("claude", Agent::Claude, CLAUDE_FIRST), ("codex", Agent::Codex, CODEX_FIRST)]);
     w.cfg.policy.authoring_skills = ["grade", "retro", "writing-for-agents", "skill-creator"].map(String::from).into();
     w
 }
 
-/// A store skill `vetted` under `data`, its lockfile entry vetted weak and
-/// of low value.
 pub fn vetted(data: &Path) {
     write(&data.join("store/vetted/SKILL.md"), "---\nname: vetted\n---\n");
     write(
@@ -141,8 +121,6 @@ pub fn vetted(data: &Path) {
     );
 }
 
-/// A skill record of `unslop` with `verdict`, written at `at`, with four
-/// ranked improvements and a hostile curated example.
 pub fn skill_record(verdict: &str, at: &str) -> String {
     let session = |s: &str| serde_json::json!([s]);
     let improvement = |i: usize| serde_json::json!({"change": format!("Change {i}."), "reason": format!("Reason {i}."), "sessions": session("s1")});
@@ -162,10 +140,6 @@ pub fn skill_record(verdict: &str, at: &str) -> String {
     format!("{record}\n")
 }
 
-/// The `mazo` binary run in `cwd` with a private `HOME`, `MAZO_CONFIG` and
-/// `XDG_DATA_HOME`, and `<cwd>/bin` ahead of `PATH` for the stub agents, git
-/// and openers a test writes there. `env` maps each variable to its value;
-/// `None` removes it.
 pub struct Mazo {
     pub cwd: PathBuf,
     pub env: BTreeMap<String, Option<OsString>>,
@@ -181,20 +155,17 @@ impl Mazo {
         Mazo { cwd: cwd.into(), env: vars.into_iter().map(|(k, v)| (k.into(), Some(v))).collect() }
     }
 
-    /// Sets `key` for every later run, or removes it when `value` is `None`.
     pub fn set(&mut self, key: &str, value: Option<&OsStr>) -> &mut Mazo {
         self.env.insert(key.into(), value.map(OsString::from));
         self
     }
 
-    /// `mazo args…` with `env` set on top of [`Mazo::env`] for this run only.
     pub fn command(&self, env: &[(&str, &OsStr)], args: &[&str]) -> Command {
         let mut cmd = self.wrap(env!("CARGO_BIN_EXE_mazo"));
         cmd.args(args).envs(env.iter().copied());
         cmd
     }
 
-    /// `program` run as the binary is: in [`Mazo::cwd`] with [`Mazo::env`].
     pub fn wrap(&self, program: impl AsRef<OsStr>) -> Command {
         let mut cmd = Command::new(program);
         cmd.current_dir(&self.cwd);
@@ -220,18 +191,14 @@ pub fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// `tests/fixtures/<rel>`.
 pub fn fixture(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(rel)
 }
 
-/// A real skills repository, named by `MAZO_TEST_SKILLS`.
 pub fn test_skills_env() -> Option<PathBuf> {
     std::env::var_os("MAZO_TEST_SKILLS").filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-/// The skills directory under test: `MAZO_TEST_SKILLS`, or the synthetic
-/// `tests/fixtures/skills` tree.
 pub fn real_skills() -> PathBuf {
     test_skills_env().unwrap_or_else(|| fixture("skills"))
 }
@@ -240,8 +207,6 @@ pub fn home(name: &str, agent: Agent, path: &Path) -> Home {
     Home { name: name.into(), agent, path: path.to_path_buf(), links: Default::default() }
 }
 
-/// Reads `path` from `cursor` through the scan's prefilter (markers, the source
-/// and every home skills dir in `roots`) and parses the chunk with its header.
 pub fn parse_file(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path, cursor: Option<&Cursor>) -> (Parsed, Cursor) {
     let extra: Vec<String> =
         roots.source.iter().chain(&roots.home_skills).map(|p| p.to_string_lossy().into_owned()).collect();
@@ -251,8 +216,6 @@ pub fn parse_file(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path, cursor
     (parsed, chunk.cursor)
 }
 
-/// Parses every line of `path`, prefilter bypassed, so a no-event test reaches
-/// the parser even when its records carry no marker.
 pub fn parse_unfiltered(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path) -> Parsed {
     let text = fs::read_to_string(path).unwrap();
     let lines: Vec<(u64, Vec<u8>)> = text.lines().zip(1..).map(|(l, n)| (n, l.as_bytes().to_vec())).collect();
@@ -261,7 +224,6 @@ pub fn parse_unfiltered(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path) 
     adapter.parse(roots, path, header.as_deref(), &chunk)
 }
 
-/// Copies a directory tree, passing every file's text through `edit`.
 pub fn copy_tree(from: &Path, to: &Path, edit: &dyn Fn(String) -> String) {
     fs::create_dir_all(to).unwrap();
     for e in fs::read_dir(from).unwrap().flatten() {
@@ -274,9 +236,6 @@ pub fn copy_tree(from: &Path, to: &Path, edit: &dyn Fn(String) -> String) {
     }
 }
 
-/// Writes `text`, creating parent directories.
-/// The grade `<evals>/grades/<skill>/<date>.md` of `score`, recording the
-/// current content hash of `dir` when given.
 pub fn grade(evals: &Path, skill: &str, date: &str, score: &str, dir: Option<&Path>) {
     let hash = dir.map_or(String::new(), |d| format!("content_hash: {}\n", mazo::store::content_hash(d).unwrap()));
     write(&evals.join(format!("grades/{skill}/{date}.md")), &format!("---\ndate: {date}\nscore: {score}\n{hash}---\n"));
@@ -287,8 +246,6 @@ pub fn write(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
 }
 
-/// Runs `git -C dir args…` with a fixed identity and both dates set to `date`,
-/// isolated from the user's git config.
 pub fn git(dir: &Path, args: &[&str], date: &str) {
     let out = Command::new("git")
         .arg("-C")
@@ -303,21 +260,15 @@ pub fn git(dir: &Path, args: &[&str], date: &str) {
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
-/// A grandparent → parent → child session chain of a Codex or Pi home on a
-/// temporary machine, each session one load of its own skill, scanned into
-/// `data` by the library scan.
 pub struct Chain {
     pub tmp: tempfile::TempDir,
     pub world: World,
     pub data: PathBuf,
-    /// Grandparent, parent and child session ids.
     pub ids: [String; 3],
-    /// Grandparent, parent and child transcripts.
     pub files: [PathBuf; 3],
 }
 
 impl Chain {
-    /// The chain in a fresh home; `written` picks which of the three transcripts exist.
     pub fn new(agent: Agent, written: [bool; 3]) -> Chain {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("skills");
@@ -367,13 +318,11 @@ impl Chain {
         Chain { data: tmp.path().join("data"), tmp, world, ids, files }
     }
 
-    /// Scans, or reparses, and returns the ledger.
     pub fn scan(&self, reparse: bool) -> Vec<Event> {
         mazo::scan::scan(&self.world.cfg, &self.world.inv, &self.data, reparse).unwrap();
         mazo::ledger::Ledger::load(&self.data).unwrap().events().to_vec()
     }
 
-    /// The `(id, session)` of every event read from the child's transcript.
     pub fn child(&self, events: &[Event]) -> Vec<(String, String)> {
         let file = self.files[2].to_string_lossy();
         events.iter().filter(|e| e.src_file() == file).map(|e| (e.id.clone(), e.session.clone())).collect()
@@ -383,7 +332,6 @@ impl Chain {
         self.data.join("roots.json")
     }
 
-    /// `<data>/roots.json`, empty when it is missing.
     pub fn roots(&self) -> BTreeMap<String, String> {
         fs::read(self.roots_json()).map_or_else(|_| BTreeMap::new(), |b| serde_json::from_slice(&b).unwrap())
     }

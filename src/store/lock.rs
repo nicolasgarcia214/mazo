@@ -1,6 +1,3 @@
-//! The lockfile, `mazo.lock`, and the copy it records: a skill checked,
-//! staged and hashed ([`content_hash`]).
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,7 +9,6 @@ use crate::audit::VetVerdict;
 use crate::render::PathExt;
 use crate::{ledger, policy, yaml};
 
-/// `<data dir>/mazo.lock`, or a project's: one `[[skill]]` per installed skill.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Lock {
@@ -25,36 +21,25 @@ pub struct Lock {
 pub struct Locked {
     #[serde(deserialize_with = "skill_name")]
     pub name: String,
-    /// Where the skill came from; for a local path, the physical directory.
     pub origin: String,
-    /// The skill's directory inside `origin`; `.` when `origin` is the skill.
     pub subpath: String,
-    /// The branch, tag or commit `origin` is cloned at; its default branch when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
-    /// [`content_hash`] of the installed copy.
     pub content_hash: String,
-    /// Whether it was installed unvetted: a record, which grants `update` no trust.
     pub trusted: bool,
-    /// RFC 3339.
     pub installed_at: String,
-    /// When the judge vetted the skill, RFC 3339; none for a trusted install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vetted_at: Option<String>,
-    /// The judge's one or two sentences on what the skill is for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#for: Option<String>,
-    /// Up to three uses the judge suggests trying.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r#try: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<VetVerdict>,
 }
 
-/// A lockfile's skill name, refused unless [`policy::valid_name`]: it is
-/// joined to the store as a path, and a project's lockfile is anyone's commit.
 fn skill_name<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
     let name = String::deserialize(d)?;
     if policy::valid_name(&name) {
@@ -65,8 +50,6 @@ fn skill_name<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Str
 }
 
 impl Locked {
-    /// The repository `mazo update` fetches it from, at its ref; `None`
-    /// when it was installed from a local path.
     pub(super) fn remote(&self) -> std::result::Result<Option<Remote>, String> {
         Ok(match Source::parse(&self.origin)? {
             Source::Git(mut remote) => {
@@ -77,15 +60,11 @@ impl Locked {
         })
     }
 
-    /// Whether `mazo update` can fetch it again.
     pub fn updatable(&self) -> bool {
         !matches!(self.remote(), Ok(None))
     }
 }
 
-/// Parses lockfile text and makes every string in it [`inert`](crate::render::inert),
-/// including any a parse error quotes. A project's lockfile is anyone's commit,
-/// and its verdicts, origins and refs are printed.
 fn parse(text: &str) -> std::result::Result<Lock, String> {
     use crate::render::{inert, inert_value};
     let lock: Lock = toml::from_str(text).map_err(|e| inert(&e.to_string()))?;
@@ -94,7 +73,6 @@ fn parse(text: &str) -> std::result::Result<Lock, String> {
 }
 
 impl Lock {
-    /// The lockfile in `data`, or in a project's git root; empty when there is none.
     pub fn load(data: &Path) -> Result<Lock> {
         let path = data.join("mazo.lock");
         match fs::read_to_string(&path) {
@@ -104,7 +82,6 @@ impl Lock {
         }
     }
 
-    /// Drops `name`'s entry from the lockfile under `data`, if it has one.
     pub(super) fn remove(data: &Path, name: &str) -> Result<()> {
         let mut lock = Lock::load(data)?;
         lock.skills.retain(|s| s.name != name);
@@ -120,8 +97,6 @@ impl Lock {
     }
 }
 
-/// `src` resolved; inside `clone` when there is one, so that a symlink in the
-/// repository cannot lead the copy outside it.
 pub(super) fn resolved(src: &Path, clone: Option<&Path>) -> std::result::Result<PathBuf, String> {
     let src = fs::canonicalize(src).map_err(crate::at(src))?;
     if let Some(clone) = clone
@@ -132,11 +107,7 @@ pub(super) fn resolved(src: &Path, clone: Option<&Path>) -> std::result::Result<
     Ok(src)
 }
 
-/// The `SKILL.md` of the skill at `src` installed as `name`, its `name:`
-/// rewritten when `rename`, once it passes the always-on rules; and every
-/// entry under `src`.
 pub(super) fn checked(src: &Path, name: &str, rename: bool) -> std::result::Result<(String, Vec<PathBuf>), String> {
-    // Listed first, so that a `SKILL.md` that is not a regular file is never read.
     let files = tree(src)?;
     let skill_md = fs::read_to_string(src.join("SKILL.md")).map_err(|e| format!("SKILL.md: {e}"))?;
     let skill_md = if rename { renamed(&skill_md, name) } else { skill_md };
@@ -144,17 +115,11 @@ pub(super) fn checked(src: &Path, name: &str, rename: bool) -> std::result::Resu
     Ok((skill_md, files))
 }
 
-/// Copies `files` of `src` into `staged`, `SKILL.md` as `skill_md`: the
-/// copy and its [`content_hash`]. The copy is what the judge reads and what
-/// is renamed into place, so that a source changed after it was read
-/// installs nothing unvetted.
 pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: Scratch) -> Result<(Scratch, String)> {
     let dir = staged.0.as_path();
     fs::create_dir_all(dir).map_err(crate::at(dir))?;
     files.iter().try_for_each(|rel| {
         let (from, dest) = (src.join(rel), dir.join(rel));
-        // Typed on the handle that is read, not on the path [`tree`] listed:
-        // an entry swapped for a symlink since is refused, not followed.
         let mut file = unfollowed(src, rel).map_err(crate::at(&from))?;
         let meta = file.metadata().map_err(crate::at(&from))?;
         let ft = meta.file_type();
@@ -167,7 +132,6 @@ pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: Scrat
         } else {
             let mut to = fs::File::create_new(&dest).map_err(crate::at(&dest))?;
             std::io::copy(&mut file, &mut to).map_err(crate::at(&dest))?;
-            // As `fs::copy` does, so that a script stays executable.
             to.set_permissions(meta.permissions()).map_err(crate::at(&dest))
         }
     })?;
@@ -175,9 +139,6 @@ pub(super) fn stage(src: &Path, files: &[PathBuf], skill_md: &str, staged: Scrat
     Ok((staged, hash))
 }
 
-/// `rel` under `root` opened read-only, one component at a time, none of
-/// them followed if a symlink. Non-blocking, so that a FIFO opens to be
-/// refused rather than wait for a writer.
 fn unfollowed(root: &Path, rel: &Path) -> std::io::Result<fs::File> {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
@@ -187,23 +148,19 @@ fn unfollowed(root: &Path, rel: &Path) -> std::io::Result<fs::File> {
         let name = std::ffi::CString::new(part.as_os_str().as_bytes())?;
         let dir = if parts.peek().is_some() { libc::O_DIRECTORY } else { 0 };
         let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC | dir;
-        // SAFETY: `file` stays open across the call and `name` is NUL-terminated.
         let fd = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(), flags) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        // SAFETY: `fd` was just returned by openat(2) and nothing else owns it.
         file = unsafe { fs::File::from_raw_fd(fd) };
     }
     Ok(file)
 }
 
-/// Now, to the second, RFC 3339.
 pub(super) fn now() -> Result<String> {
     Ok(jiff::Timestamp::now().round(jiff::Unit::Second).map_err(|e| e.to_string())?.to_string())
 }
 
-/// `text` with the frontmatter's top-level `name:` line set to `name`.
 fn renamed(text: &str, name: &str) -> String {
     let mut fences = 0;
     let mut done = false;
@@ -223,8 +180,6 @@ fn renamed(text: &str, name: &str) -> String {
     out
 }
 
-/// Every directory and file under `root`, relative and sorted, `.git` left
-/// out. A symlink, or anything else that is neither, is an error.
 fn tree(root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
     let mut out = Vec::new();
     let mut stack = vec![PathBuf::new()];
@@ -250,11 +205,6 @@ fn tree(root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-/// SHA-1 over every file under `dir` in relative-path order, sorted
-/// component-wise (as `Path` orders, not by string bytes): each contributes
-/// its path, a NUL, an `x` and a NUL if it is executable, its length in
-/// decimal, a NUL and its bytes. The `x` makes setting or clearing an
-/// executable bit a change that `update` installs, re-vetting it when untrusted.
 pub fn content_hash(dir: &Path) -> Result<String> {
     use std::os::unix::fs::PermissionsExt;
     let mut sha = sha1_smol::Sha1::new();
@@ -297,7 +247,6 @@ mod tests {
         assert_eq!(s.origin, "https://h/o/r\u{fffd}[2J");
         assert_eq!(s.r#for.as_deref(), Some("Tidies \u{fffd}]52;c;ZXZpbA==\u{fffd}notes."));
         assert_eq!(s.verdict.as_ref().unwrap().security.as_deref(), Some("\u{fffd}2J"));
-        // A syntax error quotes the line it is on.
         let e = parse("x = 1 # \u{1b}]0;PWNED\u{7}\ny = = 2\n").unwrap_err();
         assert!(e.contains("\u{fffd}]0;PWNED\u{fffd}") && !e.contains('\u{1b}'), "{e}");
     }
@@ -306,7 +255,6 @@ mod tests {
     fn a_skill_md_that_is_not_a_regular_file_is_refused_unread() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        // Read, a directory would fail as one; only the listing names it.
         std::os::unix::fs::symlink(dir, dir.join("SKILL.md")).unwrap();
         let e = checked(dir, "x", false).unwrap_err();
         assert_eq!(e, format!("{} is not a regular file or directory", dir.join("SKILL.md").display()));
@@ -320,7 +268,6 @@ mod tests {
         std::fs::create_dir(&outside).unwrap();
         std::fs::write(src.join("SKILL.md"), "a").unwrap();
         std::fs::write(outside.join("x.md"), "secret").unwrap();
-        // Listed as regular, then each replaced: the file itself, and a directory above one.
         for (files, link, target) in [
             (vec!["SKILL.md", "x.md"], "x.md", outside.join("x.md")),
             (vec!["SKILL.md", "refs", "refs/x.md"], "refs", outside.clone()),

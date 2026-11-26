@@ -1,8 +1,3 @@
-//! The Pi judge: `pi -p` with tools, extensions, skills and context files
-//! off, the input in an `@file`, the answer in its `--mode json` stream, and
-//! no dollar cost. Pi picks its provider from its own settings, so no login
-//! is checked.
-
 use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
@@ -16,7 +11,6 @@ use crate::render::PathExt;
 
 pub struct Pi {
     pub model: Option<String>,
-    /// The user's `settings.json`, which names the default model.
     pub settings: PathBuf,
 }
 
@@ -50,8 +44,6 @@ impl Subprocess for Pi {
         argv.to_string()
     }
 
-    /// `[judge] model`, else the default provider and model of the user's
-    /// `settings.json`.
     fn model(&self) -> Option<String> {
         if let Some(m) = &self.model {
             return Some(m.clone());
@@ -65,8 +57,6 @@ impl Subprocess for Pi {
     }
 }
 
-/// Pi's answer: the text of the last assistant `message_end` in its
-/// `--mode json` stream, parsed as JSON once a code fence around it is dropped.
 fn answer(stdout: &[u8]) -> std::result::Result<Value, String> {
     let message = String::from_utf8_lossy(stdout)
         .lines()

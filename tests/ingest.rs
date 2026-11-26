@@ -1,6 +1,3 @@
-//! Ingest properties, run against temporary
-//! Claude homes built from the real fixtures in `tests/fixtures/claude`.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -23,10 +20,6 @@ use mazo::tail::{Chunk, Cursors};
 use serde_json::Value;
 use tempfile::TempDir;
 
-/// Every Claude transcript fixture: its path under the project directory and
-/// its file under `tests/fixtures/claude`. `pair_copy.jsonl` repeats
-/// `pair.jsonl` the way a Claude fork copies records with their ids, scanned in
-/// basename order.
 const TRANSCRIPTS: [(&str, &str); 15] = [
     ("attachments.jsonl", "attachments.jsonl"),
     ("bash_two.jsonl", "bash_two.jsonl"),
@@ -54,7 +47,6 @@ const TRANSCRIPTS: [(&str, &str); 15] = [
     ),
 ];
 
-/// The id the Claude adapter gives the Skill result/meta pair in `pair.jsonl`.
 const PAIR_ID: &str = "cc:toolu_01EKQ5jSt7RhgFyyw72kyqoY";
 
 fn fixture(name: &str) -> PathBuf {
@@ -65,7 +57,6 @@ fn fixture_lines(name: &str) -> Vec<String> {
     fs::read_to_string(fixture(name)).unwrap().lines().map(str::to_string).collect()
 }
 
-/// A temporary machine: a source root, one or more Claude homes and a data dir.
 struct Env {
     tmp: TempDir,
     cfg: Config,
@@ -74,7 +65,6 @@ struct Env {
 }
 
 impl Env {
-    /// A Claude home named `claude` holding `files` (see [`TRANSCRIPTS`]) and `history.jsonl`, plus any extra empty homes.
     fn new(files: &[(&str, &str)], empty_homes: &[&str]) -> Env {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("dotfiles/skills");
@@ -110,8 +100,6 @@ impl Env {
         for (dest, src) in files {
             env.put(dest, &fs::read(fixture(src)).unwrap());
         }
-        // Written once here: rewriting it per `cli` call truncates it under a
-        // child already spawned and reading it.
         let homes: String = env
             .cfg
             .homes
@@ -163,7 +151,6 @@ impl Env {
         scan::scan_with(&self.cfg, &self.inv, &self.data, reparse, &|_| adapter).unwrap()
     }
 
-    /// The `mazo` binary, configured for this machine with its data under `xdg`.
     fn cli(&self, xdg: &Path) -> Command {
         Mazo::new(self.tmp.path(), self.tmp.path(), &self.config(), xdg).command(&[], &[])
     }
@@ -177,7 +164,6 @@ impl Env {
     }
 }
 
-/// The raw lines of a ledger.
 fn ledger_lines(data: &Path) -> Vec<String> {
     match fs::read_to_string(data.join("events.jsonl")) {
         Ok(s) => s.lines().map(str::to_string).collect(),
@@ -185,7 +171,6 @@ fn ledger_lines(data: &Path) -> Vec<String> {
     }
 }
 
-/// The ledger as readers see it (last line per id), sorted by id.
 fn events(data: &Path) -> Vec<Event> {
     let mut v = Ledger::load(data).unwrap().events().to_vec();
     v.sort_by(|a, b| a.id.cmp(&b.id));
@@ -196,7 +181,6 @@ fn ids(data: &Path) -> BTreeSet<String> {
     events(data).into_iter().map(|e| e.id).collect()
 }
 
-/// The ledger line a reader keeps for `id`.
 fn line_of(data: &Path, id: &str) -> Option<String> {
     ledger_lines(data).into_iter().rev().find(|l| serde_json::from_str::<Event>(l).unwrap().id == id)
 }
@@ -225,7 +209,6 @@ fn second_scan_and_cursorless_or_corrupt_cursor_rescan_append_nothing() {
 #[test]
 fn appended_record_is_one_event_read_from_the_stored_offset() {
     let env = Env::new(&[("slash.jsonl", "slash.jsonl")], &[]);
-    // Noise after the records puts them before the window a cursor checks.
     env.append("slash.jsonl", format!("{}\n", "x".repeat(4 << 10)).as_bytes());
     env.scan();
     let path = env.transcript("slash.jsonl");
@@ -234,8 +217,6 @@ fn appended_record_is_one_event_read_from_the_stored_offset() {
     assert_eq!((before.offset, before.line), (fs::metadata(&path).unwrap().len(), 3));
     let n = ledger_lines(&env.data).len();
 
-    // Rewrite the meta record's uuid in place (same inode, same length). A scan
-    // that re-read the prefix would emit it as a second slash event.
     let text = fs::read_to_string(&path).unwrap();
     let at = text.find("d9ad44a4-3e61").unwrap();
     let mut f = fs::OpenOptions::new().write(true).open(&path).unwrap();
@@ -243,7 +224,6 @@ fn appended_record_is_one_event_read_from_the_stored_offset() {
     f.write_all(b"00000000-0000").unwrap();
     drop(f);
 
-    // A new Skill result for a different tool_use id.
     let record = fixture_lines("result_only.jsonl")[0].replace("toolu_01TJBdbiPJWDEp5ZGWUmM35V", "toolu_appended");
     env.append("slash.jsonl", format!("{record}\n").as_bytes());
     assert_eq!(new_events(&env.scan()), 1);
@@ -259,7 +239,7 @@ fn appended_record_is_one_event_read_from_the_stored_offset() {
 #[test]
 fn half_written_line_yields_exactly_one_event_once_finished() {
     let env = Env::new(&[], &[]);
-    env.scan(); // the history backfill
+    env.scan();
     let typed = ledger_lines(&env.data).len();
     let lines = fixture_lines("slash.jsonl");
     let (head, tail) = lines[1].split_at(lines[1].len() / 2);
@@ -278,14 +258,13 @@ fn half_written_line_yields_exactly_one_event_once_finished() {
 #[test]
 fn a_line_that_is_not_json_is_counted_once_and_its_neighbours_still_count() {
     let env = Env::new(&[], &[]);
-    env.scan(); // the history backfill
+    env.scan();
     let lines = fixture_lines("slash.jsonl");
     env.put("slash.jsonl", format!("{}\n{{\"name\":\"Skill\" torn\n{}\n", lines[0], lines[1]).as_bytes());
     let r = env.scan();
     assert_eq!(new_events(&r), 1);
     assert_eq!(r.homes["claude"].malformed, 1);
     assert_eq!(env.scan().homes["claude"].malformed, 0, "a line is read once");
-    // A fresh data directory reads it again, and the CLI says so.
     let out = env.cli(&env.tmp.path().join("xdg")).arg("scan").output().unwrap();
     assert!(out.status.success());
     let warning = "warning: claude: transcript lines that are not JSON: 1; a load in one is not counted";
@@ -329,9 +308,6 @@ fn deleted_transcript_events_survive_scan_and_reparse_byte_identical() {
     assert!(ledger_lines(&env.data).contains(&slash[0]));
 }
 
-/// A Claude fork keeps the record's id under another file. When the file that
-/// stored the event is deleted, reparse still keeps the stored event, because
-/// the copied events come first and the parse appends under the append rule.
 #[test]
 fn reparse_keeps_the_stored_event_when_a_surviving_file_shares_its_id() {
     let env = Env::new(&TRANSCRIPTS, &[]);
@@ -346,7 +322,6 @@ fn reparse_keeps_the_stored_event_when_a_surviving_file_shares_its_id() {
     assert_eq!(unique.len(), lines.len(), "reparse writes one line per id");
 }
 
-/// The Claude adapter with a rule change applied to its output.
 struct Rule<F: Fn(&Path, &Chunk, &mut Parsed)>(F);
 
 impl<F: Fn(&Path, &Chunk, &mut Parsed)> Adapter for Rule<F> {
@@ -364,7 +339,7 @@ impl<F: Fn(&Path, &Chunk, &mut Parsed)> Adapter for Rule<F> {
 fn reparse_drops_a_new_false_positive_and_keeps_deleted_transcripts_verbatim() {
     let env = Env::new(&TRANSCRIPTS, &[]);
     env.scan();
-    let target = "cc:toolu_01TJBdbiPJWDEp5ZGWUmM35V"; // result_only.jsonl
+    let target = "cc:toolu_01TJBdbiPJWDEp5ZGWUmM35V";
     assert!(ids(&env.data).contains(target));
     let deleted: Vec<String> = ledger_lines(&env.data).into_iter().filter(|l| l.contains("/subagents/")).collect();
     assert_eq!(deleted.len(), 3);
@@ -372,7 +347,6 @@ fn reparse_drops_a_new_false_positive_and_keeps_deleted_transcripts_verbatim() {
     fs::remove_dir_all(env.transcript("3ea64990-464f-4f45-a9d0-91a25bf5a530")).unwrap();
     fs::remove_dir_all(env.transcript("2b0a61b3-e8ed-44c0-81a3-6e94d229e0e4")).unwrap();
 
-    // The new rule: a Skill result without a meta record is a false positive.
     let rule = Rule(|_: &Path, _: &Chunk, p: &mut Parsed| p.raws.retain(|r| r.skill != "workflow-authoring"));
     let before = ids(&env.data);
     env.scan_rule(false, &rule);
@@ -396,7 +370,6 @@ fn reparse_adds_an_event_from_a_transcript_that_had_none() {
     let file = env.transcript("attachments.jsonl").to_string_lossy().into_owned();
     assert!(events(&env.data).iter().all(|e| e.src_file() != file));
 
-    // The new rule: each skill of an `invoked_skills` attachment is a slash load.
     let rule = Rule(|path: &Path, chunk: &Chunk, p: &mut Parsed| {
         for (line, bytes) in &chunk.lines {
             let v: Value = serde_json::from_slice(bytes).unwrap();
@@ -479,7 +452,7 @@ fn scan_off_a_tty_writes_only_its_warnings_to_stderr() {
     let xdg = env.tmp.path().join("xdg");
     let path = env.transcript("bench.jsonl");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
-    let unreadable = fs::File::open(&path).is_err(); // false when running as root
+    let unreadable = fs::File::open(&path).is_err();
     let stderr = env.tmp.path().join("stderr");
     let out = env.cli(&xdg).arg("scan").stderr(fs::File::create(&stderr).unwrap()).output().unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -528,8 +501,6 @@ fn scan_json_keeps_every_home_field() {
     assert!(!homes["claude"]["new_events"].as_array().unwrap().is_empty());
 }
 
-/// The live fixture without a model call: its homes pass every policy rule
-/// with no drift, and their empty transcript directories scan to no events.
 #[test]
 fn live_probe_fixture_passes_policy_and_scans_empty() {
     let probe = common::probe::Probe::new();
@@ -542,7 +513,6 @@ fn live_probe_fixture_passes_policy_and_scans_empty() {
     assert!(homes.values().all(Vec::is_empty), "{homes:?}");
 }
 
-/// Every event but `typed`, sorted by id.
 fn comparable(data: &Path) -> Vec<Event> {
     events(data).into_iter().filter(|e| e.channel != Channel::Typed).collect()
 }
@@ -554,7 +524,6 @@ fn incremental_ledger_equals_a_fresh_scan() {
     for (f, _) in &files {
         env.put(f, b"");
     }
-    // Append the records round-robin, each in two halves, scanning after every write.
     let longest = files.iter().map(|(_, l)| l.len()).max().unwrap();
     for i in 0..longest {
         for (f, lines) in &files {
@@ -594,7 +563,6 @@ fn skill_pair_split_across_scans_ends_equal_to_a_fresh_scan() {
     assert_eq!(new_events(&env.scan()), 0);
 }
 
-/// The earliest `timestamp` of any record in the fixture transcripts.
 fn earliest() -> jiff::Timestamp {
     TRANSCRIPTS
         .iter()
@@ -617,7 +585,7 @@ fn coverage_records_first_and_advances_last_scan_only_without_io_errors() {
     let path = env.transcript("bench.jsonl");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     if fs::File::open(&path).is_ok() {
-        return; // running as root: permissions cannot cause an I/O error
+        return;
     }
     let r = env.scan();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -633,7 +601,6 @@ fn coverage_records_first_and_advances_last_scan_only_without_io_errors() {
 
 #[test]
 fn a_coverage_json_rebuilt_or_lost_does_not_backfill_a_transcript_read_before() {
-    // Named for the session of history.jsonl's first line, so the backfill skips it.
     let env = Env::new(&[("2e112b1e-0233-4375-99fd-cd21d2102ac1.jsonl", "slash.jsonl")], &[]);
     env.scan();
     let all = ids(&env.data);
@@ -682,11 +649,9 @@ fn a_torn_ledger_tail_does_not_swallow_the_next_append() {
 #[test]
 fn a_torn_ledger_line_that_cuts_a_utf8_character_is_skipped_mid_file_too() {
     let env = Env::new(&[("slash.jsonl", "slash.jsonl")], &[]);
-    // `é` is 0xC3 0xA9; the crash kept only its first byte.
     std::fs::create_dir_all(&env.data).unwrap();
     std::fs::write(env.data.join("events.jsonl"), b"{\"v\":1,\"cwd\":\"/caf\xC3").unwrap();
     env.scan();
-    // The next append puts the torn line mid-file; later runs still read past it.
     env.scan();
     let fresh = env.tmp.path().join("fresh");
     env.scan_in(&fresh, false);
@@ -749,7 +714,6 @@ fn a_record_dated_unparseably_or_past_the_scan_is_no_event() {
 #[test]
 fn coverage_first_is_the_earliest_parsed_timestamp_and_is_rebuilt_when_unparsed() {
     let env = Env::new(&[], &[]);
-    // As strings, "" sorts first and 16:30Z before 18:00+02:00 (16:00Z).
     let ts = ["", "2026-09-15T16:30:00Z", "2026-09-15T18:00:00+02:00"];
     env.put("t.jsonl", ts.map(|t| format!("{{\"timestamp\":\"{t}\"}}\n")).concat().as_bytes());
     let first = Some("2026-09-15T16:00:00Z".parse().unwrap());
@@ -766,24 +730,19 @@ fn coverage_first_is_the_earliest_parsed_timestamp_and_is_rebuilt_when_unparsed(
 #[test]
 fn a_skill_result_for_a_known_but_removed_skill_stays_canonical() {
     let mut env = Env::new(&[("pair.jsonl", "pair.jsonl")], &[]);
-    env.inv.skills.remove("unslop"); // pruned from the repo, still in git history (known)
+    env.inv.skills.remove("unslop");
     env.scan();
     let tool = events(&env.data).into_iter().find(|e| e.channel == mazo::ledger::Channel::Tool).unwrap();
     assert_eq!(tool.skill, "unslop");
     assert_eq!(tool.origin, mazo::ledger::Origin::Canonical);
 }
 
-/// One strong load per agent: its fixture, the cwd it records and where it
-/// goes under the home's transcripts directory.
 const ONE_LOAD_EACH: [(Agent, &str, &str, &str); 3] = [
     (Agent::Claude, "claude/pair.jsonl", "/home/nicolas/projects/argus", "projects/p/pair.jsonl"),
     (Agent::Codex, "codex/name_block.jsonl", "/home/nicolas/projects/demo", "2026/07/27/rollout.jsonl"),
     (Agent::Pi, "pi/slash.jsonl", "/home/nicolas/dotfiles", "p/session.jsonl"),
 ];
 
-/// Scans [`ONE_LOAD_EACH`] into a fresh data dir, each transcript passed
-/// through `edit(text, recorded cwd, data dir)`; the report of each home, in
-/// that order.
 fn scan_one_load_each(edit: impl Fn(&str, &str, &Path) -> String) -> Vec<scan::HomeReport> {
     let tmp = tempfile::tempdir().unwrap();
     let data = fs::canonicalize(tmp.path()).unwrap().join("data/mazo");
@@ -810,7 +769,6 @@ fn scan_one_load_each(edit: impl Fn(&str, &str, &Path) -> String) -> Vec<scan::H
 
 #[test]
 fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
-    // Scanned once with the recorded cwd and once with it moved under `<data dir>/audit-runs/`.
     for audit in [false, true] {
         let reports = scan_one_load_each(|text, cwd, data| {
             if audit { text.replace(cwd, data.join("audit-runs/run-1").to_str().unwrap()) } else { text.to_string() }
@@ -821,7 +779,6 @@ fn sessions_whose_cwd_is_inside_audit_runs_produce_no_event() {
     }
 }
 
-/// `text` with every record's top-level `timestamp` set to `ts`, or removed.
 fn with_timestamp(text: &str, ts: Option<&str>) -> String {
     let mut out = String::new();
     for line in text.lines() {
@@ -859,8 +816,6 @@ fn scan_report_and_json_show_the_loads_with_a_bad_timestamp() {
     assert_eq!(homes["claude"]["bad_timestamps"], 1, "{homes}");
 }
 
-/// No prompt text is stored: `show` prints a real example read from the transcript and
-/// writes its text nowhere outside the agent's home.
 #[test]
 fn show_writes_no_example_text() {
     let env = Env::new(&TRANSCRIPTS, &[]);
@@ -888,8 +843,6 @@ fn show_writes_no_example_text() {
     assert!(xdg.join("mazo/events.jsonl").is_file() && files > 3);
 }
 
-/// A transcript names skills, paths and cwds anyone can write: a control
-/// character in one reaches no terminal.
 #[test]
 fn transcript_controls_reach_no_text_report() {
     let env = Env::new(&[], &[]);
@@ -912,7 +865,6 @@ fn transcript_controls_reach_no_text_report() {
             {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": command}}
         ]}
     });
-    // The prompt behind a load is shown as the skill's example.
     let prompt = serde_json::json!({
         "type": "user", "uuid": "p1", "timestamp": ts, "sessionId": "c0de0000-0000-4000-8000-000000000002",
         "cwd": "/home/u/proj", "version": "2.1.292", "isSidechain": false, "entrypoint": "cli",
@@ -925,7 +877,6 @@ fn transcript_controls_reach_no_text_report() {
         unparsed.to_string(),
     ];
     env.put("controls\nforged: line.jsonl", format!("{}\n", lines.join("\n")).as_bytes());
-    // A transcript's own name: one trips the canary, one cannot be read.
     env.put("canary\x1b]0;pwned\x07\u{202e}\nforged: line.jsonl", b"{\"text\": \"Base directory for this skill\"}\n");
     let unreadable = env.transcript("io\x1b]0;pwned\x07\u{202e}\nforged: line.jsonl");
     fs::write(&unreadable, "").unwrap();
@@ -947,14 +898,12 @@ fn transcript_controls_reach_no_text_report() {
             assert!(stdout.contains("please run the unslop skill \u{fffd}]0;pwned"), "{stdout}");
         }
     }
-    // JSON keeps a sample's newline, escaped, and replaces only the controls.
     let out = env.cli(&xdg).args(["scan", "--reparse", "--json"]).output().unwrap();
     let json = common::stdout(&out);
     assert!(json.contains("echo \u{fffd}]0;pwned\u{fffd}\u{fffd}\\nforged: line"), "{json}");
     fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
 }
 
-/// The session of every event read from a chain's child transcript.
 fn child_sessions(chain: &common::Chain, events: &[Event]) -> Vec<String> {
     chain.child(events).into_iter().map(|(_, session)| session).collect()
 }
@@ -1006,8 +955,6 @@ fn sessions_seen_before_their_first_load_keep_their_root_after_a_parent_is_delet
         fs::remove_file(parent).unwrap();
         fs::remove_file(child).unwrap();
         chain.scan(false);
-        // Parent and child appear with no load, so no event walks their chain;
-        // with `empty_first`, a scan first sees both files empty.
         common::write(parent, "");
         common::write(child, "");
         if empty_first {

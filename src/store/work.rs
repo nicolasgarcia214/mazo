@@ -1,29 +1,15 @@
-//! The vet judge's view of the user's recent work, from the ledger alone:
-//! the projects worked in and the skills used. It carries none of the
-//! user's prompts, so a skill under vet cannot have the judge copy them into
-//! its verdict, which the lockfile keeps. Built without a judge call, so the
-//! same ledger and `now` give the same summary.
-
 use std::collections::BTreeMap;
 
 use jiff::{SignedDuration, Timestamp};
 
 use crate::ledger::{Actor, Event};
 
-/// "Recent" is this many days before `now`.
 const DAYS: i64 = 30;
-/// Projects, and skills, listed: the most used first.
 const PROJECTS: usize = 10;
 const SKILLS: usize = 20;
-/// The most bytes of the summary the vet judge is sent: a summary past it
-/// loses its last whole lines, and says so, so it fits.
 const SUMMARY_BYTES: usize = 8 * 1024;
 const CUT: &str = "(cut to fit the size cap)\n";
 
-/// The summary of the strong, main-actor `events` of the last [`DAYS`] days
-/// before `now`: each project (`cwd`) and skill with its event count, most
-/// first and ties by name. With no such event, it says no history is
-/// available.
 pub fn summary(events: &[Event], now: Timestamp) -> String {
     let since = now - SignedDuration::from_hours(24 * DAYS);
     let recent: Vec<&Event> = events
@@ -48,8 +34,6 @@ pub fn summary(events: &[Event], now: Timestamp) -> String {
     capped(out)
 }
 
-/// `out` cut after its last whole line that leaves room for [`CUT`] within
-/// [`SUMMARY_BYTES`], when it is over.
 fn capped(mut out: String) -> String {
     if out.len() <= SUMMARY_BYTES {
         return out;

@@ -1,6 +1,3 @@
-//! Stage 1's answer: its schema, the verdict it parses to, and the checks
-//! against the session it judged, the no-quote rule among them.
-
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
@@ -9,7 +6,6 @@ use serde_json::{Value, json};
 
 use super::{Stage, list, object, text};
 
-/// The stage-1 judge prompt, shipped in the binary, and the version records name.
 pub const SESSION_PROMPT: &str = include_str!("../../prompts/session.md");
 pub const SESSION_PROMPT_VERSION: &str = "session-v1";
 
@@ -17,14 +13,10 @@ const ASKED_CHARS: usize = 240;
 const NOTES_CHARS: usize = 400;
 const FINDING_CHARS: usize = 200;
 const FINDINGS: usize = 5;
-/// A run of this many characters shared with the session is a quote.
 const QUOTE_CHARS: usize = 40;
-/// A whole user message of this many characters is a quote.
 const SHORT_MESSAGE: std::ops::RangeInclusive<usize> = 12..=39;
-/// The most of a quote a rejection shows the judge.
 const SHARED_CHARS: usize = 60;
 
-/// The JSON schema of the judge's answer, passed as `--json-schema`.
 pub static SESSION_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     let finding = object(vec![("line", json!({"type": "integer", "minimum": 1})), ("text", text(FINDING_CHARS))]);
     object(vec![
@@ -39,7 +31,6 @@ pub static SESSION_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     .to_string()
 });
 
-/// Stage 1, one call per session.
 pub static SESSION: Stage = Stage { prompt: SESSION_PROMPT, schema: &SESSION_SCHEMA };
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -67,7 +58,6 @@ pub struct Finding {
     pub text: String,
 }
 
-/// The judge's answer for one session.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Verdict {
@@ -80,8 +70,6 @@ pub struct Verdict {
     pub notes: String,
 }
 
-/// The condensed session's records: each `L<n>: ` line with the lines after
-/// it that carry no number of their own.
 fn records(condensed: &str) -> Vec<(u64, String)> {
     let mut out: Vec<(u64, String)> = Vec::new();
     for l in condensed.lines() {
@@ -101,16 +89,10 @@ fn records(condensed: &str) -> Vec<(u64, String)> {
     out
 }
 
-/// Inert, as the answer is checked, lowercased, with every run of whitespace
-/// one space.
 fn normalize(s: &str) -> String {
     crate::render::inert(s).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-/// The field of the first of `texts` that quotes the session, and the text it
-/// shares: 40 consecutive characters shared with a user message, an assistant
-/// message or a tool result, run on to at most 60, or a whole user message of
-/// 12 to 39 characters.
 fn quoting<'a>(texts: impl Iterator<Item = (String, &'a str)>, records: &[(u64, String)]) -> Option<(String, String)> {
     let sources: Vec<(bool, String)> = records
         .iter()
@@ -150,8 +132,6 @@ fn quoting<'a>(texts: impl Iterator<Item = (String, &'a str)>, records: &[(u64, 
     })
 }
 
-/// The judge's answer checked against its schema, the lines of `condensed`
-/// and the no-quote rule. The error says what failed.
 pub fn validate(answer: Value, condensed: &str) -> std::result::Result<Verdict, String> {
     let v: Verdict = serde_json::from_value(answer).map_err(|e| format!("not the answer schema: {e}"))?;
     let chars = |s: &str| s.chars().count();

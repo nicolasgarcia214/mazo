@@ -1,6 +1,3 @@
-//! The card's examples: how to invoke a skill, and real prompts
-//! read from transcripts at display time and never stored.
-
 use std::path::Path;
 
 use serde::Serialize;
@@ -9,22 +6,15 @@ use crate::adapters;
 use crate::ledger::{Actor, Agent, Event};
 use crate::yaml;
 
-/// Real examples come from this many projects, one each.
 const PROJECTS: usize = 3;
-/// A real example is cut to this many characters.
 const MAX_CHARS: usize = 300;
-/// A shorter prompt ("yes", "go on") says nothing about the skill.
 const MIN_CHARS: usize = 20;
 
 #[derive(Serialize)]
 pub struct Examples {
-    /// The invocation on each configured agent.
     pub written: Vec<Invocation>,
-    /// `interface.default_prompt` from `agents/openai.yaml`.
     pub default_prompt: Option<String>,
-    /// Newest project first.
     pub real: Vec<Real>,
-    /// Up to three from the latest audit.
     pub curated: Vec<crate::audit::Example>,
 }
 
@@ -42,7 +32,6 @@ pub struct Real {
     pub text: String,
 }
 
-/// `/name` on Claude, `$name` on Codex, `/skill:name` on Pi.
 fn invocation(agent: Agent, skill: &str) -> String {
     match agent {
         Agent::Claude => format!("/{skill}"),
@@ -51,9 +40,6 @@ fn invocation(agent: Agent, skill: &str) -> String {
     }
 }
 
-/// The examples of `skill`, whose directory is `dir` if any, from its ledger
-/// `events` newest first, with the latest audit's `curated` ones; only strong
-/// `main` events are read.
 pub fn examples<'e>(
     agents: impl IntoIterator<Item = Agent>,
     dir: Option<&Path>,
@@ -77,10 +63,6 @@ pub fn examples<'e>(
     Examples { written, default_prompt, real: real(skill, events), curated }
 }
 
-/// The most recent informative prompt per project, from the three most recent
-/// projects. A prompt that is only the invocation or under 20 characters gives
-/// way to the project's next most recent event; an expired transcript ends
-/// the project's search.
 fn real<'e>(skill: &str, events: impl IntoIterator<Item = &'e Event>) -> Vec<Real> {
     let mut projects: Vec<(Option<&str>, Vec<&Event>)> = Vec::new();
     for e in events.into_iter().filter(|e| e.channel.strong() && e.actor == Actor::Main) {

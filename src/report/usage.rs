@@ -1,5 +1,3 @@
-//! `mazo usage`: the usage table, its grade and audit columns.
-
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use jiff::SignedDuration;
@@ -14,15 +12,12 @@ use crate::ledger::{Agent, Channel};
 use crate::render::{self, Align};
 use crate::store::Locked;
 
-/// Days in the `30d` per-day counts.
 const SPARK_DAYS: i64 = 30;
 
-/// A grade as reports emit it, with its mark.
 #[derive(Serialize)]
 pub struct GradeOut {
     #[serde(flatten)]
     pub grade: Grade,
-    /// `stale` or empty.
     pub mark: &'static str,
 }
 
@@ -33,7 +28,6 @@ impl From<Grade> for GradeOut {
 }
 
 impl GradeOut {
-    /// The score as written, then ` stale` for a stale grade, the mark painted when `colour`.
     pub fn cell(&self, colour: bool) -> String {
         let score = self.grade.eval.score.as_deref().unwrap_or("?");
         if self.mark.is_empty() { score.into() } else { format!("{score} {}", render::paint(self.mark, colour)) }
@@ -58,25 +52,18 @@ pub struct UsageRow {
     pub agents: String,
     pub ctx: Ctx,
     pub last: Option<String>,
-    /// [`Self::sess`] over the last 7 local days, whatever the window.
     pub sessions_7d: usize,
-    /// [`Self::sess`] over the last 30 local days, whatever the window.
     pub sessions_30d: usize,
-    /// `sessions_30d` against the 30 days before; null when both are zero.
     pub trend: Option<Trend>,
     #[serde(rename = "30d")]
     pub last_30d: Vec<usize>,
     pub grade: Option<GradeOut>,
-    /// The audit verdict ([`verdict_of`]); null when not judged.
     pub verdict: Option<String>,
-    /// Where `verdict` comes from; null when not judged.
     pub verdict_source: Option<VerdictSource>,
-    /// The audit cell ([`verdict_of`]).
     #[serde(skip)]
     pub mark: &'static str,
 }
 
-/// How a usage row's last 30 days compare with the 30 before.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Trend {
@@ -87,8 +74,6 @@ pub enum Trend {
 }
 
 impl Trend {
-    /// `later` against `earlier`: up at +20% or more, down at -20% or less,
-    /// new from zero, none when both are zero.
     fn of(later: usize, earlier: usize) -> Option<Trend> {
         Some(match (later, earlier) {
             (0, 0) => return None,
@@ -99,7 +84,6 @@ impl Trend {
         })
     }
 
-    /// The trend cell: an arrow, or `new`.
     pub fn glyph(trend: Option<Trend>) -> &'static str {
         match trend {
             Some(Trend::Up) => "↑",
@@ -111,7 +95,6 @@ impl Trend {
     }
 }
 
-/// Where a usage row's verdict comes from.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum VerdictSource {
@@ -119,20 +102,10 @@ pub enum VerdictSource {
     Vet,
 }
 
-/// The lockfile entry of `skill`'s store copy; a source skill of the same
-/// name shadows it.
 pub(super) fn vet_of<'i>(inv: &'i Inventory, skill: &str) -> Option<&'i Locked> {
     inv.installed.get(skill).filter(|_| inv.root(skill) != inv.source.as_deref())
 }
 
-/// `skill`'s audit-column mark, then its verdict and the verdict's source
-/// (D18). The mark is `!` when the vet of its lockfile entry ([`vet_of`])
-/// found a security issue, else `✓` when an audit judged it, else `vet` when
-/// only the vet did, else `-`. The verdict is the `result.verdict` of the
-/// latest audit, the last `skill` record of `skill` in `audits.jsonl`
-/// ([`crate::audit::latest`]), as `show` prints it; else the vet verdict as
-/// [`crate::audit::VetVerdict::line`] words it; else none. A project skill
-/// has no audit, and its entry is in the project's lockfile.
 fn verdict_of(input: &Input, skill: &str, scope: Scope) -> (&'static str, Option<(VerdictSource, String)>) {
     let locked = match scope {
         Scope::Global => vet_of(input.inv, skill),
@@ -150,16 +123,12 @@ fn verdict_of(input: &Input, skill: &str, scope: Scope) -> (&'static str, Option
     (mark, verdict.or_else(|| vet.map(|v| (VerdictSource::Vet, v.line()))))
 }
 
-/// The usage table: what `usage --json` emits.
 #[derive(Serialize)]
 pub struct Usage {
     pub rows: Vec<UsageRow>,
-    /// Per home, the window its transcripts cover.
     pub coverage: BTreeMap<String, String>,
 }
 
-/// The `usage` rows, most used first: one per global skill, then one per
-/// project skill, so a name in both has two.
 fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
     let input = view.input;
     let f = Filter::from(args);
@@ -167,8 +136,6 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
     let mut skills: BTreeSet<&str> = input.inv.skills.iter().map(String::as_str).collect();
     let project = input.inv.project.as_ref();
     if args.all {
-        // Every skill in the ledger, so a retired or pruned one keeps a row;
-        // a name only the project has keeps its project row alone.
         let project_only = |s: &str| project.is_some_and(|p| p.skills.contains(s));
         let ledger = input.events.iter().filter(|e| view.scope(e) == Scope::Global).map(|e| e.skill.as_str());
         skills.extend(ledger.filter(|s| !project_only(s)));
@@ -190,7 +157,6 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
             let last_30d = view.daily_strong(select(spark_from), SPARK_DAYS);
             let sessions = |days| view.strong_sessions(select(None), days);
             let sessions_30d = sessions(0..30);
-            // Only a source or store skill has grades.
             let global = scope == Scope::Global && input.inv.skills.contains(skill);
             let grade = global.then(|| grade_out(&evals::load(&input.cfg.evals_dir, input.inv, skill))).flatten();
             let (mark, verdict) = verdict_of(input, skill, scope);
@@ -230,12 +196,10 @@ pub(super) fn usage_of(view: &View, args: &UsageArgs) -> Usage {
     Usage { rows: usage_rows(view, args), coverage: view.coverage(None).into_iter().collect() }
 }
 
-/// The usage table over `input`.
 pub fn usage_table(input: &Input, args: &UsageArgs) -> Usage {
     usage_of(&View::new(input), args)
 }
 
-/// The usage table's columns.
 pub const USAGE_HEADER: [(&str, Align); 15] = [
     ("skill", Align::Left),
     ("sess", Align::Right),
@@ -254,15 +218,11 @@ pub const USAGE_HEADER: [(&str, Align); 15] = [
     ("audit", Align::Left),
 ];
 
-/// `r`'s cells under [`USAGE_HEADER`], its last load relative to `input.now`,
-/// the grade and audit marks painted when `tty`.
 pub fn usage_cells(input: &Input, r: &UsageRow, tty: bool) -> Vec<String> {
     r.cells(r.last.as_deref().and_then(|t| t.parse().ok()).map_or("-".into(), |t| relative(input, t)), tty)
 }
 
 impl UsageRow {
-    /// The cells under [`USAGE_HEADER`], `last` the last-load cell, the grade
-    /// and audit marks painted when `tty`.
     pub fn cells(&self, last: String, tty: bool) -> Vec<String> {
         vec![
             format!("{}{}", self.skill, self.scope.suffix()),
@@ -284,7 +244,6 @@ impl UsageRow {
     }
 }
 
-/// Rendered `mazo usage` output (text, or JSON when `json`).
 pub fn usage(input: &Input, args: &UsageArgs, json: bool, tty: bool) -> String {
     let view = View::new(input);
     let usage = usage_of(&view, args);

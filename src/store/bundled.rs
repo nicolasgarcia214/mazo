@@ -1,6 +1,3 @@
-//! The skills bundled under mazo's own `skills/`: installed by `mazo init`
-//! at the tag of the running version, and re-pinned to it by `mazo update`.
-
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -10,18 +7,14 @@ use crate::config::Config;
 use crate::inventory::Inventory;
 use crate::{Error, Result, outln};
 
-/// The skills `mazo init` installs, and whose absence the TUI's top bar names.
 const BUNDLED: [&str; 2] = ["grade", "retro"];
 
-/// mazo's repository, the only source installed trusted without a trust entry.
 const REPO: &str = "https://github.com/nicolasgarcia214/mazo";
 
-/// The bundled skills that neither the source nor the store holds.
 pub fn missing(inv: &Inventory) -> Vec<&'static str> {
     BUNDLED.into_iter().filter(|s| !inv.skills.contains(*s)).collect()
 }
 
-/// `v<version>` of the running mazo.
 pub(super) fn tag() -> String {
     format!("v{}", env!("CARGO_PKG_VERSION"))
 }
@@ -33,7 +26,6 @@ fn repo() -> Remote {
     }
 }
 
-/// Whether the remote has [`tag`], and the commit its default branch is at.
 pub(super) fn listed(remote: &Remote, cancel: &dyn Fn() -> bool) -> Result<(bool, Option<String>)> {
     let tag = format!("refs/tags/{}", tag());
     let listed = remote.ls_remote(&[], &["HEAD", &tag], cancel)?;
@@ -41,12 +33,6 @@ pub(super) fn listed(remote: &Remote, cancel: &dyn Fn() -> bool) -> Result<(bool
     Ok((listed.iter().any(|(_, name)| *name == tag), head))
 }
 
-/// `mazo init`'s install of every skill under `skills/` of [`REPO`] through
-/// `mazo add --all --trust`, at [`tag`], or at the commit the default
-/// branch is at, with a warning, when the remote lacks that tag. The trust
-/// is this add's alone: no trust entry is written. A bundled skill that is
-/// already installed is skipped and the rest picked one by one. A failure
-/// prints the `mazo add` that retries it, and exits 1.
 pub fn install(cfg: &Config, inv: &Inventory, data: &Path) -> Result<ExitCode> {
     let missing = missing(inv);
     for name in BUNDLED.iter().filter(|n| !missing.contains(n)) {
@@ -73,7 +59,6 @@ pub fn install(cfg: &Config, inv: &Inventory, data: &Path) -> Result<ExitCode> {
         Err(e) => return failed(&r#ref, Some(e)),
     }
     let source = format!("{REPO}/tree/{}/skills", r#ref);
-    // Every skill when none is installed, else each missing one.
     let picks = if missing.len() == BUNDLED.len() { vec![None] } else { missing.into_iter().map(Some).collect() };
     let mut ok = true;
     for pick in picks {
@@ -88,7 +73,6 @@ pub fn install(cfg: &Config, inv: &Inventory, data: &Path) -> Result<ExitCode> {
             project: false,
             io: &Terminal,
         };
-        // Re-read, so that each add plans its links with the one before.
         let added = inventory(cfg.source.as_deref(), data).and_then(|inv| add(cfg, &inv, data, &args));
         match added {
             Ok(outcome) => ok &= outcome == Outcome::Done,
@@ -101,20 +85,15 @@ pub fn install(cfg: &Config, inv: &Inventory, data: &Path) -> Result<ExitCode> {
     if ok { Ok(ExitCode::SUCCESS) } else { failed(&r#ref, None) }
 }
 
-/// Whether `l` is a bundled entry: one from [`REPO`]'s `skills/`.
 pub(super) fn bundled(l: &Locked) -> bool {
     l.origin.strip_suffix(".git").unwrap_or(&l.origin) == REPO && l.subpath.starts_with("skills/")
 }
 
-/// Whether `mazo update` moves `l` to [`tag`] once the remote has it: a
-/// bundled entry at a commit, or at a `v<major>.<minor>.<patch>` tag below
-/// the running version. A branch, any other tag, and no ref stay.
 pub(super) fn behind(l: &Locked) -> bool {
     let Some(r#ref) = l.r#ref.as_deref().filter(|_| bundled(l)) else { return false };
     is_commit(r#ref) || matches!((semver(r#ref), semver(&tag())), (Some(at), Some(running)) if at < running)
 }
 
-/// `v<major>.<minor>.<patch>`'s three numbers.
 fn semver(tag: &str) -> Option<(u64, u64, u64)> {
     let number = |p: &str| if p.bytes().all(|b| b.is_ascii_digit()) { p.parse().ok() } else { None };
     let mut parts = tag.strip_prefix('v')?.split('.').map(number);

@@ -1,7 +1,3 @@
-//! The Codex judge: `codex exec` without the tools that read local files,
-//! in a read-only sandbox with a scratch `CODEX_HOME`, the prompt and input
-//! on stdin, the answer in its `-o` file, and no dollar cost.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -15,7 +11,6 @@ use crate::{Error, Result};
 
 pub struct Codex {
     pub model: Option<String>,
-    /// The user's `auth.json`, which the scratch home links to.
     pub auth: PathBuf,
 }
 
@@ -26,10 +21,6 @@ impl Subprocess for Codex {
             "exec",
             "--ephemeral",
             "--skip-git-repo-check",
-            // The shell and the image viewer read any file the user can, and
-            // web search carries the input out; the sandbox only stops writes
-            // and the network. `multi_agent` drops the v1 subagents; a model
-            // on v2 keeps its own, which get these same tools.
             "--disable",
             "shell_tool",
             "--disable",
@@ -53,7 +44,6 @@ impl Subprocess for Codex {
         Some(format!("{}\n{input}", stage.prompt))
     }
 
-    /// The user's `auth.json` must hold a ChatGPT login.
     fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
         let path = self.auth.inert();
         let unread = |why: String| {
@@ -71,9 +61,6 @@ impl Subprocess for Codex {
         )))
     }
 
-    /// `home` holding only a symlink to the user's `auth.json`. It is kept
-    /// out of the system temporary directory, where Codex refuses to make its
-    /// helper binaries and says so on stderr.
     fn scratch(&self, home: &Path) -> Result<Option<&'static str>> {
         if !self.auth.exists() {
             return Err(format!("{}: no Codex login for the Codex judge", self.auth.inert()).into());

@@ -1,6 +1,3 @@
-//! The background add, audit or update: its thread, the questions it puts to
-//! the dialogs, and its pane.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
@@ -20,24 +17,17 @@ use crate::pick::Picker;
 use crate::store::{self, Outcome};
 use crate::theme;
 
-/// The most lines the job pane shows: its last ones.
 pub(super) const PANE_LINES: usize = 6;
 
-/// How long quitting waits for a cancelled job: longer than a judge has to
-/// exit on SIGTERM before it is killed.
 const STOP_WAIT: Duration = Duration::from_secs(10);
 
-/// The frames of a running job's spinner, one per 100 ms.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// A question an add or update job puts to the main loop, which answers it
-/// in a dialog. A dialog closed without a reply is No, or nothing picked.
 enum Question {
     Pick(Vec<(String, String)>, mpsc::Sender<Vec<String>>),
     YesNo { lines: Vec<String>, prompt: String, default: bool, reply: mpsc::Sender<bool> },
 }
 
-/// A job's [`store::Io`]: its pane, and the dialogs its questions open.
 struct Dialogs<'a> {
     pane: &'a audit::Pane,
     asks: mpsc::Sender<Question>,
@@ -64,7 +54,6 @@ impl store::Io for Dialogs<'_> {
         true
     }
 
-    /// The picker can select several without `--all`.
     fn confirms_calls(&self) -> bool {
         true
     }
@@ -82,29 +71,19 @@ impl store::Io for Dialogs<'_> {
     }
 }
 
-/// A background add, audit or update and what its pane shows.
 pub(super) struct Job {
-    /// `add`, `audit` or `update`.
     pub(super) verb: &'static str,
-    /// The skill, every store skill, or the add source.
     pub(super) target: String,
-    /// What the run reported, then what its CLI command prints.
     pub(super) lines: Vec<String>,
     rx: mpsc::Receiver<String>,
-    /// What an add or update asks, each opened as a dialog once none is open.
     asks: Option<mpsc::Receiver<Question>>,
     cancel: Arc<AtomicBool>,
-    /// The thread until it ends; it returns whether the run succeeded.
     pub(super) thread: Option<JoinHandle<bool>>,
     ok: bool,
-    /// When it started: its spinner's frame and its running time.
     started: Instant,
 }
 
 impl App {
-    /// Adds from `source` in the background as `mazo add <source>` does, its
-    /// picker and y/N questions answered in dialogs, or shows the refusal
-    /// `add` gives before reading the source. There is no `--force`.
     pub(super) fn add(&mut self, source: String) {
         if let Err(e) = store::precheck(&self.data.cfg, &source) {
             self.dialog = Some(Dialog { lines: vec![format!("ERROR: {e}")], ask: None });
@@ -131,9 +110,6 @@ impl App {
         });
     }
 
-    /// Runs `job` on a thread over a copy of the data, as the `verb` of
-    /// `target`: the lines it reports, then the text it returns, go to the
-    /// job pane, and what it `asks` to the dialogs.
     fn start(
         &mut self,
         verb: &'static str,
@@ -157,7 +133,6 @@ impl App {
             Some(Job { verb, target, lines: Vec::new(), rx, asks, cancel, thread: Some(thread), ok: false, started });
     }
 
-    /// Audits `skill` in the background as `mazo audit <skill>` does.
     pub(super) fn run_audit(&mut self, skill: String) {
         let name = skill.clone();
         self.start("audit", skill, None, move |data, pane| {
@@ -168,8 +143,6 @@ impl App {
         });
     }
 
-    /// Updates `skill`, or every store skill, in the background as `mazo
-    /// update [skill]` does, each re-vet's y/N answered in a dialog.
     pub(super) fn run_update(&mut self, skill: Option<String>) {
         let target = skill.clone().unwrap_or_else(|| "every store skill".into());
         let (tx, rx) = mpsc::channel();
@@ -184,9 +157,6 @@ impl App {
         });
     }
 
-    /// Takes the lines the job reported, and opens its next question when no
-    /// dialog is open; once its thread ended, re-reads the data. Called
-    /// before each draw.
     pub fn tick(&mut self) {
         let Some(job) = &mut self.job else { return };
         if self.dialog.is_none()
@@ -217,15 +187,12 @@ impl App {
         }
     }
 
-    /// Cancels a running job, which kills its judge call in flight, and waits
-    /// up to [`STOP_WAIT`] for its thread.
     pub(super) fn stop(&mut self) {
         let Some(job) = &mut self.job else { return };
         let Some(thread) = job.thread.take() else { return };
         job.cancel.store(true, Ordering::Relaxed);
         let deadline = Instant::now() + STOP_WAIT;
         while !thread.is_finished() && Instant::now() < deadline {
-            // A question the job waits on is dropped unanswered: No.
             while job.asks.as_ref().is_some_and(|a| a.try_recv().is_ok()) {}
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -235,8 +202,6 @@ impl App {
     }
 }
 
-/// The job pane: a spinner and the running time while the job runs, then a
-/// check or a cross, in a box of the same colour, over its last lines.
 pub(super) fn draw_job(frame: &mut Frame, job: &Job, area: Rect) {
     let elapsed = job.started.elapsed();
     let (icon, state, colour) = match (&job.thread, job.ok) {
@@ -261,8 +226,6 @@ pub(super) fn draw_job(frame: &mut Frame, job: &Job, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// What `job`, the `verb` run, returns, or a failure naming its panic: the
-/// pane shows it and the screen stays up.
 fn caught(verb: &str, job: impl FnOnce() -> (String, bool)) -> (String, bool) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|panic| {
         let why = panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str));

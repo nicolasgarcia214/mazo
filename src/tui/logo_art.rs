@@ -1,11 +1,5 @@
-//! The logo's pixels, baked from `docs/assets/logo-dark.png` by
-//! `docs/assets/bake-logo.py`; rerun it rather than editing here.
-
-/// The wordmark's ink: the terminal's foreground.
 pub const INK: u32 = 1;
 
-/// The deck of cards beside the wordmark, a row of pixels to a row,
-/// two rows to a cell: `0` for none, [`INK`], or `0xRRGGBB`.
 #[rustfmt::skip]
 pub const LOGO: [[u32; 56]; 14] = [
     [0, 0, 0, 0, 0, 0x036f9b, 0x0281af, 0, 0, 0, 0x085164, 0x093c4a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],

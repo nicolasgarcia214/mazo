@@ -1,7 +1,3 @@
-//! The vet stage: one call per skill `mazo add` would install, or `mazo
-//! update` would replace, from an untrusted source, its answer schema, and
-//! the checks on the answer.
-
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
@@ -11,19 +7,16 @@ use super::{Caller, DEFAULT_BUDGET, Ruling, Stage, check_for_try, enclose, for_t
 use crate::Result;
 use crate::ledger::name;
 
-/// The vet judge prompt, shipped in the binary.
 pub const VET_PROMPT: &str = include_str!("../../prompts/vet.md");
 
 const SECURITY_CHARS: usize = 400;
 const REASON_CHARS: usize = 300;
 const REASONS: usize = 5;
 
-/// A string of at most `max` characters, or null.
 fn nullable(max: usize) -> Value {
     json!({"type": ["string", "null"], "maxLength": max})
 }
 
-/// The JSON schema of the vet answer.
 pub static VET_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     let mut fields = vec![
         ("security", nullable(SECURITY_CHARS)),
@@ -36,7 +29,6 @@ pub static VET_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     object(fields).to_string()
 });
 
-/// The vet stage, one call per skill.
 pub static VET: Stage = Stage { prompt: VET_PROMPT, schema: &VET_SCHEMA };
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -58,11 +50,9 @@ pub enum Worth {
     Redundant,
 }
 
-/// The judge's verdict on a skill, as the lockfile entry keeps it.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VetVerdict {
-    /// The security finding; none when the skill is safe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<String>,
     pub quality: Quality,
@@ -73,26 +63,19 @@ pub struct VetVerdict {
 }
 
 impl VetVerdict {
-    /// The y/N prompt's default: No for a redundant, irrelevant or
-    /// low-value skill or a poor one, Yes otherwise.
     pub fn default_yes(&self) -> bool {
         self.value == Worth::WorthTrying && self.quality != Quality::Poor
     }
 
-    /// `quality Q, value V`: the verdict's line in `mazo add`.
     pub fn summary(&self) -> String {
         format!("quality {}, value {}", name(self.quality), name(self.value))
     }
 
-    /// The [`Self::summary`], led by `security: <finding>; ` when the judge
-    /// found one: the verdict in the usage `--json` and on the card.
     pub fn line(&self) -> String {
         self.security.as_ref().map_or(self.summary(), |f| format!("security: {f}; {}", self.summary()))
     }
 }
 
-/// The vet judge's answer: the verdict, what the skill is for, and up to
-/// three uses to try.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vet {
     pub verdict: VetVerdict,
@@ -100,7 +83,6 @@ pub struct Vet {
     pub r#try: Vec<String>,
 }
 
-/// The answer as the schema has it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Answer {
@@ -114,7 +96,6 @@ struct Answer {
 }
 
 impl Vet {
-    /// The verdict as `mazo add` shows it before asking.
     pub fn text(&self, skill: &str) -> String {
         let v = &self.verdict;
         let mut out = format!("vet {skill}: {}\n", v.summary());
@@ -135,8 +116,6 @@ impl Vet {
     }
 }
 
-/// The vet answer checked against its schema and the `existing` skill names
-/// it may cite. The error says what failed.
 fn validate_vet(answer: Value, existing: &[&str]) -> std::result::Result<Vet, String> {
     let a: Answer = serde_json::from_value(answer).map_err(|e| format!("not the answer schema: {e}"))?;
     let over = |s: &str, max: usize| s.chars().count() > max;
@@ -164,10 +143,6 @@ fn validate_vet(answer: Value, existing: &[&str]) -> std::result::Result<Vet, St
     Ok(Vet { verdict, r#for: a.r#for, r#try: a.r#try })
 }
 
-/// The vet judge's input: the files of `skill` as `(relative path, text)`,
-/// the diff from the installed copy for an update, each existing skill as
-/// `(name, description)`, then the summary of the user's
-/// recent work.
 pub fn vet_input(
     skill: &str,
     files: &[(String, String)],
@@ -186,9 +161,6 @@ pub fn vet_input(
         .join("\n")
 }
 
-/// One vet call on `input`, with the existing skill names `existing` it may
-/// cite; an invalid answer is retried once. A judge that reports its cost
-/// is capped at audit's default budget. The valid answer, or why there is none.
 pub fn vet(c: &Caller, skill: &str, input: &str, existing: &[&str]) -> Result<std::result::Result<Vet, String>> {
     let limit = c.backend.budget_flag().map(|_| DEFAULT_BUDGET);
     let progress = format!("vetting {skill}");

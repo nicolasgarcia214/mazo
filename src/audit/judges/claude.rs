@@ -1,6 +1,3 @@
-//! The Claude judge: `claude -p` with tools off, the input on stdin, a dollar
-//! cost in its JSON result, and `--max-budget-usd` as its cap.
-
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::process::ExitStatusExt;
@@ -21,7 +18,6 @@ pub struct Claude {
     pub model: Option<String>,
 }
 
-/// Claude's `--output-format json` result; the cost stays decimal text.
 #[derive(Deserialize)]
 struct ClaudeOutput<'a> {
     #[serde(borrow)]
@@ -34,10 +30,8 @@ struct ClaudeOutput<'a> {
     structured_output: Option<Value>,
 }
 
-/// The flag that caps a call's dollar cost.
 const BUDGET_FLAG: &str = "--max-budget-usd";
 
-/// How long `claude auth status` may run before the login check fails.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl Subprocess for Claude {
@@ -63,8 +57,6 @@ impl Subprocess for Claude {
         Some(input.to_string())
     }
 
-    /// `claude auth status`, in the environment and the kind of fresh empty
-    /// directory the calls get, must report a claude.ai or OAuth-token login.
     fn login(&self, data: &Path, cancel: &dyn Fn() -> bool) -> Result<()> {
         let (_, dir) = run_dir(data)?;
         let checked = claude_login(OsStr::new("claude"), &dir, AUTH_TIMEOUT, cancel);
@@ -72,10 +64,6 @@ impl Subprocess for Claude {
         checked.map_err(Error::Usage)
     }
 
-    /// A call that ran but reported no cost is counted at its cap, the most it
-    /// could have spent short of one turn's overshoot, so the budget still
-    /// binds. An `api_error` or output that is no JSON stops the run at the
-    /// reported cost or $0, and a signal mazo did not send stops it at the cap.
     fn reply(&self, out: &Output, _written: Option<Vec<u8>>, cap: Option<u64>) -> Result<Reply> {
         let cap = cap.unwrap_or_default();
         if out.status.signal().is_some() {
@@ -104,9 +92,6 @@ impl Subprocess for Claude {
     }
 }
 
-/// `program auth status` run in `dir` without the billed variables, killed
-/// after `limit` or once `cancel` turns true: Ok for a claude.ai or
-/// OAuth-token login.
 fn claude_login(
     program: &OsStr,
     dir: &Path,
@@ -141,7 +126,6 @@ mod tests {
 
     use super::*;
 
-    /// `claude_login` on a stub whose `auth status` runs `script`, never cancelled.
     fn login_with(script: &str, limit: Duration) -> std::result::Result<(), String> {
         cancelled_login(script, limit, &|| false)
     }

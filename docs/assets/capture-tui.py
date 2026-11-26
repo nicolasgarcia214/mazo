@@ -92,8 +92,6 @@ def capture():
                 svg.append(f'<rect x="{x}" y="{y}" width="{CELL_W}" height="{CELL_H}" '
                            f'fill="{colour(cell["bg"])}"/>')
         svg.append('<g font-family="JetBrains Mono, JetBrainsMono Nerd Font Mono, monospace" font-size="15">')
-        # A block element fills its share of the cell, as a terminal draws it;
-        # as text it would leave the font's gaps.
         blocks = {"█": (0, 0, 1, 1), "▀": (0, 0, 1, .5), "▄": (0, .5, 1, .5), "▍": (0, 0, 3 / 8, 1)}
         for cell in cells:
             if cell["text"] in blocks:

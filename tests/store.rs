@@ -1,8 +1,3 @@
-//! `mazo add` of a local directory or a git repository into the store, the
-//! store as a second skill root for `status`, `sync`, `show` and `new`,
-//! `update` of git-sourced store skills, re-vetted when untrusted,
-//! `retire` of a store skill, and each of them with `--project`.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -13,7 +8,6 @@ use std::path::{Path, PathBuf};
 use common::judge::unnonced;
 use common::sync::*;
 
-/// A skill directory outside the source, passing every policy rule of the fixture.
 fn incoming(fx: &Fixture, name: &str) -> PathBuf {
     let dir = fx.root.join("incoming").join(name);
     common::write(
@@ -25,8 +19,6 @@ fn incoming(fx: &Fixture, name: &str) -> PathBuf {
     dir
 }
 
-/// A fixture already synced, with `theirs` waiting in `incoming/` and allowed
-/// in the Claude settings.
 fn fixture() -> (Fixture, PathBuf) {
     let mut fx = Fixture::new();
     fx.allow("theirs");
@@ -39,7 +31,6 @@ fn store(fx: &Fixture) -> PathBuf {
     fx.data.join("mazo/store")
 }
 
-/// Every skills directory the fixture's homes link into.
 fn skills_dirs(fx: &Fixture) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> =
         [".claude", ".claude-work", ".codex"].iter().map(|d| fx.home.join(d).join("skills")).collect();
@@ -115,7 +106,6 @@ fn a_tilde_source_expands_to_home_and_records_the_absolute_path() {
     let under_home = fx.home.join("skills/theirs");
     fs::create_dir_all(under_home.parent().unwrap()).unwrap();
     fs::rename(&dir, &under_home).unwrap();
-    // No shell runs, so mazo sees the tilde as typed, as from the TUI.
     add(&fx, &["~/skills/theirs", "--trust"]).assert_ok();
     assert!(store(&fx).join("theirs/SKILL.md").is_file());
     let origin = fs::canonicalize(&under_home).unwrap();
@@ -140,7 +130,6 @@ fn status_and_sync_keep_store_skills_beside_source_skills() {
     assert_eq!(r.stdout(), format!("linked    {}\n", link.display()));
     assert_eq!(fs::read_link(&link).unwrap(), store(&fx).join("theirs"));
 
-    // The per-skill rules read the store's copy.
     let manifest = store(&fx).join("theirs/agents/openai.yaml");
     fs::write(&manifest, "policy:\n  allow_implicit_invocation: true\n").unwrap();
     let r = fx.mazo(&["sync"]);
@@ -186,8 +175,6 @@ fn as_installs_under_another_name_and_rewrites_the_name() {
     assert_eq!(fx.snapshot(), before);
 }
 
-/// A source's author names its skill directories, so a newline in one forges
-/// no line of the usage error that lists them.
 #[test]
 fn a_skill_directory_name_forges_no_line_of_the_usage_error() {
     let (fx, _) = fixture();
@@ -200,8 +187,6 @@ fn a_skill_directory_name_forges_no_line_of_the_usage_error() {
     assert!(r.stderr().contains("the skills here are: a, b\u{fffd}forged: line"), "{}", r.stderr());
 }
 
-/// The no-judge refusal names the two judges any setup can configure and
-/// links a prefilled issue asking for one of the user's harness.
 fn assert_names_the_judges(stderr: &str) {
     for judge in ["[judge]\nagent = \"command\"\nargv = [", "[judge]\nagent = \"http\"\nurl = "] {
         assert!(stderr.contains(judge), "{judge}: {stderr}");
@@ -226,7 +211,6 @@ fn with_no_judge_an_untrusted_add_is_refused_until_trust_is_given() {
 #[test]
 fn an_add_the_sync_would_refuse_installs_nothing() {
     let (fx, _) = fixture();
-    // Not in the Claude settings' skillOverrides.
     let dir = incoming(&fx, "unlisted");
     let before = fx.snapshot();
     let r = add(&fx, &[&s(&dir), "--trust"]);
@@ -256,7 +240,6 @@ fn new_leaves_store_skills_alone_and_show_reads_them() {
     assert_eq!(card["description"], "From elsewhere.");
 }
 
-/// A ledger holding one strong use of `skill` a day ago.
 fn used(fx: &Fixture, skill: &str) {
     let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(24)).unwrap().to_string();
     let event = mazo::ledger::Event {
@@ -335,8 +318,6 @@ fn a_used_store_skill_holds_the_source_skill_it_cites() {
     assert!(exists(&fx.source.join(mine).join("SKILL.md")));
 }
 
-/// A bare repository `origin/<repo>.git` holding a skill per `(subpath, name)`,
-/// `.` being its root, and its `file://` URL.
 fn bare_repo(fx: &Fixture, repo: &str, skills: &[(&str, &str)]) -> String {
     let work = fx.root.join("work").join(repo);
     for (sub, name) in skills {
@@ -355,9 +336,6 @@ fn bare_repo(fx: &Fixture, repo: &str, skills: &[(&str, &str)]) -> String {
     format!("file://{}", bare.display())
 }
 
-/// [`bare_repo`] served as `https://git.example.org/acme/<repo>.git`: an
-/// `insteadOf` rewrite, set for every later run, sends git to its `file://`
-/// URL, so the source has a host to trust.
 fn hosted_repo(fx: &mut Fixture, repo: &str, skills: &[(&str, &str)]) -> String {
     let file = bare_repo(fx, repo, skills);
     let base = file.strip_suffix(&format!("{repo}.git")).unwrap();
@@ -367,20 +345,17 @@ fn hosted_repo(fx: &mut Fixture, repo: &str, skills: &[(&str, &str)]) -> String 
     format!("https://git.example.org/acme/{repo}.git")
 }
 
-/// `entry` put on the config's `trusted` list, its only one.
 fn trust(fx: &Fixture, entry: &str) {
     let config = fx.source.join("mazo.toml");
     let text = fs::read_to_string(&config).unwrap();
     fs::write(&config, format!("trusted = [\"{entry}\"]\n{text}")).unwrap();
 }
 
-/// [`hosted_repo`], its host and owner the config's only `trusted` entry.
 fn trusted_repo(fx: &mut Fixture, repo: &str, skills: &[(&str, &str)]) -> String {
     trust(fx, "git.example.org/acme");
     hosted_repo(fx, repo, skills)
 }
 
-/// The `HEAD` commit of the bare repository at `url`, a `file://` or a [`hosted_repo`] URL.
 fn head(fx: &Fixture, url: &str) -> String {
     let dir = url.strip_prefix("file://").map_or_else(
         || fx.root.join("origin").join(url.strip_prefix("https://git.example.org/acme/").unwrap()),
@@ -390,14 +365,12 @@ fn head(fx: &Fixture, url: &str) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_string()
 }
 
-/// The fixture with its data directory, where `add` clones, already made.
 fn git_fixture() -> Fixture {
     let (fx, _) = fixture();
     fs::create_dir_all(fx.data.join("mazo")).unwrap();
     fx
 }
 
-/// No clone is left in the data directory.
 fn assert_no_clone(fx: &Fixture) {
     let left: Vec<_> = fs::read_dir(fx.data.join("mazo"))
         .unwrap()
@@ -460,8 +433,6 @@ fn a_repo_with_several_skills_needs_skill_or_a_subpath() {
     assert_no_clone(&fx);
 }
 
-/// The fixture of [`git_fixture`] with a repository holding `names` under
-/// `skills/`, each allowed, and its URL at that subpath.
 fn pack(names: &[&str]) -> (Fixture, String) {
     let mut fx = git_fixture();
     for n in names {
@@ -510,7 +481,6 @@ fn a_refused_skill_of_several_leaves_the_rest_to_install_and_sets_the_exit_code(
 fn several_skills_off_a_terminal_list_their_names_and_install_nothing() {
     let (fx, url) = pack(&["one", "two"]);
     let before = fx.snapshot();
-    // stdin a terminal, stdout piped: no picker.
     let r = add_at_terminal(&fx, &[&url, "--trust"], "");
     assert_eq!(r.code(), 2, "{}", r.stderr());
     assert!(r.stderr().contains("several skills here; pass --skill with one of: one, two, or --all"), "{}", r.stderr());
@@ -525,17 +495,12 @@ fn a_skill_directory_named_to_drive_the_terminal_is_listed_inert() {
     assert!(r.stderr().contains("one of: one, two\u{fffd}]0;PWNED\u{fffd}, or --all"), "{}", r.stderr());
 }
 
-/// `mazo add args…` with stdin, stdout and stderr a terminal: each step's
-/// keys are typed once the terminal has shown its text, the first being the
-/// picker's status line. The exit code and everything the terminal showed.
 fn add_in_picker(fx: &Fixture, args: &[&str], steps: &[(&str, &str)]) -> (i32, String) {
     use std::io::{Read, Write};
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::sync::{Arc, Mutex};
     let (mut controller, mut terminal) = (0, 0);
-    // A `*mut` pointer: Apple's openpty takes `*mut winsize`, Linux's `*const`.
     let mut size = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
-    // SAFETY: openpty writes two new descriptors, owned below.
     let rc = unsafe {
         libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null_mut(), &raw mut size)
     };
@@ -551,7 +516,6 @@ fn add_in_picker(fx: &Fixture, args: &[&str], steps: &[(&str, &str)]) -> (i32, S
     let mut output = fs::File::from(controller);
     let mut input = output.try_clone().unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
-    // Reads until the child closes the terminal.
     let reader = std::thread::spawn({
         let seen = Arc::clone(&seen);
         move || {
@@ -579,7 +543,6 @@ fn add_in_picker(fx: &Fixture, args: &[&str], steps: &[(&str, &str)]) -> (i32, S
 #[test]
 fn at_a_terminal_the_picker_lists_each_skill_with_its_description_and_installs_the_selected() {
     let (fx, url) = pack(&["one", "two", "three"]);
-    // The list is sorted: one, three, two. Select three and two.
     let (code, screen) = add_in_picker(&fx, &[&url, "--trust"], &[("selected", "j j \r")]);
     assert_eq!(code, 0, "{screen}");
     assert!(screen.contains("From a repo."), "{screen}");
@@ -601,9 +564,6 @@ fn cancelling_or_selecting_nothing_in_the_picker_installs_nothing() {
     }
 }
 
-/// A repository whose skills sit two and three levels deep: a same-name
-/// pair `foo`, a skill inside a skill, and skills in a dot directory and in
-/// `node_modules` that the search skips. Its URL at its root.
 fn nested() -> (Fixture, String) {
     let mut fx = git_fixture();
     for n in ["foo", "one", "two", "foo2"] {
@@ -622,7 +582,6 @@ fn nested() -> (Fixture, String) {
     (fx, url)
 }
 
-/// The skills [`nested`] lists, in order.
 const NESTED: &str = "skills/a/foo, skills/b/foo, skills/g/one, top/two";
 
 #[test]
@@ -698,7 +657,6 @@ fn a_repo_on_the_trust_list_installs_without_trust() {
     let url = hosted_repo(&mut fx, "theirs", &[(".", "theirs")]);
     let config = fx.source.join("mazo.toml");
     let text = fs::read_to_string(&config).unwrap();
-    // The same owner on GitHub, and its file URL, are not this source.
     let file = format!("file://{}", fx.root.join("origin/theirs.git").display());
     let first = file.strip_prefix("file:///").unwrap().split('/').next().unwrap();
     fs::write(&config, format!("trusted = [\"acme\", \"acme/theirs\", {first:?}]\n{text}")).unwrap();
@@ -728,8 +686,6 @@ fn a_failed_clone_exits_1_with_gits_error_and_writes_nothing() {
     assert!(!exists(&fx.data.join("mazo/mazo.lock")));
 }
 
-/// A git shim in the fixture's `bin/` that logs each call's
-/// `GIT_ALLOW_PROTOCOL` and arguments, then runs git; [`remote_calls`] reads the log.
 fn logging_git(fx: &Fixture) -> PathBuf {
     let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|d| d.join("git")).find(|p| p.is_file());
     let (shim, log) = (fx.root.join("bin/git"), fx.root.join("git.log"));
@@ -745,8 +701,6 @@ fn logging_git(fx: &Fixture) -> PathBuf {
     log
 }
 
-/// The `(GIT_ALLOW_PROTOCOL, arguments)` of each logged call that `Remote::git`
-/// makes: a clone, fetch, ls-remote or init, not the local lookups around them.
 fn remote_calls(log: &Path) -> Vec<(String, String)> {
     let log = fs::read_to_string(log).unwrap_or_default();
     let calls = log.lines().map(|l| l.split_once(' ').unwrap()).map(|(p, a)| (p.to_string(), a.to_string()));
@@ -798,7 +752,6 @@ fn a_subpath_symlinked_out_of_the_clone_is_refused() {
     assert_eq!(fx.snapshot(), before);
 }
 
-/// Commits `text` at `rel` in `repo`'s work tree and pushes it to the bare repository.
 fn push_change(fx: &Fixture, repo: &str, rel: &str, text: &str) {
     let work = fx.root.join("work").join(repo);
     common::write(&work.join(rel), text);
@@ -816,7 +769,6 @@ fn entry<'a>(entries: &'a [toml::Value], name: &str) -> &'a toml::Table {
     entries.iter().find(|e| e["name"].as_str() == Some(name)).unwrap().as_table().unwrap()
 }
 
-/// Nothing staged or set aside is left in the store.
 fn assert_no_leftovers(fx: &Fixture) {
     let left: Vec<_> = fs::read_dir(store(fx))
         .unwrap()
@@ -828,7 +780,6 @@ fn assert_no_leftovers(fx: &Fixture) {
     assert_no_clone(fx);
 }
 
-/// Two trusted repositories, `one` and `two`, each installed.
 fn two_installed() -> (Fixture, String, String) {
     let mut fx = git_fixture();
     fx.allow("one");
@@ -841,7 +792,6 @@ fn two_installed() -> (Fixture, String, String) {
     (fx, one, two)
 }
 
-/// The pid of a process since gone.
 fn gone_pid() -> u32 {
     let mut child = std::process::Command::new("true").spawn().unwrap();
     child.wait().unwrap();
@@ -867,7 +817,6 @@ fn add_and_update_remove_the_clone_an_interrupted_run_left() {
     let mut fx = git_fixture();
     let url = trusted_repo(&mut fx, "theirs", &[(".", "theirs")]);
     let left = fx.data.join(format!("mazo/.clone-{}", gone_pid()));
-    // This test's own pid: a clone of a process still running is its own.
     let live = fx.data.join(format!("mazo/.clone-{}", std::process::id()));
     common::write(&live.join("x"), "x");
     common::write(&left.join("x"), "x");
@@ -909,7 +858,6 @@ fn update_installs_a_changed_skill_and_records_its_commit_and_hash() {
     }
     assert_no_leftovers(&fx);
 
-    // A removed file goes with the update; nothing links to it.
     let work = fx.root.join("work/theirs");
     fs::remove_file(work.join("references/new.md")).unwrap();
     push_change(&fx, "theirs", "references/renamed.md", "new\n");
@@ -957,12 +905,10 @@ fn with_no_judge_an_untrusted_skill_is_refused_until_its_source_is_trusted() {
     let mut fx = git_fixture();
     let url = hosted_repo(&mut fx, "theirs", &[(".", "theirs")]);
     add(&fx, &[&url, "--trust"]).assert_ok();
-    // The entry's own word grants no trust: a project's lockfile is anyone's commit.
     assert_eq!(entry(&lock(&fx), "theirs")["trusted"].as_bool(), Some(true));
     push_change(&fx, "theirs", "references/new.md", "new\n");
     let config = fx.source.join("mazo.toml");
     let text = fs::read_to_string(&config).unwrap();
-    // The same owner on GitHub is not this source.
     fs::write(&config, format!("trusted = [\"acme\"]\n{text}")).unwrap();
     let before = fx.snapshot();
     let r = fx.mazo(&["update"]);
@@ -986,7 +932,6 @@ fn with_no_judge_an_untrusted_skill_is_refused_until_its_source_is_trusted() {
 #[test]
 fn with_no_judge_each_untrusted_skill_is_refused_and_the_judges_are_named_once() {
     let (fx, one, two) = two_installed();
-    // Dropped from the list, the source is trusted no more.
     let config = fx.source.join("mazo.toml");
     let text = fs::read_to_string(&config).unwrap();
     fs::write(&config, text.replacen("trusted = [\"git.example.org/acme\"]\n", "", 1)).unwrap();
@@ -1075,7 +1020,6 @@ fn update_puts_back_a_copy_an_interrupted_swap_set_aside() {
     let (fx, _, _) = two_installed();
     let (to, old) = (store(&fx).join("one"), store(&fx).join(".old-one"));
     let was = fs::read_to_string(to.join("SKILL.md")).unwrap();
-    // Stopped between the swap's renames: only the copy set aside is left.
     fs::rename(&to, &old).unwrap();
     let r = fx.mazo(&["update", "one"]);
     r.assert_ok();
@@ -1083,7 +1027,6 @@ fn update_puts_back_a_copy_an_interrupted_swap_set_aside() {
     assert_eq!(fs::read_to_string(to.join("SKILL.md")).unwrap(), was);
     assert_no_leftovers(&fx);
 
-    // Stopped after them: the copy set aside is a leftover beside the installed one.
     common::write(&old.join("SKILL.md"), "stale\n");
     push_change(&fx, "one", "references/new.md", "new\n");
     fx.mazo(&["update", "one"]).assert_ok();
@@ -1108,10 +1051,6 @@ fn update_keeps_the_name_an_as_install_rewrote() {
     );
 }
 
-/// [`bare_repo`] `pack`, `theirs` at `skills/theirs` on `master` and, with
-/// another description, on `release/v2`, served as
-/// `https://github.com/acme/pack.git` by an `insteadOf` rewrite; its
-/// `file://` URL.
 fn github_pack(fx: &mut Fixture) -> String {
     let file = bare_repo(fx, "pack", &[("skills/theirs", "theirs")]);
     let work = fx.root.join("work/pack");
@@ -1139,7 +1078,6 @@ fn a_github_tree_url_installs_its_ref_and_update_follows_it() {
     assert_eq!(e["origin"].as_str(), Some("https://github.com/acme/pack.git"));
     assert_eq!((e["ref"].as_str(), e["subpath"].as_str()), (Some("release/v2"), Some("skills/theirs")));
 
-    // A change on the default branch is not the ref's.
     push_change(&fx, "pack", "skills/theirs/SKILL.md", "---\nname: theirs\ndescription: master.\n---\n");
     let r = fx.mazo(&["update"]);
     r.assert_ok();
@@ -1159,7 +1097,6 @@ fn a_github_tree_url_installs_its_ref_and_update_follows_it() {
 fn a_github_blob_url_at_a_commit_installs_that_commit_and_stays_there() {
     let mut fx = git_fixture();
     let file = github_pack(&mut fx);
-    // A git before 2.49, which has no `clone --revision`.
     let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|d| d.join("git")).find(|p| p.is_file());
     let shim = fx.root.join("bin/git");
     common::write(
@@ -1188,13 +1125,8 @@ fn a_github_blob_url_at_a_commit_installs_that_commit_and_stays_there() {
     assert_eq!(r.stdout(), "theirs: up to date\n");
 }
 
-/// The tag `mazo init` installs the bundled skills at.
 const TAG: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
-/// The fixture with [`bare_repo`] `mazo`, `grade` and `retro` under
-/// `skills/`, served as `https://github.com/nicolasgarcia214/mazo.git` by an
-/// `insteadOf` rewrite, no config yet at `MAZO_CONFIG`, and no skill linked
-/// into the homes.
 fn bundled_fixture() -> Fixture {
     let mut fx = git_fixture();
     for dir in skills_dirs(&fx) {
@@ -1212,14 +1144,12 @@ fn bundled_fixture() -> Fixture {
     fx
 }
 
-/// Tags the `mazo` repository's work tree head `tag` and pushes the tag.
 fn tag_mazo(fx: &Fixture, tag: &str) {
     let work = fx.root.join("work/mazo");
     common::git(&work, &["tag", tag], common::NOW);
     common::git(&work, &["push", "-q", &s(&fx.root.join("origin/mazo.git")), tag], common::NOW);
 }
 
-/// `mazo init args…` with git alone on `PATH`, so that no judge is detected.
 fn init(fx: &Fixture, args: &[&str]) -> Run {
     let bin = fx.root.join("init-bin");
     if !exists(&bin) {
@@ -1231,7 +1161,6 @@ fn init(fx: &Fixture, args: &[&str]) -> Run {
     Run(fx.command(&[&["init"], args].concat()).env("PATH", &bin).output().unwrap())
 }
 
-/// The `(ref, origin, subpath, trusted)` of `name`'s lock entry.
 fn pin(fx: &Fixture, name: &str) -> (String, String, String, bool) {
     let e = entry(&lock(fx), name).clone();
     let field = |k: &str| e[k].as_str().unwrap().to_string();
@@ -1251,7 +1180,6 @@ fn init_installs_grade_and_retro_trusted_at_the_version_tag() {
         let origin = "https://github.com/nicolasgarcia214/mazo.git".to_string();
         assert_eq!(pin(&fx, name), (TAG.into(), origin, format!("skills/{name}"), true));
     }
-    // The trust was the install's own: the config gains no trusted entry.
     let config: toml::Table = fs::read_to_string(fx.root.join("init/config.toml")).unwrap().parse().unwrap();
     assert!(!config.contains_key("trusted"), "{config:?}");
     assert!(!r.stderr().contains("warning"), "{}", r.stderr());
@@ -1293,14 +1221,12 @@ fn without_the_tag_init_pins_the_head_commit_and_update_re_pins_it_once_tagged()
     );
     assert_eq!(pin(&fx, "grade").0, sha);
 
-    // A new commit on the default branch does not move a pinned commit.
     push_change(&fx, "mazo", "skills/grade/SKILL.md", "---\nname: grade\ndescription: Next.\n---\n");
     let r = fx.mazo(&["update"]);
     r.assert_ok();
     assert_eq!(r.stdout(), "grade: up to date\nretro: up to date\n");
     assert_eq!(pin(&fx, "grade").0, sha);
 
-    // Once tagged, both move to the tag: grade's content with it, retro's ref alone.
     tag_mazo(&fx, TAG);
     let r = fx.mazo(&["update"]);
     r.assert_ok();
@@ -1358,8 +1284,6 @@ fn a_failed_install_still_writes_the_config_and_prints_the_retry() {
     assert!(r.stderr().ends_with(&retry), "{}", r.stderr());
 }
 
-/// The fixture of [`fixture`] with a command judge: a stub that saves each
-/// call's stdin under `calls/` and answers with the text of `answer`.
 fn judged() -> (Fixture, PathBuf) {
     let (fx, dir) = fixture();
     let r = fx.root.display();
@@ -1375,7 +1299,6 @@ fn judged() -> (Fixture, PathBuf) {
     (fx, dir)
 }
 
-/// The stub judge's next answers: a vet verdict.
 fn answer(fx: &Fixture, security: Option<&str>, quality: &str, value: &str) {
     let redundant_with = (value == "redundant").then(|| fx.skills[0].clone());
     let v = serde_json::json!({
@@ -1390,14 +1313,12 @@ fn answer(fx: &Fixture, security: Option<&str>, quality: &str, value: &str) {
     fs::write(fx.root.join("answer"), v.to_string()).unwrap();
 }
 
-/// The stdin of every judge call, in order.
 fn calls(fx: &Fixture) -> Vec<String> {
     let dir = fx.root.join("calls");
     let n = fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
     (1..=n).map(|i| unnonced(&fs::read_to_string(dir.join(i.to_string())).unwrap())).collect()
 }
 
-/// Nothing of `name` was installed: no store directory, no lockfile entry, no link.
 fn assert_not_installed(fx: &Fixture, name: &str) {
     assert!(!exists(&store(fx).join(name)));
     let lock = fx.data.join("mazo/mazo.lock");
@@ -1409,12 +1330,10 @@ fn lock_names(fx: &Fixture) -> Vec<String> {
     lock(fx).iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
 }
 
-/// `mazo add args…` with stdin a terminal on which `typed` was entered.
 fn add_at_terminal(fx: &Fixture, args: &[&str], typed: &str) -> Run {
     use std::io::Write;
     use std::os::fd::{FromRawFd, OwnedFd};
     let (mut controller, mut terminal) = (0, 0);
-    // SAFETY: openpty writes two new descriptors, owned below.
     let rc = unsafe {
         libc::openpty(&mut controller, &mut terminal, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut())
     };
@@ -1468,7 +1387,6 @@ fn an_untrusted_add_sends_one_vet_call_with_the_skills_files_and_every_existing_
     assert_eq!(verdict["value"].as_str(), Some("worth trying"));
     assert_eq!(verdict["reasons"], toml::Value::from(vec!["Clear steps."]));
     assert!(!verdict.contains_key("security") && !verdict.contains_key("redundant_with"));
-    // The entry loads back: a later command reads the lockfile.
     fx.mazo(&["status", "--agent", "codex"]).assert_ok();
 }
 
@@ -1488,8 +1406,6 @@ fn every_skill_of_several_goes_through_the_vet_gate() {
     assert!(lock(&fx).iter().all(|e| e.get("verdict").is_some()), "{:?}", lock(&fx));
 }
 
-/// The fixture of [`judged`] with a repository holding `one`, `two` and
-/// `three` under `skills/`, each allowed, and its URL at that subpath.
 fn judged_pack() -> (Fixture, String) {
     let (mut fx, _) = judged();
     fs::create_dir_all(fx.data.join("mazo")).unwrap();
@@ -1510,7 +1426,6 @@ fn an_untrusted_all_shows_its_judge_calls_and_asks_before_the_first() {
     let before = fx.snapshot();
     let count = "vetting 3 skills makes 3 judge calls\n";
 
-    // Off a terminal without --yes: the count, then refused before any call.
     let r = add(&fx, &[&url, "--all"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
     assert_eq!(r.stdout(), count);
@@ -1519,7 +1434,6 @@ fn an_untrusted_all_shows_its_judge_calls_and_asks_before_the_first() {
     assert_eq!(fx.snapshot(), before);
     assert_no_clone(&fx);
 
-    // Declined (Enter takes No): no call, nothing installed.
     for typed in ["\n", "n\n"] {
         let r = add_at_terminal(&fx, &[&url, "--all"], typed);
         assert_eq!(r.code(), 1, "{typed:?}: {}", r.stderr());
@@ -1530,7 +1444,6 @@ fn an_untrusted_all_shows_its_judge_calls_and_asks_before_the_first() {
         assert_eq!(fx.snapshot(), before, "{typed:?}");
     }
 
-    // Accepted: one call per skill, each install still asked.
     let r = add_at_terminal(&fx, &[&url, "--all"], "y\ny\ny\ny\n");
     r.assert_ok();
     assert!(r.stdout().starts_with(count), "{}", r.stdout());
@@ -1608,8 +1521,6 @@ fn a_security_finding_refuses_the_install_unless_force() {
     assert!(r.stderr().contains("security issue; pass --force"), "{}", r.stderr());
     assert_not_installed(&fx, "theirs");
 
-    // With --force the verdict is still shown and the y/N prompt still
-    // applies: off a terminal it is refused before the judge is called.
     let r = add(&fx, &[&s(&dir), "--force"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
     assert_eq!(r.stdout(), "");
@@ -1646,7 +1557,6 @@ fn every_verdict_asks_y_n_and_refuses_without_a_terminal_unless_yes() {
         answer(&fx, None, quality, value);
         let case = format!("{quality} {value}");
 
-        // Off a terminal, refused before the judge is called.
         let before = calls(&fx).len();
         let r = add(&fx, &[&s(&dir)]);
         assert_eq!(r.code(), 2, "{case}: {}", r.stderr());
@@ -1655,7 +1565,6 @@ fn every_verdict_asks_y_n_and_refuses_without_a_terminal_unless_yes() {
         assert_eq!(calls(&fx).len(), before, "{case}: no judge call");
         assert_not_installed(&fx, &name);
 
-        // Enter takes the default; the prompt names it.
         let prompt = if default_yes { "[Y/n]" } else { "[y/N]" };
         let r = add_at_terminal(&fx, &[&s(&dir)], "\n");
         assert!(r.stdout().starts_with(&format!("vet {name}: quality {quality}, value {value}\n")), "{}", r.stdout());
@@ -1711,7 +1620,6 @@ fn a_judge_without_a_valid_answer_refuses_the_install() {
 fn a_file_past_a_size_cap_is_withheld_and_refuses_the_install_unless_force() {
     let (fx, dir) = judged();
     answer(&fx, None, "good", "worth trying");
-    // One file over the per-file cap, then files that reach the total cap.
     common::write(&dir.join("references/big.md"), &"b".repeat(64 * 1024 + 1));
     for i in 0..5 {
         common::write(&dir.join(format!("references/part{i}.md")), &format!("{i}").repeat(60 * 1024));
@@ -1724,7 +1632,6 @@ fn a_file_past_a_size_cap_is_withheld_and_refuses_the_install_unless_force() {
     assert!(calls(&fx).is_empty(), "refused before the judge is called");
     assert_not_installed(&fx, "theirs");
 
-    // With --force the judge sees what fits, and the prompt still applies.
     let r = add(&fx, &[&s(&dir), "--force"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
     let r = add(&fx, &[&s(&dir), "--force", "--yes"]);
@@ -1741,7 +1648,6 @@ fn a_file_past_a_size_cap_is_withheld_and_refuses_the_install_unless_force() {
     assert!(stdin.len() < 256 * 1024 + 16 * 1024, "{} bytes sent", stdin.len());
     let security = lock(&fx)[0]["verdict"]["security"].as_str().unwrap().to_string();
     assert!(security.starts_with("not sent to the judge in full: references/big.md"), "{security}");
-    // The install itself copies every file.
     assert!(exists(&store(&fx).join("theirs/references/big.md")));
 }
 
@@ -1770,7 +1676,6 @@ fn a_file_that_is_not_text_is_withheld_and_refuses_the_install_unless_force() {
 fn a_source_changed_while_vetted_installs_the_copy_the_judge_saw() {
     let (fx, dir) = judged();
     let notes = dir.join("references/notes.md");
-    // The judge rewrites a file of the source before it answers.
     let stub = format!(
         "#!/bin/sh\ncat > /dev/null\necho changed > '{}'\ncat '{}/answer'\n",
         notes.display(),
@@ -1792,7 +1697,6 @@ fn with_no_source_the_judge_sees_the_store_skills_only() {
     add(&fx, &[&s(&dir), "--trust"]).assert_ok();
     let config = fx.source.join("mazo.toml");
     let text = fs::read_to_string(&config).unwrap();
-    // Without a source, nothing may be relative to it.
     let relative = |l: &&str| ["source", "loose", "links"].iter().any(|k| l.starts_with(k));
     let text: String = text.lines().filter(|l| !relative(l)).map(|l| format!("{l}\n")).collect();
     fs::write(&config, text).unwrap();
@@ -1805,8 +1709,6 @@ fn with_no_source_the_judge_sees_the_store_skills_only() {
     assert_eq!(lock_names(&fx), ["theirs", "other"]);
 }
 
-/// The fixture of [`judged`] with `theirs` installed from a repository,
-/// untrusted and vetted with `--yes`, and its URL.
 fn judged_repo() -> (Fixture, String) {
     let (fx, _) = judged();
     fs::create_dir_all(fx.data.join("mazo")).unwrap();
@@ -1817,7 +1719,6 @@ fn judged_repo() -> (Fixture, String) {
     (fx, url)
 }
 
-/// The stub judge's next answer: [`answer`]'s, with its own `for` and `try`.
 fn answer_for(fx: &Fixture, security: Option<&str>, quality: &str, r#for: &str, r#try: &[&str]) {
     answer(fx, security, quality, "worth trying");
     let path = fx.root.join("answer");
@@ -1956,9 +1857,6 @@ fn a_diff_past_the_byte_cap_refuses_the_update_unless_force() {
     assert!(e["verdict"]["security"].as_str().unwrap().starts_with("not sent to the judge in full: the diff ("));
 }
 
-/// The stub judge's next call moves the skill `late`, allowed, into the
-/// source, with `openai_yaml` as its `agents/openai.yaml`: a skill the
-/// inventory read before the judge ran does not hold.
 fn late_during_the_judge(fx: &mut Fixture, openai_yaml: &str) {
     fx.allow("late");
     let src = fx.root.join("late");
@@ -1972,7 +1870,6 @@ fn late_during_the_judge(fx: &mut Fixture, openai_yaml: &str) {
 
 const IMPLICIT_OFF: &str = "policy:\n  allow_implicit_invocation: false\n";
 
-/// Each home's link to the source skill `late`.
 fn assert_late_linked(fx: &Fixture) {
     for skills in skills_dirs(fx) {
         assert_eq!(fs::read_link(skills.join("late")).unwrap(), fx.source.join("late"), "{}", skills.display());
@@ -2001,7 +1898,6 @@ fn an_update_checks_and_syncs_on_the_inventory_read_under_the_lock() {
     assert_eq!(lock_text(&fx), was);
     assert!(!exists(&store(&fx).join("theirs/references/new.md")));
 
-    // Out of the source again, and one the sync accepts: linked by the update.
     fs::rename(fx.source.join("late"), fx.root.join("late")).unwrap();
     fs::write(fx.root.join("late/agents/openai.yaml"), IMPLICIT_OFF).unwrap();
     fx.mazo(&["update", "--yes"]).assert_ok();
@@ -2015,7 +1911,6 @@ fn an_installed_copy_changed_while_vetted_refuses_the_update() {
     let was = entry(&lock(&fx), "theirs").clone();
     push_change(&fx, "theirs", "references/new.md", "new\n");
     answer(&fx, None, "good", "worth trying");
-    // The judge's call outlasts a change to the installed copy.
     let bin = fx.root.join("bin/judge");
     let stub = fs::read_to_string(&bin).unwrap();
     let edit = format!("echo late >> '{}'\n", store(&fx).join("theirs/late.md").display());
@@ -2047,7 +1942,6 @@ fn a_trusted_update_needs_no_usable_judge() {
     assert!(r.stdout().contains(&format!("updated {} to {}", store(&fx).join("theirs").display(), head(&fx, &url))));
 }
 
-/// A git repository `project/` with a subdirectory `project/sub/dir`, and its root.
 fn project(fx: &Fixture) -> PathBuf {
     let root = fx.root.join("project");
     fs::create_dir_all(root.join("sub/dir")).unwrap();
@@ -2055,7 +1949,6 @@ fn project(fx: &Fixture) -> PathBuf {
     root
 }
 
-/// `mazo add args… --project` run in `cwd`.
 fn add_project(fx: &Fixture, cwd: &Path, args: &[&str]) -> Run {
     fx.mazo_in(cwd, &[&["add"], args, &["--project"]].concat())
 }
@@ -2069,7 +1962,6 @@ fn project_names(project: &Path) -> Vec<String> {
     project_lock(project).iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
 }
 
-/// Everything mazo writes in a project.
 fn project_snapshot(project: &Path) -> Snapshot {
     let paths: Vec<PathBuf> = [".mazo", "mazo.lock", ".claude", ".agents", ".gitignore", "sub/dir"]
         .iter()
@@ -2078,7 +1970,6 @@ fn project_snapshot(project: &Path) -> Snapshot {
     snapshot(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>())
 }
 
-/// Nothing of `name` is in the project: no store directory, no lock entry, no link.
 fn assert_not_in_project(project: &Path, name: &str) {
     assert!(!exists(&project.join(".mazo/skills").join(name)), "{name}");
     let lock = project.join("mazo.lock");
@@ -2107,7 +1998,6 @@ fn add_project_installs_into_the_projects_git_root_with_relative_links() {
         assert!(r.stdout().contains(&format!("linked    {}", link.display())), "{}", r.stdout());
     }
 
-    // The lockfile is at the git root, in the global lockfile's shape.
     assert!(!exists(&p.join("sub/dir/mazo.lock")) && !exists(&p.join("sub/dir/.mazo")));
     let entries = project_lock(&p);
     assert_eq!(entries.len(), 1);
@@ -2119,14 +2009,12 @@ fn add_project_installs_into_the_projects_git_root_with_relative_links() {
     assert_eq!(e["content_hash"].as_str(), Some(mazo::store::content_hash(&to).unwrap().as_str()));
     assert!(!exists(&p.join(".gitignore")) && !exists(&p.join(".mazo/.gitignore")));
 
-    // Nothing global: no store skill, no lockfile, no home link.
     let after = fx.snapshot();
     let changed: Vec<&Path> =
         after.iter().filter(|(p, v)| before.get(*p) != Some(*v)).map(|(p, _)| p.as_path()).collect();
     assert!(changed.iter().all(|c| c.starts_with(&fx.data) && !c.starts_with(store(&fx))), "{changed:?}");
     assert!(!exists(&fx.data.join("mazo/mazo.lock")));
 
-    // Committed, the links resolve in another checkout.
     common::git(&p, &["add", "."], common::NOW);
     common::git(&p, &["commit", "-q", "-m", "skills"], common::NOW);
     let checkout = fx.root.join("checkout");
@@ -2205,7 +2093,6 @@ fn add_project_goes_through_the_vet_gate_which_sees_the_projects_skills() {
     add_project(&fx, &p, &[&s(&incoming(&fx, "other")), "--trust"]).assert_ok();
     assert!(calls(&fx).is_empty(), "--trust skips the gate");
 
-    // Off a terminal, refused before the judge is called.
     answer(&fx, None, "good", "worth trying");
     let r = add_project(&fx, &p, &[&s(&dir)]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
@@ -2239,7 +2126,6 @@ fn add_project_goes_through_the_vet_gate_which_sees_the_projects_skills() {
 fn a_project_link_that_cannot_be_made_leaves_no_store_dir_lock_entry_or_link() {
     let (fx, dir) = fixture();
     let p = project(&fx);
-    // `.agents` is a file: the Claude link is made, then the second fails.
     fs::write(p.join(".agents"), "").unwrap();
     let r = add_project(&fx, &p, &[&s(&dir), "--trust"]);
     assert_eq!(r.code(), 1, "{}", r.stderr());
@@ -2249,12 +2135,10 @@ fn a_project_link_that_cannot_be_made_leaves_no_store_dir_lock_entry_or_link() {
     assert!(!exists(&p.join("mazo.lock")));
 }
 
-/// `mazo args…` run in `cwd`, with `--project`.
 fn in_project(fx: &Fixture, cwd: &Path, args: &[&str]) -> Run {
     fx.mazo_in(cwd, &[args, &["--project"]].concat())
 }
 
-/// Both project links of `name` hold the relative target `add --project` made.
 fn assert_project_links(p: &Path, name: &str) {
     for d in [".claude/skills", ".agents/skills"] {
         let link = p.join(d).join(name);
@@ -2278,7 +2162,6 @@ fn update_project_installs_a_changed_project_skill_and_rewrites_the_project_lock
     let skill_md = "---\nname: theirs\ndescription: From a repo, v2.\n---\n\n# theirs\n";
     push_change(&fx, "theirs", "SKILL.md", skill_md);
     let global = fx.snapshot();
-    // Without --project, the project skill is not updated, and a name points at --project.
     let r = fx.mazo_in(&p, &["update"]);
     r.assert_ok();
     assert_eq!(r.stdout(), "");
@@ -2338,7 +2221,6 @@ fn a_project_lock_entry_whose_name_is_a_path_is_refused_before_anything_is_touch
     let lock = p.join("mazo.lock");
     let text = fs::read_to_string(&lock).unwrap().replace("name = \"theirs\"", "name = \"../../../victim\"");
     fs::write(&lock, text).unwrap();
-    // `.old-<name>` would be `p/victim`, and `<name>` the directory beside the project.
     fs::create_dir_all(p.join(".mazo/skills/.old-..")).unwrap();
     common::write(&p.join("victim/keep"), "keep\n");
     common::write(&fx.root.join("victim/keep"), "keep\n");
@@ -2397,11 +2279,9 @@ fn retire_project_removes_the_project_skill_its_entry_and_both_links() {
     add(&fx, &[&s(&incoming(&fx, "global")), "--trust"]).assert_ok();
     let global = fx.snapshot();
 
-    // Without --project, a project skill is not retired, and the message points at --project.
     let r = fx.mazo_in(&p, &["retire", "theirs"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
     assert!(r.stderr().contains("theirs is not a canonical skill; it is a project skill, so pass --project"));
-    // With it, a global skill is not.
     let r = in_project(&fx, &p, &["retire", "global"]);
     assert_eq!(r.code(), 2, "{}", r.stderr());
     assert!(r.stderr().contains("global is not a project skill"), "{}", r.stderr());
@@ -2422,7 +2302,6 @@ fn retire_project_removes_the_project_skill_its_entry_and_both_links() {
         fx.snapshot().into_iter().filter(|(k, v)| global.get(k) != Some(v)).map(|(k, _)| k).collect();
     assert!(changed.iter().all(|c| c.starts_with(fx.data.join("mazo")) && !c.starts_with(store(&fx))), "{changed:?}");
 
-    // A global retire leaves the project alone.
     let before = project_snapshot(&p);
     fx.mazo_in(&p, &["retire", "global"]).assert_ok();
     assert!(!exists(&store(&fx).join("global")));
@@ -2472,7 +2351,6 @@ fn update_and_retire_project_outside_a_git_repository_exit_2_and_write_nothing()
 fn retire_project_removes_the_project_copy_of_a_name_the_global_store_also_holds() {
     let (fx, dir) = fixture();
     let p = project(&fx);
-    // `add --project` refuses a name the global store holds; a later global add does not check the project.
     add_project(&fx, &p, &[&s(&dir), "--trust"]).assert_ok();
     add(&fx, &[&s(&dir), "--trust"]).assert_ok();
     let global = store(&fx).join("theirs");
@@ -2497,14 +2375,12 @@ fn retire_project_removes_the_project_copy_of_a_name_the_global_store_also_holds
 fn status_and_usage_in_a_project_list_its_skills_and_outside_it_only_add_scope() {
     let (fx, dir) = fixture();
     let p = project(&fx);
-    // A git repository without a `mazo.lock` is no project: the output is as outside it.
     let [status, usage] = ["status", "usage"].map(|args| {
         let (outside, r) = (fx.mazo(&[args]), fx.mazo_in(&p, &[args]));
         assert_eq!((r.code(), r.stdout(), r.stderr()), (outside.code(), outside.stdout(), outside.stderr()), "{args}");
         outside.stdout()
     });
     add_project(&fx, &p, &[&s(&dir), "--trust"]).assert_ok();
-    // A read through the project's Claude link, which the scan, knowing no project, made other-origin.
     let ts = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)).round(jiff::Unit::Second).unwrap();
     let mut e = common::event("a", "theirs", mazo::ledger::Channel::Read, "s", &ts.to_string());
     (e.origin, e.path) = (mazo::ledger::Origin::Other, Some(s(&p.join(".claude/skills/theirs/SKILL.md"))));
@@ -2525,7 +2401,6 @@ fn status_and_usage_in_a_project_list_its_skills_and_outside_it_only_add_scope()
         .map(|l| (l["home"].as_str().unwrap(), l["state"].as_str().unwrap(), l["scope"].as_str().unwrap()))
         .collect();
     assert_eq!(links, [(".claude/skills", "ok", "project"), (".agents/skills", "ok", "project")]);
-    // Reached through a symlink, the project is found at its physical root.
     let alias = fx.root.join("alias");
     std::os::unix::fs::symlink(&p, &alias).unwrap();
     let r = fx.mazo_in(&alias.join("sub/dir"), &["status"]);
@@ -2536,7 +2411,6 @@ fn status_and_usage_in_a_project_list_its_skills_and_outside_it_only_add_scope()
     let row = rows.as_array().unwrap().iter().find(|r| r["skill"] == "theirs").unwrap();
     assert_eq!((&row["scope"], &row["read"]), (&"project".into(), &1.into()), "{row}");
 
-    // Outside the project the text is as it was, and the JSON rows are global.
     assert_eq!((fx.mazo(&["status"]).stdout(), fx.mazo(&["usage"]).stdout()), (status, usage));
     assert_eq!(json(&fx.root, &["status"]).get("project"), None);
     let rows = json(&fx.root, &["usage"])["rows"].clone();
@@ -2546,7 +2420,6 @@ fn status_and_usage_in_a_project_list_its_skills_and_outside_it_only_add_scope()
     assert_eq!((&drift[0]["state"], &drift[0]["scope"]), (&"missing".into(), &"global".into()), "{drift}");
     fx.mazo(&["sync"]).assert_ok();
 
-    // A project link gone is drift of the project skill.
     fs::remove_file(p.join(".agents/skills/theirs")).unwrap();
     let r = fx.mazo_in(&inside, &["status"]);
     assert_eq!(r.code(), 1, "{}", r.stdout());

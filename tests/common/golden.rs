@@ -1,17 +1,9 @@
-//! The golden fixture: the report fixture given every optional card field,
-//! `unslop`'s audit and the events every report renders.
-
 use std::path::Path;
 
 use mazo::ledger::{Actor, Agent, Channel, Event, Origin};
 
 use super::{NOW, World, ago, event, git, grade, report_repo, report_world, skill_record, write};
 
-/// `unslop` given every optional card field: two grades, one recording no
-/// hash and one an old one, then uncommitted changes, two retros, a default
-/// prompt, and a user prompt in the transcript `<skills>/t.jsonl` for a real
-/// example. `writing-for-agents` gets a grade of its current content. The `claude`
-/// home's settings set `unslop` name-only.
 pub fn fill(src: &Path) {
     let evals = src.join(".evals");
     grade(&evals, "unslop", "2026-02-01", "6", None);
@@ -36,10 +28,6 @@ pub fn fill(src: &Path) {
     write(&src.join("claude/settings.json"), r#"{"skillOverrides": {"unslop": "name-only"}}"#);
 }
 
-/// Every channel, both agents, a subagent, a probe, another origin, an
-/// authoring session, typed events inside and before coverage, a real
-/// example on `transcript`, and events outside the 30-day window and the
-/// inventory.
 pub fn events(transcript: &Path) -> Vec<Event> {
     let mut real = event("rx", "unslop", Channel::Tool, "E", &ago(7));
     real.cwd = Some("/notes".into());
@@ -73,7 +61,6 @@ pub fn events(transcript: &Path) -> Vec<Event> {
     ]
 }
 
-/// The filled report repository, its world with `unslop`'s audit, and the events.
 pub struct Golden {
     pub repo: tempfile::TempDir,
     pub world: World,

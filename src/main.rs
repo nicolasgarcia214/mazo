@@ -242,7 +242,6 @@ struct AuditArgs {
 }
 
 fn main() -> ExitCode {
-    // Bare `mazo` on a terminal opens the TUI; off one, clap prints the help and exits 2.
     let tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let cmd = if std::env::args_os().len() == 1 && tty { None } else { Some(Cli::parse().cmd) };
     match run(cmd) {
@@ -254,7 +253,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// `None` is bare `mazo` on a terminal: the TUI.
 fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let path = config::path()?;
     if let Some(Cmd::Init { source, no_skills }) = &cmd {
@@ -302,14 +300,12 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
             with_scanned(&cfg, &inv, &data, |input| Ok(report::unused(input, since, json, tty)))
         }
         Cmd::Show { skill, since, limit, json } => {
-            // Before paying for a scan.
             report::check_skill(&inv, &skill)?;
             with_scanned(&cfg, &inv, &data, |input| report::show(input, &skill, since, limit, json, tty))
         }
         Cmd::Evals { cmd: EvalsCmd::Dir { skill } } => {
             report::check_skill(&inv, &skill)?;
             let [grades, retros] = evals::dirs(&cfg.evals_dir, &skill);
-            // Skills read these lines as the directories to write into, so they stay raw.
             #[allow(clippy::disallowed_methods)]
             let (grades, retros) = (grades.display(), retros.display());
             outln!("grades\t{grades}\nretros\t{retros}");
@@ -364,7 +360,6 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     }
 }
 
-/// The exit code of an add or update that ran: 1 for a failure, 2 for a usage refusal.
 fn exit(outcome: store::Outcome) -> ExitCode {
     ExitCode::from(match outcome {
         store::Outcome::Done => 0,
@@ -373,7 +368,6 @@ fn exit(outcome: store::Outcome) -> ExitCode {
     })
 }
 
-/// Scans the data directory `data`, then runs `f` on the report input loaded from it.
 fn scanned<T>(
     cfg: &Config,
     inv: &Inventory,
@@ -389,7 +383,6 @@ fn scanned<T>(
     f(&report::Input { cfg, inv, events: &r.events, coverage: &coverage, audits: &audits, now, tz })
 }
 
-/// Usage reports scan first, then render, then print freshness warnings.
 fn with_scanned(
     cfg: &Config,
     inv: &Inventory,
@@ -405,8 +398,6 @@ fn with_scanned(
     })
 }
 
-/// `mazo audit`: usage errors are caught before the scan, and a failed
-/// login check before any judge call.
 fn cmd_audit(
     cfg: &Config,
     inv: &Inventory,
@@ -428,8 +419,6 @@ fn cmd_audit(
     })
 }
 
-/// The report goes under the data directory, outside any git
-/// repository, unless `--out` says otherwise.
 fn cmd_report(
     cfg: &Config,
     inv: &Inventory,
@@ -439,7 +428,6 @@ fn cmd_report(
     open: bool,
 ) -> mazo::Result<ExitCode> {
     let path = match &out {
-        // Absolute, so the opener and the printed path do not depend on its cwd.
         Some(p) => std::path::absolute(p).map_err(mazo::at(p))?,
         None => data.join("report.html"),
     };
@@ -469,12 +457,10 @@ fn cmd_scan(
     let r = scan::scan(cfg, inv, data, reparse)?;
     if json {
         r.warn();
-        // Through a `Value`, so the keys print sorted.
         outln!("{}", serde_json::to_value(&r.homes).map_err(|e| e.to_string())?);
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(was) = was {
-        // `+N` is meaningless after a rewrite.
         let now = home_counts(&r.events);
         for name in r.homes.keys() {
             let count = |c: &BTreeMap<String, usize>| c.get(name).copied().unwrap_or(0);
@@ -510,7 +496,6 @@ fn cmd_scan(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Ledger events per home.
 fn home_counts(events: &[Event]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for e in events {
@@ -523,9 +508,6 @@ fn selected(cfg: &Config, agent: Option<Agent>) -> Vec<&Home> {
     cfg.homes.iter().filter(|h| agent.is_none_or(|a| h.agent == a)).collect()
 }
 
-/// `colour` paints the `ERROR:` and `warning:` prefixes on stderr. Inside
-/// a project, its skills' links are checked too, and `--json` lists them all
-/// under `project`.
 fn cmd_status(
     cfg: &Config,
     inv: &Inventory,
@@ -600,9 +582,6 @@ fn cmd_sync(
 ) -> mazo::Result<ExitCode> {
     let homes = selected(cfg, agent);
     let mut plan = links::checked(cfg, &inv, &homes);
-    // Re-planned under the data lock, on an inventory read under it, so a
-    // concurrent `add`, `update` or `retire` cannot stale what is applied. A
-    // dry run, a refusal or an empty plan writes nothing, not even the lock.
     let _lock = if !dry_run && plan.as_ref().is_ok_and(|p| !p.actions.is_empty()) {
         let lock = ledger::lock(data)?;
         inv = store::inventory(cfg.source.as_deref(), data)?;
@@ -630,7 +609,6 @@ fn cmd_sync(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `mazo retire`: the warnings and blockers on stderr, what it wrote on stdout.
 fn cmd_retire(cfg: &Config, data: &std::path::Path, name: &str, force: bool, project: bool) -> mazo::Result<ExitCode> {
     let mut warnings = Vec::new();
     let retired = lifecycle::retire(cfg, data, name, force, project, &mut warnings);
@@ -665,7 +643,6 @@ mod tests {
 
     use super::Cli;
 
-    /// Every argument of every subcommand, `--help` and `--version` aside.
     fn undocumented(cmd: &clap::Command, path: &str, out: &mut Vec<String>) {
         for arg in cmd.get_arguments() {
             if !matches!(arg.get_id().as_str(), "help" | "version") && arg.get_help().is_none() {

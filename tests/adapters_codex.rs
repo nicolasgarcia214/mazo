@@ -1,8 +1,3 @@
-//! Codex fixtures and the golden id. Each fixture is a set of
-//! real rollout lines with their text scrubbed; `pipeline.jsonl` line 3,
-//! `guardian.jsonl` line 2 and the `compacted` record in `excluded.jsonl` are
-//! composed from real records, as each test notes.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -37,7 +32,6 @@ fn home(path: &Path) -> Home {
     common::home("codex", Agent::Codex, path)
 }
 
-/// Parses a whole file from offset 0 with the scan's prefilter.
 fn parse_path(path: &Path) -> Parsed {
     common::parse_file(&Codex, &roots(), path, None).0
 }
@@ -60,7 +54,6 @@ fn key(r: &Raw) -> (&str, &str) {
     }
 }
 
-/// The stored id, `cx:<root>:<hash>:<index>`, with the root walked over `sessions`.
 fn full_id(home_dir: &Path, r: &Raw) -> String {
     let root = Roots::default().root(&home(home_dir), &r.session.id, r.session.parent.as_ref());
     let (hash, index) = key(r);
@@ -73,9 +66,6 @@ fn summary(p: &Parsed) -> Vec<(u64, &str, Channel, &str)> {
 
 #[test]
 fn name_block_without_payload_id_is_one_slash_event() {
-    // CLI 0.145.0: the developer listing (line 3), the typed `$triage-finding`
-    // (line 4) and its event_msg (line 5) are not events; line 2 is the
-    // parent's copied header.
     let p = parse("name_block.jsonl");
     assert_eq!(
         summary(&p),
@@ -129,7 +119,6 @@ fn fork_header_on_line_one_wins_and_restamped_copies_collapse() {
     let child = parse_path(&day.join("rollout-2026-03-30T11-56-58-019d3fad-5b36-7610-81ab-fc1318eb0cce.jsonl"));
     let (p, c) = (&parent.raws[0], &child.raws[0]);
     assert_eq!((parent.raws.len(), child.raws.len()), (1, 1));
-    // Line 2 of the child is the parent's session_meta; line 1 decides.
     assert_eq!(c.session.id, "019d3fad-5b36-7610-81ab-fc1318eb0cce");
     assert_eq!(c.session.parent, Some(Parent::Codex(p.session.id.clone())));
     assert_eq!(
@@ -141,7 +130,6 @@ fn fork_header_on_line_one_wins_and_restamped_copies_collapse() {
         .and_then(|s| s.parent),
         Some(Parent::Codex("019d3f9f-e9d9-7c50-a727-71c34e2255b3".into()))
     );
-    // A relative `sed -n '1,260p' SKILL.md` run inside the skill.
     assert_eq!(summary(&child), [(4, "argus", Channel::Read, "/home/nicolas/dotfiles/skills/argus/SKILL.md")]);
     assert_ne!(p.ts, c.ts, "the child re-stamps the copy");
     let id = full_id(&home_dir, p);
@@ -152,15 +140,11 @@ fn fork_header_on_line_one_wins_and_restamped_copies_collapse() {
 const FORK_PARENT: &str = "rollout-2026-03-30T11-42-17-019d3f9f-e9d9-7c50-a727-71c34e2255b3.jsonl";
 const FORK_CHILD: &str = "rollout-2026-03-30T11-56-58-019d3fad-5b36-7610-81ab-fc1318eb0cce.jsonl";
 
-/// A temporary machine for the real fork pair: a source holding `argus` (the
-/// fixture's dotfiles paths rewritten to it) and one Codex home whose sessions
-/// day directory starts empty.
 struct ForkMachine {
     tmp: tempfile::TempDir,
     cfg: Config,
     inv: Inventory,
     day: PathBuf,
-    /// The fork pair's lines with the dotfiles paths rewritten, by file name.
     lines: BTreeMap<&'static str, Vec<String>>,
 }
 
@@ -202,7 +186,6 @@ impl ForkMachine {
         ForkMachine { tmp, cfg, inv, day, lines }
     }
 
-    /// Appends lines `range` of fixture `file` to its rollout.
     fn append(&self, file: &str, range: std::ops::Range<usize>) {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.day.join(file)).unwrap();
@@ -221,7 +204,6 @@ impl ForkMachine {
 fn fork_pair_scanned_fresh_or_incrementally_stores_the_parent_copy() {
     let m = ForkMachine::new();
     let incremental = m.tmp.path().join("data-incremental");
-    // The parent exists alone; the fork appears later and grows a line at a time.
     m.append(FORK_PARENT, 0..2);
     assert_eq!(m.scan(&incremental).len(), 1);
     m.append(FORK_CHILD, 0..3);
@@ -260,8 +242,6 @@ fn relative_read_resolves_against_workdir() {
 
 #[test]
 fn reader_first_pipeline_loads_only_through_pass_through_stages() {
-    // Line 2 is real (`| nl -ba -v150`); line 3 is the same call with `| wc -l`,
-    // because the corpus has no real reader piped into `wc` on a skill file.
     let p = parse("pipeline.jsonl");
     assert_eq!(summary(&p), [(2, "audit", Channel::Read, "/home/nicolas/projects/demo/skills/audit/SKILL.md")]);
     assert!(p.unparsed.is_empty());
@@ -275,7 +255,6 @@ fn rg_over_skills_is_no_event() {
 
 #[test]
 fn guardian_review_session_is_skipped() {
-    // Line 2 is the relative-read call of `relative_read.jsonl`, an event anywhere else.
     let p = parse("guardian.jsonl");
     assert!(p.skipped);
     assert!(p.raws.is_empty() && p.unparsed.is_empty());
@@ -289,9 +268,6 @@ fn path_echoed_in_output_record_is_no_event() {
 
 #[test]
 fn duplicates_outputs_and_compacted_history_are_excluded() {
-    // Line 2 is the exec read; line 3 its event_msg item_completed duplicate,
-    // line 4 its *_output, line 5 a `compacted` record (from another rollout)
-    // whose replacement_history holds the `$name` item of `name_block.jsonl`.
     let p = parse("excluded.jsonl");
     assert_eq!(summary(&p), [(2, "vbc-noimpl", Channel::Read, "/tmp/probe/.agents/skills/vbc-noimpl/SKILL.md")]);
     assert_eq!(key(&p.raws[0]).1, "0.0");
@@ -309,13 +285,6 @@ fn unreadable_skill_commands_are_counted_unparsed() {
     assert!(p.unparsed[0].contains("$HOME") && p.unparsed[1].contains("${p}"));
 }
 
-/// The golden id. The hash was computed once, outside mazo, with
-/// `hashlib.sha1(json.dumps(payload, sort_keys=True, separators=(",", ":"),
-/// ensure_ascii=False).encode()).hexdigest()` in Python 3; the serialisations
-/// agree on this payload (shortest round-trip floats, integers above 2^53
-/// exact, code-point key order equal to UTF-8 byte order). `create_time` is a
-/// real Codex value that serde_json misparses without its
-/// `float_roundtrip` feature, so the id pins that feature.
 #[test]
 fn golden_codex_id() {
     let header = r#"{"timestamp":"t0","type":"session_meta","payload":{"id":"golden-session","cwd":"/w","originator":"codex-tui","cli_version":"0.1","source":"cli"}}"#;
@@ -328,37 +297,29 @@ fn golden_codex_id() {
         full_id(Path::new("/nonexistent"), &p.raws[0]),
         "cx:golden-session:bd6143dc8f7e968e6badbfeceaadc6b06becd08d:0.0"
     );
-    // The timestamp is not part of the id.
     let later = parse_text(&format!(
         "{header}\n{{\"timestamp\":\"2027-01-01T00:00:00Z\",\"type\":\"response_item\",\"payload\":{payload}}}\n"
     ));
     assert_eq!(later.raws[0].key, p.raws[0].key);
 }
 
-/// `prompt_at` on line `line` of a fixture.
 fn prompt(name: &str, line: u64) -> Option<String> {
     Codex.prompt_at(&format!("{}:{line}", fixtures().join(name).display()))
 }
 
 #[test]
 fn name_block_prompt_is_the_user_turn() {
-    // Line 6 is the `<skill>` injection, line 5 the `user_message` event.
     assert_eq!(prompt("name_block.jsonl", 6).as_deref(), Some("$triage-finding scrubbed"));
-    // From 2026-08 the turn is an `item_completed` `UserMessage` (line 3).
     assert_eq!(prompt("prompt_item.jsonl", 4).as_deref(), Some("Use $vbc-noimpl now."));
 }
 
 #[test]
 fn bare_name_prompt_is_the_turn_before_it() {
-    // Line 5 is a bare `$gitmoji-conventional-commit`.
     assert_eq!(prompt("prompt_bare.jsonl", 6).as_deref(), Some("Validate the scrubbed solution with an agent."));
 }
 
 #[test]
 fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
-    // Line 6 is the `user_message` behind the `<skill>` load on line 7; line
-    // 18 loads `grade`. `response_item` user messages, reasoning and
-    // `agent_message` duplicates keep nothing.
     let got = Codex.condense(&format!("{}:7", fixtures().join("condense.jsonl").display()), 60_000).unwrap();
     let want = [
         "L6: user: $unslop tidy the prose".to_string(),

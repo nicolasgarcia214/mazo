@@ -1,5 +1,3 @@
-//! Lifecycle commands end to end: `new`, `retire`, `prune`.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -15,8 +13,6 @@ use mazo::ledger::{Channel, Event};
 const DATE: &str = "2026-01-01T00:00:00Z";
 const LEDGER: &str = "{\"id\":\"x\"}\n";
 
-/// A skills source one level below the repository root, so `git -C <source>`
-/// resolution is exercised, with a private `HOME`, data directory and ledger.
 struct Fixture {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -52,7 +48,6 @@ impl Fixture {
         self.git(&["commit", "-q", "-m", "c"]);
     }
 
-    /// Runs mazo with stdin not a terminal, and checks the ledger is untouched.
     fn prune(&self, args: &[&str]) -> Output {
         let run =
             Mazo::new(&self.root, &self.root.join("home"), &self.source.join("mazo.toml"), &self.root.join("data"));
@@ -132,7 +127,6 @@ fn work_in_no_head_path_is_refused_and_force_deletes_it() {
         assert_code(&out, 1);
         assert!(stderr(&out).contains(&format!(".archive/{name}/")), "{}", stderr(&out));
     }
-    // Pruning everything refuses as a whole: the clean entry survives too.
     assert_code(&fx.prune(&["--yes"]), 1);
     assert_eq!(archived(&fx), ["added", "clean", "edited"]);
 
@@ -169,7 +163,6 @@ fn a_gitignore_covering_the_archive_does_not_hide_an_edit() {
     assert_eq!(archived(&fx), ["old"]);
 }
 
-/// An archived skill holding a committed valid link and a committed dangling link.
 fn linked(fx: &Fixture) -> PathBuf {
     let dir = fx.skill(".archive/linked");
     std::os::unix::fs::symlink("../SKILL.md", dir.join("references/up")).unwrap();
@@ -223,8 +216,6 @@ fn an_archived_skill_in_a_repository_without_commits_is_refused() {
 const ALL_RULES: &str =
     "[policy]\nno_disable_model_invocation = true\ncodex_manifest = true\nclaude_name_only = true\n";
 
-/// A source with no skill yet, two Claude homes and a Codex home, each with an
-/// empty settings file, under a private `HOME`.
 struct Homes {
     _temp: tempfile::TempDir,
     home: PathBuf,
@@ -250,7 +241,6 @@ impl Homes {
         Mazo::new(&self.home, &self.home, &self.source.join("mazo.toml"), &self.home.join("data")).output(args)
     }
 
-    /// The files under `<source>/<name>`, relative to it.
     fn files(&self, name: &str) -> Vec<String> {
         let dir = self.source.join(name);
         let mut out = Vec::new();
@@ -268,7 +258,6 @@ impl Homes {
         out
     }
 
-    /// No home links the skill.
     fn unlinked(&self, name: &str) -> bool {
         HOMES.iter().all(|h| self.home.join(h).join("skills").join(name).symlink_metadata().is_err())
     }
@@ -285,7 +274,6 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
     let manifest = fs::read_to_string(hs.source.join("fresh-skill/agents/openai.yaml")).unwrap();
     assert!(manifest.contains("default_prompt: \"Use $fresh-skill."), "{manifest}");
 
-    // The per-skill rules, every configurable one on, pass on what was written.
     let policy = mazo::config::Policy {
         no_disable_model_invocation: true,
         codex_manifest: true,
@@ -305,7 +293,6 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
     let inv = mazo::inventory::Inventory::load(&hs.source).unwrap();
     assert_eq!(mazo::policy::per_skill(&cfg, &inv), Vec::<String>::new());
 
-    // One name-only line per Claude home, none for Codex.
     let stdout = stdout(&out);
     let lines: Vec<(&str, &str)> = stdout.lines().filter_map(|l| l.split_once(": add to skillOverrides: ")).collect();
     let settings = |h: &str| hs.home.join(h).join("settings.json").to_string_lossy().into_owned();
@@ -328,7 +315,6 @@ fn new_with_every_rule_off_writes_only_skill_md() {
     assert_code(&out, 0);
     assert!(!stdout(&out).contains("name-only"));
     assert_eq!(hs.files("plain"), ["SKILL.md"]);
-    // Not synced: status sees the missing links until sync runs.
     assert!(hs.unlinked("plain"), "new ran sync");
     assert_code(&hs.mazo(&["status"]), 1);
     assert_code(&hs.mazo(&["sync"]), 0);
@@ -351,13 +337,11 @@ fn a_description_with_yaml_syntax_round_trips() {
 fn new_rejects_a_missing_description_a_bad_name_and_an_existing_entry() {
     let hs = Homes::new(ALL_RULES);
     assert_code(&hs.mazo(&["new", "ok"]), 2);
-    // Each rejection names the rule it broke.
     let rejected = |args: &[&str], why: &str| {
         let out = hs.mazo(args);
         assert_code(&out, 2);
         assert!(stderr(&out).contains(why), "{args:?}: {}", stderr(&out));
     };
-    // clap takes `-a` for a flag.
     assert_code(&hs.mazo(&["new", "-a", "--description", "D."]), 2);
     for name in ["Bad", "a--b", "a_b", "../escape", "a/b", ""] {
         rejected(
@@ -374,7 +358,6 @@ fn new_rejects_a_missing_description_a_bad_name_and_an_existing_entry() {
     assert_eq!(entries, ["mazo.toml"]);
     assert_code(&hs.mazo(&["new", "ok", "--description", &"d".repeat(1024)]), 0);
 
-    // An existing skill, a plain file and a dangling link are each refused and left as they were.
     assert_code(&hs.mazo(&["new", "ok", "--description", "Other."]), 1);
     assert!(fs::read_to_string(hs.source.join("ok/SKILL.md")).unwrap().contains(&"d".repeat(1024)));
     fs::write(hs.source.join("file"), "x").unwrap();
@@ -387,8 +370,6 @@ fn new_rejects_a_missing_description_a_bad_name_and_an_existing_entry() {
     assert_eq!(fs::read_to_string(hs.source.join("file")).unwrap(), "x");
 }
 
-/// The sync harness (every rule on, four homes) with the Pi home under
-/// `~/.pi/agent`, `diagnose-bug` citing `blast-radius`, synced.
 fn synced() -> harness::Fixture {
     let mut fx = harness::Fixture::new();
     fx.set_env("PI_CODING_AGENT_DIR", None);
@@ -402,7 +383,6 @@ fn synced() -> harness::Fixture {
     fx
 }
 
-/// A ledger with one strong event per `(skill, days ago)`.
 fn ledger(fx: &harness::Fixture, uses: &[(&str, i64)]) {
     let now = jiff::Timestamp::now();
     let lines: String = uses
@@ -426,13 +406,11 @@ fn ledger(fx: &harness::Fixture, uses: &[(&str, i64)]) {
     common::write(&fx.data.join("mazo/events.jsonl"), &lines);
 }
 
-/// Every link under `$HOME` (all four homes) to `<source>/<name>`.
 fn links_to(fx: &harness::Fixture, name: &str) -> Vec<PathBuf> {
     let want = format!("link {}", fx.source.join(name).display());
     harness::snapshot(&[&fx.home]).into_iter().filter(|(_, v)| *v == want).map(|(p, _)| p).collect()
 }
 
-/// `$HOME` (every home) and the source.
 fn homes_and_source(fx: &harness::Fixture) -> harness::Snapshot {
     harness::snapshot(&[&fx.home, &fx.source])
 }
@@ -465,7 +443,6 @@ fn retire_refuses_a_recent_or_held_skill_and_force_overrides_both() {
     }
     assert_eq!(homes_and_source(&fx), before);
 
-    // Used only outside the window, and cited by nothing used.
     fx.mazo(&["retire", "interrogate"]).assert_ok();
     fx.mazo(&["retire", "grade", "--force"]).assert_ok();
     fx.mazo(&["retire", "blast-radius", "--force"]).assert_ok();
@@ -515,7 +492,6 @@ fn a_conflict_or_policy_error_after_archiving_aborts_with_zero_writes() {
     assert_eq!(homes_and_source(&fx), before);
     fs::remove_file(&obstructed).unwrap();
 
-    // The settings miss `grade`: a policy error in the post-archive plan.
     let mut settings: serde_json::Value = serde_json::from_str(&fx.valid_settings()).unwrap();
     settings["skillOverrides"].as_object_mut().unwrap().remove("grade");
     fs::write(fx.settings(".claude"), settings.to_string()).unwrap();
@@ -526,7 +502,6 @@ fn a_conflict_or_policy_error_after_archiving_aborts_with_zero_writes() {
     assert_eq!(homes_and_source(&fx), before);
     fx.write_settings(&fx.home);
 
-    // A `links` entry into the skill is missing once it is archived.
     let toml = fx.source.join("mazo.toml");
     let text = fs::read_to_string(&toml).unwrap().replace("= \"pi-explicit-skills.ts\" }", "= \"unslop/SKILL.md\" }");
     fs::write(&toml, text).unwrap();
@@ -626,8 +601,6 @@ fn retire_of_a_non_canonical_name_is_a_usage_error() {
     assert_eq!(homes_and_source(&fx), before);
 }
 
-/// A private `HOME` with one Claude home and a config written by `mazo init
-/// --no-skills` without `--source`.
 struct Sourceless {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -640,7 +613,6 @@ impl Sourceless {
         let root = fs::canonicalize(temp.path()).unwrap();
         common::write(&root.join("home/.claude/settings.json"), "{}\n");
         let fx = Sourceless { config: root.join("config/mazo.toml"), root, _temp: temp };
-        // No agent on `PATH`, so init detects no judge.
         let bin = fx.root.join("bin");
         let run = Mazo::new(&fx.root, &fx.root.join("home"), &fx.config, &fx.root.join("data"));
         let out = run.command(&[("PATH", bin.as_os_str())], &["init", "--no-skills"]).output().unwrap();

@@ -1,17 +1,10 @@
-//! YAML loading: `saphyr` with the YAML 1.2 core schema, duplicate
-//! keys rejected at any depth. Scalars are kept as written, so callers apply
-//! the strictness they need where a value is used.
-
 use std::borrow::Cow;
 
 pub use saphyr::YamlOwned as Yaml;
 use saphyr::{LoadableYamlNode, ScalarOwned, ScalarStyle, YamlLoader};
 use saphyr_parser::Parser;
 
-/// One YAML document, its scalars left as `Yaml::Representation` (text, style, tag).
 pub fn load(text: &str) -> crate::Result<Yaml> {
-    // saphyr's own load resolves scalars, so its duplicate-key check compares
-    // `a`, `'a'` and `!!str a` as the same key, in every mapping.
     if Yaml::load_from_str(text).map_err(|e| e.to_string())?.len() > 1 {
         return Err("YAML holds more than one document".into());
     }
@@ -24,7 +17,6 @@ pub fn load(text: &str) -> crate::Result<Yaml> {
     Ok(loader.into_documents().pop().unwrap_or(Yaml::Value(ScalarOwned::Null)))
 }
 
-/// The value under a string key of a mapping.
 pub fn get<'a>(map: &'a Yaml, key: &str) -> Option<&'a Yaml> {
     match map {
         Yaml::Mapping(m) => m.iter().find(|(k, _)| string(k) == Some(key)).map(|(_, v)| v),
@@ -32,7 +24,6 @@ pub fn get<'a>(map: &'a Yaml, key: &str) -> Option<&'a Yaml> {
     }
 }
 
-/// A scalar's text as written, whatever its style or tag.
 pub fn text(node: &Yaml) -> Option<&str> {
     match node {
         Yaml::Representation(s, _, _) => Some(s),
@@ -40,7 +31,6 @@ pub fn text(node: &Yaml) -> Option<&str> {
     }
 }
 
-/// A scalar the core schema resolves to a string.
 pub fn string(node: &Yaml) -> Option<&str> {
     let Yaml::Representation(s, style, tag) = node else { return None };
     let tag = tag.as_ref().map(Cow::Borrowed);
@@ -48,7 +38,6 @@ pub fn string(node: &Yaml) -> Option<&str> {
     matches!(value, Some(ScalarOwned::String(_))).then_some(s)
 }
 
-/// A scalar the core schema resolves to `true`.
 pub fn is_true(node: &Yaml) -> bool {
     let Yaml::Representation(s, style, tag) = node else { return false };
     let tag = tag.as_ref().map(Cow::Borrowed);
@@ -56,17 +45,14 @@ pub fn is_true(node: &Yaml) -> bool {
     matches!(value, Some(ScalarOwned::Boolean(true)))
 }
 
-/// The plain, untagged scalar `false`. `"false"`, `False`, `no` and `!!bool false` are not.
 pub fn is_plain_false(node: &Yaml) -> bool {
     matches!(node, Yaml::Representation(s, ScalarStyle::Plain, None) if s == "false")
 }
 
-/// The frontmatter of a SKILL.md, grade or retro file, loaded with [`load`].
 pub fn frontmatter(text: &str) -> crate::Result<Yaml> {
     load(&split_frontmatter(text)?.0)
 }
 
-/// `(frontmatter YAML, body)` per the frontmatter extraction rules, both joined with `\n`.
 pub fn split_frontmatter(text: &str) -> crate::Result<(String, String)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let lines: Vec<&str> = text.lines().collect();

@@ -1,6 +1,3 @@
-//! Pi adapter fixtures. Each fixture is real session records,
-//! trimmed to the lines that matter, with prose scrubbed.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -38,7 +35,6 @@ fn parse(path: &Path) -> Parsed {
     common::parse_file(&pi::Pi, &roots(), path, None).0
 }
 
-/// `(key, skill, channel, path, line)` of every raw event.
 fn events(p: &Parsed) -> Vec<(String, String, Channel, String, u64)> {
     p.raws
         .iter()
@@ -108,13 +104,10 @@ fn read_tool_calls_resolve_against_the_header_cwd() {
     let p = parse(&fixture("read.jsonl"));
     let key = |i: u32| format!("pi:5f2d97ca@2026-09-11T03:25:57.990Z:{i}:0");
     let read = |i, skill| ev(&key(i), skill, Channel::Read, &format!("{SOURCE}/{skill}/SKILL.md"), 2);
-    // Items 0-1 are thinking/text, 2 `publish.sh`, 3 the loose `skills/SKILLS_USAGE.md`,
-    // 8 a bash call, 9 a doc outside every skill root.
     assert_eq!(
         events(&p),
         [read(4, "unslop"), read(5, "writing-for-agents"), read(6, "grade"), read(7, "blast-radius")]
     );
-    // The bash call chains `date` (outside the grammar) with `find skills -name SKILL.md`.
     assert_eq!(p.unparsed.len(), 1);
     assert!(p.unparsed[0].starts_with("find skills -maxdepth 3 -type f | sort; "));
 }
@@ -126,7 +119,6 @@ fn noisy_bash_loop_is_unparsed_not_an_event() {
     let r = |i: u32, skill: &str, rest: &str, ch| {
         ev(&format!("pi:{ts}:{i}:0"), skill, ch, &format!("{PI_SKILLS}/{skill}/{rest}"), 2)
     };
-    // Item 0 is the `for p in …; do wc -l "$p"; done` loop, item 5 `subagents_list`.
     assert_eq!(
         events(&p),
         [
@@ -142,13 +134,10 @@ fn noisy_bash_loop_is_unparsed_not_an_event() {
 
 #[test]
 fn run_state_line_one_is_skipped() {
-    // Line 1 is a herdr run-state record; line 2 would be a slash load in a session.
     let p = parse(&fixture("not_session.jsonl"));
     assert!(p.skipped && p.raws.is_empty());
 }
 
-/// Copies the fork pair into a temp Pi home's sessions dir, pointing the child's
-/// `parentSession` at the copied parent as Pi would.
 fn fork_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let real = "/home/nicolas/.pi/agent/sessions/--home-nicolas-zama-fhevm--";
@@ -160,7 +149,6 @@ fn fork_dir() -> tempfile::TempDir {
 #[test]
 fn files_lists_session_jsonl_only_in_basename_order() {
     let dir = fork_dir();
-    // The copy also holds a `.jsonl.herdr-complete.json` run-state file and Markdown artifacts.
     let names: Vec<String> =
         pi::Pi.files(&home(dir.path())).iter().map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
     assert_eq!(
@@ -222,8 +210,6 @@ fn skill_block_prompt_is_the_invocation_and_its_arguments() {
 
 #[test]
 fn bare_skill_block_prompt_is_the_message_before_it() {
-    // No session on this machine has a bare `/skill:`, so this one is composed:
-    // the `slash.jsonl` header, a plain message, then that file's block without arguments.
     let header = tail::first_line(&fixture("slash.jsonl")).unwrap().unwrap();
     let user = |id: &str, text: &str| {
         serde_json::json!({"type": "message", "id": id, "timestamp": "2026-09-11T03:25:29.274Z",
@@ -240,8 +226,6 @@ fn bare_skill_block_prompt_is_the_message_before_it() {
 
 #[test]
 fn condense_keeps_the_window_from_the_prompt_to_another_skill_load() {
-    // Line 4 is a `/skill:unslop` expansion, its own prompt; line 7 expands
-    // `unslop` again and line 8 `grade`.
     let got = pi::Pi.condense(&format!("{}:4", fixture("condense.jsonl").display()), 60_000).unwrap();
     let want = [
         "L4: user: /skill:unslop tidy the prose".to_string(),

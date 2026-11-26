@@ -1,7 +1,3 @@
-// The mazo explainer as a pure function of time: draw(ctx, t) paints the frame
-// at t seconds on a W x H Canvas 2D context. It keeps no state between calls,
-// so the browser preview and the frame renderer produce identical frames.
-
 export const W = 1920;
 export const H = 1080;
 export const FPS = 30;
@@ -26,8 +22,6 @@ const C = {
   green: '#7ee0a1',
 };
 
-// ---------- timing helpers ----------
-
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const lerp = (a, b, p) => a + (b - a) * p;
 const prog = (t, a, b) => clamp((t - a) / (b - a));
@@ -37,15 +31,12 @@ const easeBack = (p) => {
   const c = 1.6;
   return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
 };
-// Opacity of a scene that lives in [a, b] with fades of length f at each end.
 const window_ = (t, a, b, f = 0.45) => Math.min(prog(t, a, a + f), 1 - prog(t, b - f, b));
 
 function rand(seed) {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 }
-
-// ---------- drawing helpers ----------
 
 function rrect(ctx, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -78,7 +69,6 @@ function measure(ctx, s, size, weight = 400, font = SANS) {
   return w;
 }
 
-// Text made of coloured runs: [[string, colour], ...].
 function runs(ctx, parts, x, y, { size = 32, weight = 400, font = MONO, align = 'left', alpha = 1 } = {}) {
   const total = parts.reduce((w, [s]) => w + measure(ctx, s, size, weight, font), 0);
   let cx = align === 'center' ? x - total / 2 : align === 'right' ? x - total : x;
@@ -125,7 +115,6 @@ function panel(ctx, x, y, w, h, alpha = 1, title = null) {
   ctx.restore();
 }
 
-// A prompt line that types itself out between a and a + dur.
 function typed(ctx, t, cmd, x, y, a, dur = 0.9, size = 36, alpha = 1) {
   if (t < a || alpha <= 0) return;
   const n = Math.round(cmd.length * prog(t, a, a + dur));
@@ -142,7 +131,6 @@ function typed(ctx, t, cmd, x, y, a, dur = 0.9, size = 36, alpha = 1) {
   }
 }
 
-// A skill card: SKILL.md tag and a name, centred on (x, y).
 function card(ctx, x, y, { name = '', w = 230, h = 300, rot = 0, color = C.card3, alpha = 1, scale = 1, glow = 0, label = 'SKILL.md' } = {}) {
   if (alpha <= 0) return;
   ctx.save();
@@ -170,7 +158,6 @@ function card(ctx, x, y, { name = '', w = 230, h = 300, rot = 0, color = C.card3
   ctx.restore();
 }
 
-// The mazo mark: three fanned cards, as in the logo.
 function logoMark(ctx, x, y, s, alpha = 1, spread = 1) {
   const cards = [
     { dx: -70, dy: 10, rot: -0.52, color: C.card1 },
@@ -182,8 +169,6 @@ function logoMark(ctx, x, y, s, alpha = 1, spread = 1) {
   }
 }
 
-// The wordmark drawn as geometry, matching the logo's single-storey "a".
-// size is comparable to a font size; the x-height is centred on y.
 function wordmark(ctx, x, y, size, alpha = 1, align = 'left') {
   if (alpha <= 0) return;
   const h = size * 0.56;
@@ -206,7 +191,6 @@ function wordmark(ctx, x, y, size, alpha = 1, align = 'left') {
     ctx.ellipse(ox + w / 2, (top + bot) / 2, w / 2 - sw / 2, h / 2 - sw / 2, 0, 0, Math.PI * 2);
     ctx.stroke();
   };
-  // m
   {
     const w = widths[0];
     const L = cx + sw / 2;
@@ -225,7 +209,6 @@ function wordmark(ctx, x, y, size, alpha = 1, align = 'left') {
     ctx.stroke();
     cx += w + gap;
   }
-  // a: a ring with a stem on the right
   {
     const w = widths[1];
     ring(cx, w);
@@ -235,7 +218,6 @@ function wordmark(ctx, x, y, size, alpha = 1, align = 'left') {
     ctx.stroke();
     cx += w + gap;
   }
-  // z
   {
     const w = widths[2];
     const B = bot - sw / 2;
@@ -247,7 +229,6 @@ function wordmark(ctx, x, y, size, alpha = 1, align = 'left') {
     ctx.stroke();
     cx += w + gap;
   }
-  // o
   ring(cx, widths[3]);
   ctx.restore();
 }
@@ -274,8 +255,6 @@ function background(ctx, t) {
   }
 }
 
-// ---------- scene 1-2: scattered skills become one deck ----------
-
 const AGENTS = ['Claude Code', 'Codex', 'Pi'];
 const AGENT_X = [480, 960, 1440];
 const SKILLS = ['release-notes', 'triage', 'tidy-imports', 'unslop', 'grade', 'retro', 'commit-msg', 'pr-review', 'db-migrate'];
@@ -300,8 +279,6 @@ function sceneDeck(ctx, t) {
     text(ctx, a, AGENT_X[i], 360, { size: 40, weight: 600, align: 'center', color: C.cyan, alpha: labelsAlpha });
   });
 
-  // Phase A: cards drop in. Phase B (6.4-7.6): they gather into the deck.
-  // Phase C (7.6-8.6): the deck fans into the logo mark.
   const gather = easeInOut(prog(t, 6.4, 7.6));
   const toLogo = easeInOut(prog(t, 7.6, 8.6));
   const cardsAlpha = 1 - prog(t, 8.3, 8.7);
@@ -318,7 +295,6 @@ function sceneDeck(ctx, t) {
     card(ctx, x, y, { name, rot, color: colour, alpha: cardsAlpha * prog(t, 0.4 + i * 0.22, 0.75 + i * 0.22), scale: lerp(0.78, 0.9, gather) });
   });
 
-  // Logo forms in the centre, then moves up for the sync step.
   const logoIn = prog(t, 8.2, 8.7);
   if (logoIn > 0) {
     const up = easeInOut(prog(t, 9.4, 10.2));
@@ -329,7 +305,6 @@ function sceneDeck(ctx, t) {
     wordmark(ctx, lerp(940, 900, up), ly + 8, lerp(190, 118, up), logoIn * out);
   }
 
-  // Sync: the collection links into every agent home.
   const syncAlpha = window_(t, 9.8, 13.4);
   if (syncAlpha > 0) {
     headline(ctx, t, 'One collection, linked into every agent.', 9.8, 13.4);
@@ -360,8 +335,6 @@ function sceneDeck(ctx, t) {
   }
 }
 
-// ---------- scene 3-4: logs become usage; usage finds the unused ----------
-
 const ROWS = [
   { name: 'release-notes', sess: 12, d7: 4, trend: '↑', last: '1d ago' },
   { name: 'unslop', sess: 7, d7: 3, trend: 'new', last: '2d ago' },
@@ -379,7 +352,6 @@ const LOG_LINES = [
   { s: '/release-notes v0.4', row: 0, ch: 'slash' },
 ];
 
-// Arrival times of each strong load, spread over [14.6, 21.6].
 function arrivals(rowIdx) {
   const n = ROWS[rowIdx].sess;
   const out = [];
@@ -392,11 +364,9 @@ function sceneUsage(ctx, t) {
   if (t < 12.9 || t > 33.5) return;
   const o = window_(t, 13.4, 33.4);
   headline(ctx, t, 'It reads the logs your agents already write.', 13.45, 22.6);
-  // Strong vs weak loads, shown once counting is under way.
   const legendA = window_(t, 18.6, 22.6);
   runs(ctx, [['strong: ', C.dim], ['slash · tool', C.cyan], ['     weak: ', C.dim], ['read · ref', C.yellow]], W / 2, 236, { size: 32, weight: 600, align: 'center', alpha: legendA });
 
-  // The log panel slides out to the left when the unused scene starts.
   const logOut = easeInOut(prog(t, 22.4, 23.2));
   const lx = lerp(80, -800, logOut);
   panel(ctx, lx, 320, 720, 620, o, 'session logs');
@@ -415,7 +385,6 @@ function sceneUsage(ctx, t) {
   }
   ctx.restore();
 
-  // The usage table moves to the centre for the unused scene.
   const tx = lerp(840, 480, logOut);
   const ty = 330;
   const tw = 960;
@@ -458,7 +427,6 @@ function sceneUsage(ctx, t) {
     text(ctx, last, tx + 920, y, { size: 34, font: MONO, weight: isUnused && unusedP > 0 ? 700 : 400, align: 'right', color: isUnused && unusedP > 0 ? C.red : C.dim, alpha: rowA });
   });
 
-  // Particles: each strong load flies from the log panel to its row.
   if (logOut < 1) {
     ROWS.forEach((r, i) => {
       ARRIVALS[i].forEach((a) => {
@@ -484,14 +452,12 @@ function sceneUsage(ctx, t) {
     });
   }
 
-  // Unused, then retire.
   headline(ctx, t, 'Find the skills nobody uses.', 23.0, 28.2);
   panel(ctx, 420, 960, 700, 76, window_(t, 23.4, 33.4));
   typed(ctx, t, 'mazo unused', 450, 998, 23.8, 0.6, 34, window_(t, 23.4, 27.9, 0.2));
   typed(ctx, t, 'mazo retire tidy-imports', 450, 998, 27.9, 0.8, 34, window_(t, 27.9, 33.4, 0.2));
   headline(ctx, t, 'Retire what no longer earns its place.', 28.2, 33.4);
 
-  // The retired row lifts off as a card and drops into .archive/.
   const archiveA = window_(t, 28.0, 33.4);
   if (archiveA > 0) {
     const bx = 1720;
@@ -514,8 +480,6 @@ function sceneUsage(ctx, t) {
   }
 }
 
-// ---------- scene 5: audit against real sessions ----------
-
 const IMPROVEMENTS = [
   'State the output format first',
   'Drop the duplicated checklist',
@@ -530,7 +494,6 @@ function sceneAudit(ctx, t) {
   panel(ctx, 560, 300, 800, 80, o);
   typed(ctx, t, 'mazo audit release-notes', 590, 340, 34.0, 0.9, 34, o);
 
-  // Session transcripts flow into the judge.
   const jx = 760;
   const jy = 650;
   for (let k = 0; k < 6; k++) {
@@ -569,7 +532,6 @@ function sceneAudit(ctx, t) {
   ctx.restore();
   text(ctx, 'judge', jx, jy, { size: 40, weight: 700, align: 'center', alpha: o });
 
-  // The report: rates mazo computes, and ranked improvements.
   const rx = 1000;
   const ry = 450;
   const repA = o * prog(t, 37.6, 38.2);
@@ -582,8 +544,6 @@ function sceneAudit(ctx, t) {
     runs(ctx, [[`${i + 1}. `, C.yellow], [s, C.text]], rx + 40 + slide, ry + 250 + i * 64, { size: 32, font: SANS, weight: 500, alpha: repA * a });
   });
 }
-
-// ---------- scene 6: vetted install ----------
 
 const VERDICT = [
   ['security', 'none found', C.green],
@@ -601,7 +561,6 @@ function sceneAdd(ctx, t) {
 
   const gx = 960;
   const gy = 660;
-  // Gate.
   ctx.save();
   ctx.globalAlpha *= o;
   ctx.lineWidth = 6;
@@ -615,7 +574,6 @@ function sceneAdd(ctx, t) {
   ctx.restore();
   text(ctx, 'judge', gx, gy - 222, { size: 32, weight: 700, align: 'center', color: C.cyan, alpha: o });
 
-  // The card travels in, is scanned, then joins the collection.
   const inP = easeInOut(prog(t, 43.8, 44.8));
   const outP = easeInOut(prog(t, 47.0, 48.0));
   const cx = outP > 0 ? lerp(gx, 1620, outP) : lerp(260, gx, inP);
@@ -635,12 +593,9 @@ function sceneAdd(ctx, t) {
     const a = prog(t, 45.2 + i * 0.45, 45.6 + i * 0.45);
     runs(ctx, [[`${k}: `, C.dim], [v, col]], 230, 560 + i * 70, { size: 32, weight: 600, alpha: o * a * (1 - prog(t, 47.0, 47.4)) });
   });
-  // Collection deck on the right, with the lock entry.
   logoMark(ctx, 1640, 640, 0.6, o * prog(t, 43.0, 43.6));
   runs(ctx, [['mazo.lock ', C.dim], ['+ verdict recorded', C.green]], 1640, 860, { size: 30, weight: 600, align: 'center', alpha: o * prog(t, 48.0, 48.4) });
 }
-
-// ---------- scene 7: outro ----------
 
 function sceneOutro(ctx, t) {
   if (t < 50) return;
@@ -663,7 +618,6 @@ export function draw(ctx, t) {
   sceneAudit(ctx, t);
   sceneAdd(ctx, t);
   sceneOutro(ctx, t);
-  // Opening fade from black.
   const fade = 1 - prog(t, 0, 0.4);
   if (fade > 0) {
     ctx.fillStyle = `rgba(11,16,23,${fade})`;

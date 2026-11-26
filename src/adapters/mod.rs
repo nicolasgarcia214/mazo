@@ -1,6 +1,3 @@
-//! Adapters turn transcript records into raw events. Identity, actor,
-//! root session and origin are computed once, in `classify`.
-
 pub mod claude;
 pub mod codex;
 pub mod pi;
@@ -17,32 +14,22 @@ use crate::ledger::{Agent, Channel};
 use crate::readcmd::{self, Reads};
 use crate::tail::{Chunk, Cursor};
 
-/// Event identity before classification.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Key {
-    /// Already final: `cc:…`, `cch:…`, `pi:…`.
     Plain(String),
-    /// `cx:<root session>:<hash>:<index>`; the root is known only after classify.
     Codex { hash: String, index: String },
 }
 
-/// What the actor rules need.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActorInputs {
-    /// Claude `entrypoint`.
     pub entrypoint: Option<String>,
-    /// Claude sidechain or `/subagents/` file, Codex `source.subagent`, Pi `parentSession`.
     pub subagent: bool,
-    /// Codex `originator == codex_exec`.
     pub codex_exec: bool,
 }
 
-/// How to find a session's parent, for the root-session walk.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Parent {
-    /// A Codex rollout id (`forked_from_id` or `thread_spawn.parent_thread_id`).
     Codex(String),
-    /// A Pi session file (`parentSession`).
     Pi(PathBuf),
 }
 
@@ -62,16 +49,12 @@ pub struct Raw {
     pub skill: String,
     pub channel: Channel,
     pub path: Option<String>,
-    /// The cwd the event happened in (record cwd, else session cwd).
     pub cwd: Option<String>,
-    /// 1-based line in the transcript, for `src`.
     pub line: u64,
     pub session: Session,
-    /// Origin comes from the skill name alone (Claude Skill results, typed history).
     pub name_origin: bool,
 }
 
-/// Paths that decide whether a file is a skill file.
 #[derive(Debug, Clone, Default)]
 pub struct SkillRoots {
     pub source: Option<PathBuf>,
@@ -79,7 +62,6 @@ pub struct SkillRoots {
     pub known: BTreeSet<String>,
 }
 
-/// A path classified as a skill file.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillFile {
     pub skill: String,
@@ -88,9 +70,6 @@ pub struct SkillFile {
 }
 
 impl SkillRoots {
-    /// Resolve against `cwd`, then the path either ends in `/SKILL.md`
-    /// or lies in a `<name>/` child of a home skills dir or the source root, where
-    /// `<name>` is a known name or a non-hidden directory containing `SKILL.md`.
     pub fn classify(&self, path: &str, cwd: Option<&str>) -> Option<SkillFile> {
         let abs = if path.starts_with('/') {
             config::resolve(Path::new("/"), path)
@@ -106,9 +85,8 @@ impl SkillRoots {
             let Ok(rest) = abs.strip_prefix(root) else { continue };
             let mut parts = rest.components();
             let name = parts.next()?.as_os_str().to_str()?;
-            parts.next()?; // the directory itself, or a loose file, is not a skill file
+            parts.next()?;
             let real_skill = !name.starts_with('.') && root.join(name).join("SKILL.md").is_file();
-            // `ref` is instruction text only: scripts, tests and manifests are not loads.
             let markdown = abs.extension().is_some_and(|e| e == "md");
             if markdown && (self.known.contains(name) || real_skill) {
                 return Some(SkillFile { skill: name.to_string(), channel: Channel::Ref, path: abs_str });
@@ -118,9 +96,6 @@ impl SkillRoots {
         None
     }
 
-    /// The skill files a shell command run in `cwd` loads, each with its index
-    /// in the command's read list. A command that names a skill's Markdown file
-    /// but is neither a load nor a known non-load goes to `unparsed`.
     pub fn shell_reads(&self, cmd: &str, cwd: Option<&str>, unparsed: &mut Vec<String>) -> Vec<(usize, SkillFile)> {
         let files = match readcmd::reads(cmd) {
             Reads::Load(files) => files,
@@ -135,9 +110,6 @@ impl SkillRoots {
         files.iter().enumerate().filter_map(|(i, f)| Some((i, self.classify(f, cwd)?))).collect()
     }
 
-    /// Whether `text` names a skill's Markdown file (`SKILL.md` or another `.md`
-    /// inside a skill directory): the test for an unparsed command.
-    /// Running a skill's scripts reads no instructions, so it does not count.
     pub fn names_skill_doc(&self, text: &str, cwd: Option<&str>) -> bool {
         text.split(|c: char| c.is_whitespace() || "'\"`;|&<>(){}=,:[]".contains(c))
             .filter(|w| w.ends_with(".md"))
@@ -145,22 +117,14 @@ impl SkillRoots {
     }
 }
 
-/// How one agent's transcripts spell a tool call that reads a file or runs a
-/// shell command.
 pub(crate) struct ToolNames {
-    /// The `type` of a tool-call block.
     pub block: &'static str,
-    /// The field holding the call's arguments.
     pub input: &'static str,
     pub read: &'static str,
-    /// The read tool's path argument.
     pub path: &'static str,
     pub shell: &'static str,
 }
 
-/// The skill files the read and shell tool calls in `content` load, one
-/// `(call index, file index, skill file)` each; the file index counts the
-/// files the call reads.
 pub(crate) fn tool_reads(
     roots: &SkillRoots,
     names: &ToolNames,
@@ -186,41 +150,23 @@ pub(crate) fn tool_reads(
     out
 }
 
-/// The result of parsing one chunk of one file.
 #[derive(Debug, Default)]
 pub struct Parsed {
     pub raws: Vec<Raw>,
-    /// Commands that name a skill file but match neither reader rule.
     pub unparsed: Vec<String>,
-    /// The file belongs to an excluded session (Codex guardian review, non-session Pi file).
     pub skipped: bool,
 }
 
 pub trait Adapter {
-    /// Transcript files of a home, sorted by basename.
     fn files(&self, home: &Home) -> Vec<PathBuf> {
         jsonl_files(&home.transcripts())
     }
-    /// Parses the prefiltered lines of one file. `header` is line 1 of the file.
     fn parse(&self, roots: &SkillRoots, path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed;
-    /// How [`Adapter::prompt_at`] and [`Adapter::condense`] read a record.
     fn records(&self) -> Records;
-    /// The user-authored text behind the load at `src` (`<file>:<line>`), read
-    /// at display time and never stored: the first text `authored` reads
-    /// walking back from that record, itself included, since a `/skill:`
-    /// message holds its own prompt. `None` when the file is gone or holds no
-    /// user turn up to that line.
     fn prompt_at(&self, src: &str) -> Option<String> {
         let t = transcript(src)?;
         authored_back(&t.chunk.lines[..t.line], &self.records().authored).map(|(_, text)| text)
     }
-    /// The judge's view of the session window around the strong load at `src`,
-    /// at most `max_chars` characters plus a cut marker. `None` when the file
-    /// is gone or `src` is not a strong load. The window runs from the prompt
-    /// behind the load (the load itself when no prompt precedes it) up to, not
-    /// including, the first strong load of a different skill after `src`, the
-    /// 40th `authored` record after the start, or the end of the file; each
-    /// record's `render` parts are prefixed `L<line>: `.
     fn condense(&self, src: &str, max_chars: usize) -> Option<String> {
         let Records { authored, render } = self.records();
         let t = transcript(src)?;
@@ -239,19 +185,6 @@ pub trait Adapter {
         let end = other.into_iter().chain(limit).min().unwrap_or(u64::MAX);
         Some(cap(numbered(&rendered(lines, start..end, render)), max_chars))
     }
-    /// The last run of `skill` in the transcript `file`, for the `reviewer`
-    /// skill that judges it in the same session. The window starts at the
-    /// prompt behind `skill`'s last strong load before the reviewer's last
-    /// load, or behind its last strong load when the reviewer never loaded
-    /// after it. It ends before the reviewer's first load after that, so an
-    /// earlier review of the same run stays out, or at the end of the file.
-    /// When the last prompt before the reviewer's load names the reviewer, it
-    /// asked for the review and the window ends before it; any other prompt
-    /// belongs to the run, since a bare `/retro` carries none. Other skills
-    /// loaded in between belong to the run too. Uncapped: tool calls and
-    /// results are clipped as in [`Adapter::condense`], and the whole record
-    /// is line `L<n>` of `file`. `None` when the file is gone or holds no
-    /// strong load of `skill`.
     fn trace(&self, file: &Path, skill: &str, reviewer: &str) -> Option<Trace> {
         let Records { authored, render } = self.records();
         let chunk = Chunk { lines: lines(file)?, oversized: 0, cursor: Cursor::default() };
@@ -279,28 +212,20 @@ pub trait Adapter {
     }
 }
 
-/// One skill run as its reviewer reads it.
 #[derive(Debug, PartialEq)]
 pub struct Trace {
-    /// Each kept record's parts, prefixed `L<line>: `.
     pub text: String,
-    /// The window's first and last transcript line.
     pub lines: (u64, u64),
-    /// How many records the window holds.
     pub records: usize,
-    /// How many of them `text` keeps: the rest are meta and harness records.
     pub kept: usize,
 }
 
-/// The strong loads in `chunk`. They come from the harness's own markers, so
-/// no skill roots are needed.
 fn strong_loads<A: Adapter + ?Sized>(adapter: &A, path: &Path, chunk: &Chunk) -> Vec<Raw> {
     let header = chunk.lines.first().map(|(_, l)| l.as_slice());
     let parsed = adapter.parse(&SkillRoots::default(), path, header, chunk);
     parsed.raws.into_iter().filter(|r| r.channel.strong()).collect()
 }
 
-/// The records of `lines` in `range` that `render` keeps anything of, with their parts.
 fn rendered(
     lines: &[(u64, Vec<u8>)],
     range: std::ops::Range<u64>,
@@ -314,19 +239,15 @@ fn rendered(
         .collect()
 }
 
-/// `records` as text: every part on its own line, prefixed `L<line>: `.
 fn numbered(records: &[(u64, Vec<String>)]) -> String {
     records.iter().flat_map(|(n, parts)| parts.iter().map(move |p| format!("L{n}: {p}"))).collect::<Vec<_>>().join("\n")
 }
 
-/// A transcript's record readers: the user-authored text of a record, if it
-/// is one, and what the judge keeps of it.
 pub struct Records {
     pub authored: fn(&Value) -> Option<String>,
     pub render: fn(&Value) -> Vec<String>,
 }
 
-/// Each adapter's skill-load marker: text a transcript holds only where a skill loaded.
 pub const MARKERS: [&str; 3] = [claude::MARKER, codex::MARKER, pi::MARKER];
 
 pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
@@ -337,7 +258,6 @@ pub fn for_agent(agent: Agent) -> &'static dyn Adapter {
     }
 }
 
-/// The transcript `src` (`<file>:<line>`) names, read whole, and that line.
 struct Transcript {
     path: PathBuf,
     chunk: Chunk,
@@ -358,27 +278,21 @@ fn transcript(src: &str) -> Option<Transcript> {
     })
 }
 
-/// The lines of the transcript `file`, numbered from 1; `None` when it cannot be read.
 fn lines(file: &Path) -> Option<Vec<(u64, Vec<u8>)>> {
     let bytes = std::fs::read(file).ok()?;
     let body = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
     Some((1..).zip(body.split(|&b| b == b'\n').map(<[u8]>::to_vec)).collect())
 }
 
-/// The line and text of the first record `authored` reads walking back from
-/// the last of `lines`.
 fn authored_back(lines: &[(u64, Vec<u8>)], authored: &impl Fn(&Value) -> Option<String>) -> Option<(u64, String)> {
     lines.iter().rev().find_map(|(n, l)| Some((*n, authored(&serde_json::from_slice(l).ok()?)?)))
 }
 
-/// The window ends before the 40th user-authored message after its start.
 const WINDOW_MESSAGES: usize = 40;
 const TOOL_INPUT_CHARS: usize = 200;
 const TOOL_RESULT_CHARS: usize = 500;
 const CUT: &str = "\n[… cut …]\n";
 
-/// `text` cut to the first two thirds and the last third of `max_chars`
-/// characters, with [`CUT`] between, when it is longer.
 fn cap(text: String, max_chars: usize) -> String {
     let len = text.chars().count();
     if len <= max_chars {
@@ -389,19 +303,14 @@ fn cap(text: String, max_chars: usize) -> String {
     format!("{}{CUT}{}", &text[..at(head)], &text[at(len - (max_chars - head))..])
 }
 
-/// A tool call as the judge sees it: its name and the start of its input.
 fn tool_call(name: &str, input: &str) -> String {
     format!("tool {name}: {}", input.chars().take(TOOL_INPUT_CHARS).collect::<String>())
 }
 
-/// A tool result as the judge sees it: the start of its text.
 fn tool_result(output: &str) -> String {
     format!("result: {}", output.chars().take(TOOL_RESULT_CHARS).collect::<String>())
 }
 
-/// The text of a message `content`: a string, or the `text` of its blocks
-/// (`text`, `input_text`, `output_text`) joined by newlines, so an image
-/// beside the text does not hide it.
 fn message_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
@@ -409,8 +318,6 @@ fn message_text(content: &Value) -> String {
     }
 }
 
-/// Text the harness puts inside a user turn: reminders, task notifications,
-/// local command output and pasted content.
 static INJECTED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?s)<system-reminder>.*?</system-reminder>|<task-notification>.*?</task-notification>",
@@ -420,14 +327,12 @@ static INJECTED: LazyLock<Regex> = LazyLock::new(|| {
 });
 static BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n\s*\n").expect("valid regex"));
 
-/// `text` without injected blocks; `None` when nothing the user wrote is left.
 fn strip_injected(text: &str) -> Option<String> {
     let text = INJECTED.replace_all(text, "");
     let text = BLANK_LINES.replace_all(text.trim(), "\n\n");
     (!text.is_empty()).then(|| text.into_owned())
 }
 
-/// Every `*.jsonl` under `dir` (recursively), sorted by basename then path.
 pub fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];

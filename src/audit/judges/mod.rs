@@ -1,7 +1,3 @@
-//! The judge agents. Each [`Backend`] sends one agent a prompt; a
-//! [`Subprocess`] holds one agent's argv, input, login check, scratch home and
-//! output format, and [`spawn`] runs any of them the same way.
-
 mod claude;
 mod codex;
 mod command;
@@ -24,11 +20,7 @@ use crate::Result;
 use crate::config::{Billing, Home, Judge, JudgeAgent};
 use crate::ledger::Agent;
 
-/// How mazo calls one agent as its judge.
 pub trait Backend {
-    /// One judge call with `stage`'s prompt on `input`, capped at `cap`, its
-    /// scratch under `data` and its environment scrubbed for `billing`; a
-    /// subprocess is killed once `cancel` turns true.
     fn call(
         &self,
         data: &Path,
@@ -38,52 +30,32 @@ pub trait Backend {
         input: &str,
         cancel: &dyn Fn() -> bool,
     ) -> Result<Reply>;
-    /// Under `subscription`, the check a run makes once before its first call,
-    /// with `data` for a scratch directory, killed once `cancel` turns true. A
-    /// failed check is an [`crate::Error::Usage`] that says what would be billed.
     fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
         Ok(())
     }
-    /// The flag that caps a call's dollar cost, for an agent that reports one.
     fn budget_flag(&self) -> Option<&'static str> {
         None
     }
-    /// The judge line `--dry-run` prints.
     fn dry_run(&self) -> String;
-    /// The model `--dry-run` names, where the judge line may not.
     fn model(&self) -> Option<String> {
         None
     }
 }
 
-/// A judge that is a process: [`spawn`] runs it for each call.
 pub trait Subprocess {
-    /// The argv of a call with `stage`'s prompt and schema, `[judge] model`, and
-    /// [`SCHEMA_FILE`], [`RESULT_FILE`] or [`INPUT_FILE`] standing in for the files
-    /// [`spawn`] writes.
     fn argv(&self, stage: &Stage) -> Vec<String>;
-    /// What the call reads on stdin; none closes it.
     fn stdin(&self, stage: &Stage, input: &str) -> Option<String>;
-    /// As [`Backend::login`].
     fn login(&self, _data: &Path, _cancel: &dyn Fn() -> bool) -> Result<()> {
         Ok(())
     }
-    /// For an agent that needs a scratch home: that home made at `home`, a
-    /// path of the call's own that does not exist yet, and the variable
-    /// naming it.
     fn scratch(&self, _home: &Path) -> Result<Option<&'static str>> {
         Ok(None)
     }
-    /// What a finished call returned, from its output and the result file it
-    /// wrote; `cap` is the call's dollar cap.
     fn reply(&self, out: &Output, written: Option<Vec<u8>>, cap: Option<u64>) -> Result<Reply>;
-    /// As [`Backend::budget_flag`].
     fn budget_flag(&self) -> Option<&'static str> {
         None
     }
-    /// The judge line `--dry-run` prints for the quoted argv.
     fn shown(&self, argv: &str) -> String;
-    /// As [`Backend::model`].
     fn model(&self) -> Option<String> {
         None
     }
@@ -110,8 +82,6 @@ impl<T: Subprocess> Backend for T {
         Subprocess::budget_flag(self)
     }
 
-    /// The stage-1 argv, with its prompt, schema and empty arguments quoted
-    /// for a shell.
     fn dry_run(&self) -> String {
         let quoted: Vec<String> = self
             .argv(&SESSION)
@@ -131,9 +101,6 @@ impl<T: Subprocess> Backend for T {
     }
 }
 
-/// The backend of `judge`; Codex links the configured Codex home's
-/// `auth.json`, Pi reads its `settings.json` for the default model,
-/// the command judge runs `[judge] argv`, and the http judge reads its key.
 pub fn backend(judge: &Judge, homes: &[Home]) -> Result<Box<dyn Backend>> {
     let model = judge.model.clone();
     Ok(match judge.agent {
@@ -149,7 +116,6 @@ pub fn backend(judge: &Judge, homes: &[Home]) -> Result<Box<dyn Backend>> {
     })
 }
 
-/// The configured home of `agent`, else `~/<default>`.
 fn agent_home(homes: &[Home], agent: Agent, default: &str) -> Result<PathBuf> {
     Ok(match homes.iter().find(|h| h.agent == agent) {
         Some(h) => h.path.clone(),
@@ -157,22 +123,16 @@ fn agent_home(homes: &[Home], agent: Agent, default: &str) -> Result<PathBuf> {
     })
 }
 
-/// Stand-ins in a [`Backend::argv`] for the files each call writes in its own
-/// temporary directory: the answer schema and the result, each a whole
-/// argument, and the input, which an argument may embed (Pi's `@<input file>`).
 pub const SCHEMA_FILE: &str = "<schema file>";
 pub const RESULT_FILE: &str = "<result file>";
 pub const INPUT_FILE: &str = "<input file>";
 
-/// The prompt, then the schema its answer must match, then the input: all a
-/// judge without a schema flag of its own is sent.
 fn prompted(stage: &Stage, input: &str) -> String {
     let schema =
         format!("Answer with one JSON object, and nothing else, matching this schema:\n{}", stage.schema.as_str());
     format!("{}\n{}{input}", stage.prompt, frame("answer-schema", &schema))
 }
 
-/// `base`, then `flag model` when a model is set, then `tail`.
 fn argv(base: &[&str], flag: &str, model: &Option<String>, tail: Option<&str>) -> Vec<String> {
     let mut argv: Vec<String> = base.iter().map(|a| a.to_string()).collect();
     if let Some(m) = model {
@@ -182,24 +142,16 @@ fn argv(base: &[&str], flag: &str, model: &Option<String>, tail: Option<&str>) -
     argv
 }
 
-/// What one judge call returned: its reported cost, none from a judge that
-/// reports none, and the answer or why there is none.
 pub struct Reply {
     pub cost: Option<u64>,
     pub answer: std::result::Result<Value, NoAnswer>,
 }
 
-/// Why a judge call gave no answer.
 pub enum NoAnswer {
-    /// Over its cap, past its time, or an answer that does not parse: retried as it was.
     Retry(String),
-    /// A judge that failed without an answer: a login, key or network failure,
-    /// or a signal mazo did not send. The run stops.
     Stop(String),
 }
 
-/// A [`NoAnswer::Stop`] for `out`, with the reason the judge gave and the
-/// first lines of its stderr.
 fn stop(out: &Output, result: Option<&str>) -> NoAnswer {
     let result = result.map(|r| format!(": {r}")).unwrap_or_default();
     let lines: String = String::from_utf8_lossy(&out.stderr)
@@ -210,7 +162,6 @@ fn stop(out: &Output, result: Option<&str>) -> NoAnswer {
     NoAnswer::Stop(format!("the judge failed without an answer ({}){result}{lines}", out.status))
 }
 
-/// No answer stops the run after a nonzero exit and is retried after a zero one.
 fn exited(out: &Output, answer: std::result::Result<Value, String>) -> std::result::Result<Value, NoAnswer> {
     answer.map_err(|e| {
         if out.status.success() {
@@ -222,8 +173,6 @@ fn exited(out: &Output, answer: std::result::Result<Value, String>) -> std::resu
     })
 }
 
-/// The variables that bill an API key or a cloud account instead of a login:
-/// Claude's key and token, its cloud routes, and the keys Codex and Pi may read.
 const BILLED: [&str; 7] = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -234,7 +183,6 @@ const BILLED: [&str; 7] = [
     "CODEX_API_KEY",
 ];
 
-/// Removes [`BILLED`] from `cmd`'s environment under `subscription`.
 fn scrub(cmd: &mut Command, billing: Billing) {
     if billing == Billing::Subscription {
         for var in BILLED {
@@ -243,7 +191,6 @@ fn scrub(cmd: &mut Command, billing: Billing) {
     }
 }
 
-/// A fresh empty directory under `<data>/audit-runs/`, and its unique name.
 fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
     let unique = crate::unique();
     let runs = data.join("audit-runs");
@@ -252,13 +199,6 @@ fn run_dir(data: &Path) -> Result<(String, PathBuf)> {
     Ok((unique, dir))
 }
 
-/// One subprocess judge call: `backend`'s argv run in a fresh empty directory under
-/// `<data>/audit-runs/`, with the files it names in a fresh temporary
-/// directory and its scratch home, if any, beside that run directory: all
-/// three the call's own, so concurrent calls never share one, and removed
-/// after. A capped call of an agent with a [`Subprocess::budget_flag`] gets that
-/// flag, and is counted at its cap when killed past its time, the most it
-/// could have spent. A call killed once `cancel` turned true fails the run.
 fn spawn(
     backend: &impl Subprocess,
     data: &Path,
@@ -272,7 +212,6 @@ fn spawn(
     let (unique, dir) = run_dir(data)?;
     let home = dir.with_file_name(format!("{unique}-home"));
     let scratch = backend.scratch(&home).inspect_err(|_| {
-        // Best effort: the scratch error is the one worth reporting.
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&home);
     })?;
@@ -329,30 +268,19 @@ fn spawn(
     backend.reply(&output, written.ok(), cap)
 }
 
-/// How long one judge call may run before it is killed and counted as invalid.
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
-/// The most stderr lines a stopped judge prints, and the most of each.
 const STDERR_LINES: usize = 5;
 const STDERR_CHARS: usize = 200;
 
-/// How long a judge past its limit has to exit on SIGTERM before SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(5);
 
-/// `child`'s output once it exits, after writing `stdin` to it; `None` when it
-/// was still running after `limit`, or when `cancel` turned true, and was killed: SIGTERM first, which
-/// launchers such as Codex's npm shim forward to the process doing the work
-/// and SIGKILL would orphan, then SIGKILL after [`KILL_GRACE`]. The pipes are read on
-/// detached threads given a second after the exit, so a grandchild left
-/// holding one costs its output, not a hang.
 pub(crate) fn wait(
     mut child: Child,
     stdin: Option<String>,
     limit: Duration,
     cancel: &dyn Fn() -> bool,
 ) -> std::io::Result<Option<Output>> {
-    // A judge that exits without reading its input closes the pipe; its
-    // output says why.
     if let (Some(mut pipe), Some(stdin)) = (child.stdin.take(), stdin) {
         std::thread::spawn(move || pipe.write_all(stdin.as_bytes()));
     }
@@ -375,7 +303,6 @@ pub(crate) fn wait(
             break status;
         }
         if Instant::now() >= deadline || cancel() {
-            // SAFETY: kill(2) on our own child, unreaped, so its pid is not reused.
             unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
             let grace = Instant::now() + KILL_GRACE;
             while child.try_wait()?.is_none() && Instant::now() < grace {
@@ -406,7 +333,6 @@ mod tests {
             .unwrap()
     }
 
-    /// A judge that answers without a subprocess.
     struct Canned;
 
     impl Backend for Canned {
@@ -460,8 +386,6 @@ mod tests {
         let started = Instant::now();
         assert!(wait(sh("sleep 10 & sleep 10"), None, Duration::from_millis(100), &|| false).unwrap().is_none());
         assert!(started.elapsed() < Duration::from_secs(5));
-        // A launcher that forwards SIGTERM takes the process doing the work with it. The
-        // launcher reaps the worker so `kill -0` cannot see a zombie no one has reaped.
         let pid = tempfile::NamedTempFile::new().unwrap();
         let launcher =
             format!("trap 'kill $!; wait $!; exit' TERM; sleep 10 & echo $! > {}; wait", pid.path().display());
@@ -470,7 +394,6 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         let alive = Command::new("kill").args(["-0", worker.trim()]).stderr(Stdio::null()).status().unwrap();
         assert!(!alive.success(), "the worker outlived its launcher");
-        // An exited judge whose grandchild keeps stdout open costs its output, not a hang.
         let started = Instant::now();
         let out = wait(sh("sleep 10 & echo x"), None, Duration::from_secs(30), &|| false).unwrap().unwrap();
         assert!(out.status.success());

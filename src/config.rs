@@ -1,6 +1,3 @@
-//! The config with its `[policy]` table: discovery, `mazo init`, and path expansion,
-//! including the Pi directory normalisation.
-
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder};
 use std::io::{BufRead, ErrorKind, Write};
@@ -13,50 +10,35 @@ use crate::ledger::Agent;
 use crate::render::PathExt;
 use crate::{Error, Result};
 
-/// The `context_window` of a config that sets none.
 pub const CONTEXT_WINDOW: usize = 200_000;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// The physical skills source directory; `None` for a user with no skills of their own.
     pub source: Option<PathBuf>,
     pub loose: Vec<String>,
-    /// Owners (`owner`) and repositories (`owner/repo`) whose skills install
-    /// without vetting.
     pub trusted: Vec<String>,
-    /// Where grades and retros live, `<data dir>/evals` by default.
     pub evals_dir: PathBuf,
-    /// The context window, in tokens, the agents' listing budgets are shares of.
     pub context_window: usize,
     pub homes: Vec<Home>,
     pub policy: Policy,
-    /// `None` without a `[judge]` table: no agent is assumed.
     pub judge: Option<Judge>,
 }
 
-/// The `[judge]` table.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Judge {
     pub agent: JudgeAgent,
-    /// Passed as `--model` (`-m` for Codex); unset means the agent's own default.
     pub model: Option<String>,
     pub billing: Billing,
-    /// The `command` judge's program and arguments; no other judge takes one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
-    /// The `http` judge's base URL, posted to at `<url>/chat/completions`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// The variable holding the `http` judge's API key; unset sends no key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
 }
 
 impl Judge {
-    /// Why the table is invalid: `command` without an `argv`, `http` without
-    /// a `url` or a `model`, with a blank `api_key_env`, or with one whose key
-    /// would cross the network in cleartext, or another agent's fields.
     fn check(&self) -> std::result::Result<(), &'static str> {
         let (command, http) = (self.agent == JudgeAgent::Command, self.agent == JudgeAgent::Http);
         let blank = |v: &Option<String>| v.as_deref().is_none_or(str::is_empty);
@@ -78,9 +60,6 @@ impl Judge {
     }
 }
 
-/// Whether `url` is plain `http://` to anything but localhost, 127.0.0.0/8
-/// or ::1. A url this parser refuses counts as cleartext, since the request's
-/// own parser may still accept it.
 fn cleartext(url: &str) -> bool {
     use url::Host;
     let loopback = |u: url::Url| match u.host() {
@@ -92,9 +71,6 @@ fn cleartext(url: &str) -> bool {
     url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://")) && !url::Url::parse(url).is_ok_and(loopback)
 }
 
-/// The agent mazo audit calls: one of the homes' agents, any CLI that
-/// reads a prompt on stdin and prints its answer, or an OpenAI-compatible
-/// chat completions endpoint. Config and JSON spell each by its [`name`](Self::name).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(try_from = "String", into = "&'static str")]
 pub enum JudgeAgent {
@@ -107,10 +83,8 @@ pub enum JudgeAgent {
 }
 
 impl JudgeAgent {
-    /// Every judge agent, in the order `init` tries them.
     const ALL: [Self; 5] = [Self::Claude, Self::Codex, Self::Pi, Self::Command, Self::Http];
 
-    /// The agent's config name.
     fn name(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -121,8 +95,6 @@ impl JudgeAgent {
         }
     }
 
-    /// Whether the agent is one of the homes' agents: a binary of its name,
-    /// so `init` can look for it on `PATH`, configured by `agent` alone.
     fn home(self) -> bool {
         !matches!(self, Self::Command | Self::Http)
     }
@@ -145,9 +117,6 @@ impl From<JudgeAgent> for &'static str {
     }
 }
 
-/// Who pays for the judge's calls. Under `Subscription` every call runs
-/// without the variables that would bill an API key or a cloud account, after
-/// a login check; under `Api` the environment passes unchanged.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Billing {
@@ -156,19 +125,16 @@ pub enum Billing {
     Api,
 }
 
-/// The `[policy]` table: every rule off and no authoring skill by default.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
     pub no_disable_model_invocation: bool,
     pub codex_manifest: bool,
     pub claude_name_only: bool,
-    /// Skills whose strong load marks a root session as authoring.
     pub authoring_skills: Vec<String>,
 }
 
 impl Config {
-    /// The source, or a usage error saying `what` needs it.
     pub fn need_source(&self, what: &str) -> Result<&Path> {
         self.source.as_deref().ok_or_else(|| Error::Usage(format!("{what} needs `source` in the config")))
     }
@@ -179,7 +145,6 @@ pub struct Home {
     pub name: String,
     pub agent: Agent,
     pub path: PathBuf,
-    /// Extra files to link: key relative to the home, value relative to the source.
     pub links: BTreeMap<String, String>,
 }
 
@@ -192,7 +157,6 @@ impl Home {
         self.path.join("settings.json")
     }
 
-    /// Where this home's transcripts live.
     pub fn transcripts(&self) -> PathBuf {
         match self.agent {
             Agent::Claude => self.path.join("projects"),
@@ -212,8 +176,6 @@ struct RawConfig {
     source: Option<String>,
     #[serde(default)]
     loose: Vec<String>,
-    /// Owners (`owner`) and repositories (`owner/repo`) whose skills install
-    /// without vetting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     trusted: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -228,9 +190,7 @@ struct RawConfig {
 }
 
 impl RawConfig {
-    /// Why the file is invalid on its own, before any path is resolved.
     fn check(&self) -> std::result::Result<(), String> {
-        // A first segment with a `.` is a host, which an owner or owner/repo follows.
         let malformed = |t: &&String| {
             let segments: Vec<&str> = t.split('/').collect();
             let most = if segments[0].contains('.') { 3 } else { 2 };
@@ -239,13 +199,10 @@ impl RawConfig {
         if let Some(bad) = self.trusted.iter().find(malformed) {
             return Err(format!("trusted entry {bad:?} must be owner, owner/repo, host/owner or host/owner/repo"));
         }
-        // Plain components, `.` aside: no root or `..` to leave the directory a
-        // `links` key or value is joined to.
         let inside = |p: &str| {
             let mut components = Path::new(p).components().filter(|c| *c != Component::CurDir).peekable();
             components.peek().is_some() && components.all(|c| matches!(c, Component::Normal(_)))
         };
-        // A `loose` entry names its link too, so it is exactly one plain component.
         let file_name = |l: &String| matches!(Path::new(l).components().collect::<Vec<_>>()[..], [Component::Normal(n)] if n == l.as_str());
         if let Some(bad) = self.loose.iter().find(|l| !file_name(l)) {
             return Err(format!("loose entry {bad:?} must be a file name in source"));
@@ -286,8 +243,6 @@ struct RawHome {
     links: BTreeMap<String, String>,
 }
 
-/// `$MAZO_CONFIG`, else `$XDG_CONFIG_HOME/mazo/config.toml` with
-/// `XDG_CONFIG_HOME` defaulting to `~/.config`. Nothing else.
 pub fn path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("MAZO_CONFIG").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(p));
@@ -299,7 +254,6 @@ pub fn path() -> Result<PathBuf> {
     Ok(dir.join("mazo/config.toml"))
 }
 
-/// `${XDG_DATA_HOME:-~/.local/share}/mazo`.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|x| !x.is_empty()) {
         return Ok(PathBuf::from(x).join("mazo"));
@@ -307,8 +261,6 @@ pub fn data_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home_dir()?).join(".local/share/mazo"))
 }
 
-/// `source` resolved physically, through symlinks, so a directory alias still
-/// links the canonical source; an error for one that is not a directory.
 fn source_dir(source: &Path) -> std::result::Result<PathBuf, String> {
     let dir = fs::canonicalize(source).map_err(crate::at(source))?;
     if !dir.is_dir() {
@@ -317,10 +269,7 @@ fn source_dir(source: &Path) -> std::result::Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// The config at `path`, or `None` when no file is there.
 pub fn load(path: &Path) -> Result<Option<Config>> {
-    // The physical file, so a config symlinked from a skills repo resolves
-    // `source` against that repo.
     let path = match fs::canonicalize(path) {
         Ok(p) => p,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
@@ -331,14 +280,11 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     let raw: RawConfig = toml::from_str(&text).map_err(|e| usage(e.to_string()))?;
     raw.check().map_err(usage)?;
     let base = path.parent().unwrap_or(Path::new("/"));
-    // `source` is relative to the config file.
     let source = raw.source.as_ref().map(|s| source_dir(&base.join(s)).map_err(|e| usage(format!("source {e}"))));
     let source = source.transpose()?;
     let home = home_dir()?;
     let mut homes: Vec<Home> = Vec::new();
     for h in raw.homes {
-        // A relative `path` is relative to this file, like `source`; Pi
-        // resolves its own variable against the cwd, so mazo does too.
         let path = match (h.agent, std::env::var("PI_CODING_AGENT_DIR").ok().filter(|v| !v.is_empty())) {
             (Agent::Pi, Some(env)) => {
                 let cwd = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
@@ -349,7 +295,6 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
         };
         homes.push(Home { name: h.name, agent: h.agent, path, links: h.links });
     }
-    // Relative to this file, like a home `path`.
     let evals_dir = match &raw.evals_dir {
         Some(dir) => resolve(base, &expand_tilde(dir, &home)),
         None => data_dir()?.join("evals"),
@@ -366,11 +311,6 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     }))
 }
 
-/// `mazo init`: a config at `path` naming `source`, if given, absolutely, a
-/// home for each agent directory under `~` that exists, every rule off, and
-/// the [`detect_judge`] judge, else the one [`choose_judge`] reads from `ask`.
-/// Refuses to overwrite, before detecting or asking, and warns on stderr
-/// when it finds no home.
 pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -> Result<Option<InitJudge>> {
     let exists = || format!("{} exists; not overwriting it", path.inert());
     if path.symlink_metadata().is_ok() {
@@ -416,25 +356,19 @@ pub fn init(path: &Path, source: Option<&Path>, ask: Option<&mut dyn BufRead>) -
     Ok(judge)
 }
 
-/// The agent homes `init` looks for: name, agent, and path under `~`.
 const AGENT_HOMES: [(&str, Agent, &str); 3] =
     [("claude", Agent::Claude, ".claude"), ("codex", Agent::Codex, ".codex"), ("pi", Agent::Pi, ".pi/agent")];
 
-/// How to give the config at `path` a home.
 pub fn add_home(path: &Path) -> String {
     format!("add a [[home]] table with name, agent and path to {}", path.inert())
 }
 
-/// The judge `init` wrote: one it found on `PATH` and, but for Pi, logged in;
-/// or one the user chose.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InitJudge {
     Detected(JudgeAgent),
     Chosen(JudgeAgent),
 }
 
-/// The line `init` prints after the config path: the judge it wrote and
-/// what is left to do before `mazo audit` can use it.
 pub fn init_note(judge: Option<InitJudge>) -> String {
     match judge {
         Some(InitJudge::Chosen(a @ (JudgeAgent::Command | JudgeAgent::Http))) => format!(
@@ -458,17 +392,10 @@ pub fn init_note(judge: Option<InitJudge>) -> String {
     }
 }
 
-/// The `[judge]` tables `init` writes commented out, since they are invalid
-/// until filled in.
 const COMMAND_PLACEHOLDER: &str = "\n# [judge]\n# agent = \"command\"\n# argv = [\"<program>\", \"<argument>\"]\n";
 const HTTP_PLACEHOLDER: &str = "\n# [judge]\n# agent = \"http\"\n# url = \"<base url; mazo posts to <url>/chat/completions>\"\n\
 # model = \"<model>\"\n# api_key_env = \"<variable holding the API key; delete for none>\"\n";
 
-/// The first of claude, codex and pi whose binary is on `PATH` and whose
-/// subscription login check passes; Pi has no check. The checks read local
-/// state only: `claude auth status` and Codex's `auth.json`. A check's
-/// scratch directory is a fresh one under the temporary directory, removed
-/// after, so detection leaves nothing behind.
 fn detect_judge() -> Result<Option<JudgeAgent>> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let scratch = std::env::temp_dir().join(format!("mazo-init-{}", crate::unique()));
@@ -484,8 +411,6 @@ fn detect_judge() -> Result<Option<JudgeAgent>> {
     Ok(detected)
 }
 
-/// The judge agent named on a line of `input`, asked for on `prompt` until
-/// one is; `None` when `input` ends first.
 fn choose_judge(input: &mut dyn BufRead, prompt: &mut dyn Write) -> Result<Option<JudgeAgent>> {
     let names: Vec<&str> = JudgeAgent::ALL.map(JudgeAgent::name).to_vec();
     let ask = |prompt: &mut dyn Write| {
@@ -505,8 +430,6 @@ fn choose_judge(input: &mut dyn BufRead, prompt: &mut dyn Write) -> Result<Optio
     }
 }
 
-/// The config `init` writes: `judge` as a `[judge]` table, or for `command`
-/// and `http` as a commented-out one to fill in.
 fn config_text(source: Option<String>, homes: Vec<RawHome>, judge: Option<JudgeAgent>) -> Result<String> {
     let table = judge.filter(|a| a.home()).map(|agent| Judge { agent, ..Judge::default() });
     let raw = RawConfig {
@@ -532,7 +455,6 @@ pub(crate) fn home_dir() -> Result<String> {
     std::env::var("HOME").ok().filter(|h| !h.is_empty()).ok_or_else(|| "HOME is not set".into())
 }
 
-/// `~` alone is `$HOME`; `~/x` is the string `$HOME/x`. No other form expands.
 pub(crate) fn expand_tilde(value: &str, home: &str) -> String {
     if value == "~" {
         home.to_string()
@@ -543,8 +465,6 @@ pub(crate) fn expand_tilde(value: &str, home: &str) -> String {
     }
 }
 
-/// Node's `path.resolve(base, p)` for POSIX: join, then drop `.`/empty segments
-/// and pop on `..`, without touching the filesystem.
 pub fn resolve(base: &Path, p: &str) -> PathBuf {
     let joined = if p.starts_with('/') { PathBuf::from(p) } else { base.join(p) };
     let mut out = PathBuf::from("/");
@@ -560,8 +480,6 @@ pub fn resolve(base: &Path, p: &str) -> PathBuf {
     out
 }
 
-/// The Pi agent directory from a `PI_CODING_AGENT_DIR`-style value.
-/// The skills directory is `<result>/skills`.
 fn pi_agent_dir(value: &str, home: &str, cwd: &Path) -> Result<PathBuf> {
     let invalid = |reason: &str| Error::Usage(format!("invalid PI_CODING_AGENT_DIR: {reason}"));
     let mut value = expand_tilde(value, home);
@@ -574,8 +492,6 @@ fn pi_agent_dir(value: &str, home: &str, cwd: &Path) -> Result<PathBuf> {
     Ok(resolve(cwd, &value))
 }
 
-/// Node's `fileURLToPath` on POSIX: WHATWG parse, empty or `localhost` host,
-/// no encoded `/`, strict percent-decoding to UTF-8.
 fn file_url_to_path(value: &str) -> std::result::Result<String, String> {
     let url = url::Url::parse(value).map_err(|_| "Invalid URL".to_string())?;
     if url.scheme() != "file" {
@@ -828,7 +744,6 @@ mod tests {
             "http://localhost.evil.com/v1",
             "http://127.0.0.1@h/v1",
             "http://[::2]/v1",
-            // TOML for `http://evil\@localhost/v1`: the backslash ends the host.
             "http://evil\\\\@localhost/v1",
             "http://1.2.3.999/v1",
             "http://xn--a.evil.com/v1",
@@ -887,7 +802,6 @@ mod tests {
             assert_eq!(judge.map(|j| j.agent), agent.home().then_some(agent), "{text}");
             let commented = text.lines().filter(|l| l.starts_with("# ")).count();
             assert_eq!(commented, [0, 0, 0, 3, 5][agent as usize], "{text}");
-            // Uncommented, the placeholders make a valid table of that agent.
             fs::write(&path, text.replace("# ", "")).unwrap();
             assert_eq!(load(&path).unwrap().unwrap().judge.map(|j| j.agent), Some(agent), "{text}");
         }

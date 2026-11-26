@@ -1,6 +1,3 @@
-//! The scan driver: for each home, read new lines of every
-//! transcript in scan order, classify, and append under the append rule.
-
 use std::collections::{BTreeMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -19,33 +16,23 @@ use crate::tail::{self, Cursors, Prefilter};
 
 #[derive(Debug, Default, Serialize)]
 pub struct HomeReport {
-    /// Ledger lines this scan appended (or, on reparse, re-derived).
     pub new_events: Vec<Event>,
     pub files: usize,
     pub io_errors: Vec<String>,
     pub unparsed: usize,
     pub unparsed_samples: Vec<String>,
-    /// Files with a skill marker that yielded no event: the parser canary.
     pub canary: Vec<String>,
-    /// Lines this scan read that passed the prefilter, so might hold a load,
-    /// but are not JSON: no event came from them, even in a file that yielded
-    /// others. Lines too long to read count too.
     pub malformed: usize,
-    /// Loads this scan read whose timestamp does not parse or lies more than a
-    /// day past the scan's clock: no event came from them.
     pub bad_timestamps: usize,
 }
 
 #[derive(Debug, Default)]
 pub struct ScanReport {
     pub homes: BTreeMap<String, HomeReport>,
-    /// The ledger as this scan left it, so a caller need not read it again.
     pub events: Vec<Event>,
 }
 
 impl ScanReport {
-    /// The read errors and the malformed lines of each home. A line is read
-    /// once, so its warning comes once, or again on `--reparse`.
     pub fn warnings(&self) -> Vec<String> {
         let mut out = Vec::new();
         for (home, h) in &self.homes {
@@ -60,7 +47,6 @@ impl ScanReport {
         out
     }
 
-    /// Prints [`ScanReport::warnings`].
     pub fn warn(&self) {
         for w in self.warnings() {
             eprintln!("{w}");
@@ -76,13 +62,10 @@ pub fn roots(cfg: &Config, inv: &Inventory) -> SkillRoots {
     }
 }
 
-/// Incremental scan, or a full reparse when `reparse` is set.
 pub fn scan(cfg: &Config, inv: &Inventory, data: &Path, reparse: bool) -> Result<ScanReport> {
     scan_with(cfg, inv, data, reparse, &adapters::for_agent)
 }
 
-/// [`scan`] with the adapter for each agent supplied by the caller, so a test
-/// can stand in a changed parser rule for `scan --reparse`.
 pub fn scan_with<'a>(
     cfg: &Config,
     inv: &Inventory,
@@ -105,17 +88,12 @@ pub fn scan_with<'a>(
     let mut lines: Vec<Event> = Vec::new();
     let files: Vec<Vec<PathBuf>> = cfg.homes.iter().map(|h| adapter_for(h.agent).files(h)).collect();
     let listed: HashSet<String> = files.iter().flatten().map(|p| p.to_string_lossy().into_owned()).collect();
-    // Agents record their resolved cwd, so compare against the resolved data dir.
     let audit_runs = std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf()).join("audit-runs");
 
-    // A missing or corrupt roots.json is rebuilt from every session on disk.
     let stored = Roots::load(data)?;
     let rebuild = stored.is_none();
     let mut roots_cache = stored.unwrap_or_default();
 
-    // Reparse builds a new ledger that starts with every typed event and every
-    // event whose transcript this run does not parse, then appends the parse to
-    // it under the append rule, as a fresh scan would.
     let mut fresh = Ledger::empty_like(&ledger);
     if reparse {
         for e in ledger.events().iter().filter(|e| e.channel == Channel::Typed || !listed.contains(e.src_file())) {
@@ -127,8 +105,6 @@ pub fn scan_with<'a>(
         let adapter = adapter_for(home.agent);
         let classifier = Classifier { inv, home, homes: &cfg.homes, audit_runs: &audit_runs, now };
         let mut hr = HomeReport::default();
-        // The ledger too, so a coverage.json lost or rebuilt does not backfill
-        // again the loads read from transcripts deleted since.
         let first_scan = !coverage.contains_key(&home.name) && !ledger.events().iter().any(|e| e.home == home.name);
         let need_first = coverage.get(&home.name).is_none_or(|c| c.first_at().is_none());
         let mut earliest: Option<jiff::Timestamp> = None;
@@ -137,15 +113,12 @@ pub fn scan_with<'a>(
         for (i, path) in files.into_iter().enumerate() {
             progress.update(&home.name, i + 1, total);
             let key = path.to_string_lossy().into_owned();
-            // A session's root is stored once its header is first read, so it
-            // survives a parent deleted before the session's first load.
             let unvisited = rebuild || cursors.get(&key).is_none_or(|c| c.line == 0);
             let chunk = match tail::read(&path, cursors.get(&key), &filter) {
                 Ok(c) => c,
                 Err(e) => {
                     hr.io_errors.push(crate::at(&path)(e));
                     if reparse {
-                        // An unreadable transcript is not parsed: its events are kept.
                         for event in ledger.events().iter().filter(|ev| ev.src_file() == key) {
                             fresh.admit(event.clone());
                         }
@@ -153,7 +126,6 @@ pub fn scan_with<'a>(
                     continue;
                 }
             };
-            // After the read, so the header is at least what the read consumed.
             if unvisited {
                 roots_cache.visit(home, &path);
             }
@@ -189,8 +161,6 @@ pub fn scan_with<'a>(
             cursors.insert(key, chunk.cursor);
         }
 
-        // A load read from a transcript older than the recorded start, added
-        // since the home's first scan, moves the start back to it.
         let loaded = hr.new_events.iter().map(|e| e.ts).min();
         if home.agent == Agent::Claude && first_scan {
             let raws = adapters::claude::backfill(home, &inv.known);
@@ -199,7 +169,6 @@ pub fn scan_with<'a>(
         }
 
         let entry = coverage.entry(home.name.clone()).or_default();
-        // The earliest of what is recorded and what this scan read: never later.
         entry.first = [entry.first_at(), earliest, loaded].into_iter().flatten().min().map(|t| t.to_string());
         if hr.io_errors.is_empty() {
             entry.last_scan = Some(jiff::Timestamp::now().to_string());
@@ -213,7 +182,6 @@ pub fn scan_with<'a>(
         ledger.append(&lines)?;
     }
     roots_cache.save(data)?;
-    // Transcripts Claude cleaned up keep no cursor.
     cursors.retain(|k, _| listed.contains(k));
     ledger::write_json(&data.join("cursors.json"), &cursors)?;
     ledger::save_coverage(data, &coverage)?;
@@ -221,8 +189,6 @@ pub fn scan_with<'a>(
     Ok(report)
 }
 
-/// Classifies the raw events read from `path` and admits each to `target`
-/// under the append rule, recording every line it admits in `hr` and `lines`.
 fn admit(
     classifier: &Classifier,
     cache: &mut Roots,
@@ -248,12 +214,10 @@ fn admit(
     }
 }
 
-/// Whether a scan shows the progress line.
 fn should_show_progress(is_tty: bool, elapsed: Duration) -> bool {
     is_tty && elapsed > Duration::from_secs(1)
 }
 
-/// The progress line: one `\r`-rewritten stderr line, cleared when the scan ends.
 struct Progress {
     tty: bool,
     start: Instant,
@@ -277,15 +241,10 @@ impl Drop for Progress {
     }
 }
 
-/// Whether a line holds an adapter's marker; in a file without any event, that trips the canary.
 fn has_canary(chunk: &tail::Chunk) -> bool {
     chunk.lines.iter().any(|(_, l)| adapters::MARKERS.iter().any(|m| l.windows(m.len()).any(|w| w == m.as_bytes())))
 }
 
-/// The earliest `"timestamp"` that parses among the first lines of a transcript: when its
-/// session started, for coverage and the audit. Records are written in time
-/// order except for a Skill result and its meta record, whose timestamps are a
-/// few milliseconds apart.
 pub(crate) fn first_timestamp(path: &Path) -> Option<jiff::Timestamp> {
     tail::head(path)
         .ok()?

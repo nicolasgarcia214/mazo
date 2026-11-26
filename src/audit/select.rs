@@ -1,6 +1,3 @@
-//! Stage-1 selection: the sessions an audit judges, condensed, and the
-//! judge's input for each.
-
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
@@ -13,29 +10,19 @@ use crate::adapters;
 use crate::inventory::git;
 use crate::ledger::{Actor, Agent, Event};
 
-/// The condensed session's cap.
 pub const MAX_CHARS: usize = 60_000;
 
-/// A session the audit judges: the strong load its window starts from, and
-/// the condensed window.
 pub struct Candidate {
     pub event: Event,
     pub condensed: String,
 }
 
 impl Candidate {
-    /// When the session started: its transcript's first timestamp, else the load's.
     pub fn started(&self) -> Timestamp {
         crate::scan::first_timestamp(Path::new(self.event.src_file())).unwrap_or(self.event.ts)
     }
 }
 
-/// Stage-1 selection: root sessions of any agent with a strong
-/// load of `skill` by actor `main` or `headless` and no session in `audited`,
-/// newest first and taken round-robin across projects (cwd), up to `limit`
-/// (`None` takes all). A session is condensed from its earliest strong load
-/// whose transcript is still on disk; one with none left is skipped and takes
-/// no turn.
 pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: Option<usize>) -> Vec<Candidate> {
     type Loads<'a> = Vec<(Timestamp, &'a Event)>;
     let mut sessions: BTreeMap<(Agent, &str), Loads> = BTreeMap::new();
@@ -53,7 +40,6 @@ pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: O
         loads.sort_by_key(|(t, _)| *t);
     }
     sessions.sort_by_key(|loads| std::cmp::Reverse(loads[0].0));
-    // Each project's sessions, newest first.
     let mut projects: Vec<(Option<&str>, VecDeque<Loads>)> = Vec::new();
     for loads in sessions {
         let cwd = loads.iter().find_map(|(_, e)| e.cwd.as_deref());
@@ -62,7 +48,6 @@ pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: O
             None => projects.push((cwd, VecDeque::from([loads]))),
         }
     }
-    // A project's next session that can still be condensed, with its start.
     let next = |queue: &mut VecDeque<Loads>| {
         while let Some(loads) = queue.pop_front() {
             let found = loads.iter().find_map(|(_, e)| {
@@ -75,15 +60,12 @@ pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: O
         }
         None
     };
-    // Round-robin: the n-th newest session of every project comes before any
-    // project's (n+1)-th; projects in the order of their newest session.
     let mut heads: Vec<((Timestamp, Candidate), VecDeque<Loads>)> =
         projects.into_iter().filter_map(|(_, mut queue)| Some((next(&mut queue)?, queue))).collect();
     heads.sort_by_key(|((t, _), _)| std::cmp::Reverse(*t));
     let limit = limit.unwrap_or(usize::MAX);
     let (mut out, mut queues): (Vec<Candidate>, Vec<_>) = heads.into_iter().map(|((_, c), q)| (c, q)).unzip();
     loop {
-        // Lazy, so no queue past the limit gives up a session.
         let room = limit.saturating_sub(out.len());
         let round: Vec<Candidate> = queues.iter_mut().filter_map(|q| next(q).map(|(_, c)| c)).take(room).collect();
         if round.is_empty() {
@@ -95,16 +77,12 @@ pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: O
     out
 }
 
-/// `SKILL.md` as the judge reads it, and the commit it came from.
 #[derive(Debug, PartialEq)]
 pub struct SkillText {
     pub commit: Option<String>,
     pub text: String,
 }
 
-/// `<source>/<skill>/SKILL.md` as of the last commit before `started` that
-/// touched it, or the current file when there is no repository or no earlier
-/// commit.
 pub fn skill_at(source: &Path, skill: &str, started: Timestamp) -> Result<SkillText> {
     let dir = source.join(skill);
     let before = format!("--before={started}");
@@ -123,8 +101,6 @@ pub fn skill_at(source: &Path, skill: &str, started: Timestamp) -> Result<SkillT
     }
 }
 
-/// The judge's input for one session: the skill as it was when the session
-/// started, then the condensed session, each in its frame.
 pub fn input(source: &Path, c: &Candidate) -> Result<(SkillText, String)> {
     let skill = skill_at(source, &c.event.skill, c.started())?;
     let text = format!(

@@ -1,5 +1,3 @@
-//! The self-contained HTML report.
-
 #![allow(clippy::disallowed_methods)]
 
 mod common;
@@ -18,8 +16,6 @@ use mazo::report::{self, Since, UsageArgs};
 use regex::Regex;
 use serde_json::Value;
 
-/// The report fixture skills, committed, with a current grade for unslop and
-/// a grade for goal-plan that a later edit made stale.
 fn repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path();
@@ -35,8 +31,6 @@ fn repo() -> tempfile::TempDir {
     dir
 }
 
-/// Events for inventory skills, a retired skill whose name needs escaping, an
-/// `other` origin and a probe actor, so `usage --all` has rows of every kind.
 fn events() -> Vec<Event> {
     let mut other = event("o1", "plugin:helper", Channel::Tool, "s-o1", &ago(3));
     other.origin = Origin::Other;
@@ -52,7 +46,6 @@ fn events() -> Vec<Event> {
     ]
 }
 
-/// The report fixture's one Claude home.
 fn world(source: &Path) -> World {
     World::new(source, &[("claude", Agent::Claude, "2026-09-10T08:00:00Z")])
 }
@@ -61,21 +54,17 @@ fn page(w: &World, events: &[Event]) -> String {
     html::render(&report::report(&w.input(events), Since::Days(30)))
 }
 
-/// The text of the element with `id`, up to the end of its section.
 fn section<'h>(html: &'h str, id: &str) -> &'h str {
     let start = html.find(&format!("id=\"{id}\"")).unwrap_or_else(|| panic!("no #{id}"));
     let end = html[start..].find("</section>").unwrap();
     &html[start..start + end]
 }
 
-/// No `src` attribute, every `href` an in-page anchor to an existing id,
-/// nothing loaded from outside, inline CSS for both colour schemes.
 fn assert_self_contained(page: &str) {
     let attr = Regex::new(r#"(?i)\s(src|href)\s*=\s*("([^"]*)"|\S)"#).unwrap();
     let ids: BTreeSet<&str> =
         Regex::new(r#"\sid="([^"]*)""#).unwrap().captures_iter(page).map(|c| c.get(1).unwrap().as_str()).collect();
     let mut hrefs = 0;
-    // Attributes live inside tags; escaped text has no `<` to open one.
     let tags = Regex::new(r"<[a-zA-Z][^>]*>").unwrap();
     for c in tags.find_iter(page).flat_map(|t| attr.captures_iter(t.as_str())) {
         assert_eq!(&c[1], "href", "no src attribute: {}", &c[0]);
@@ -94,7 +83,6 @@ fn assert_self_contained(page: &str) {
     assert!(page.contains("color-scheme: light dark"), "both schemes");
 }
 
-/// AC2: every skill of `usage --all --json`, escaped, is in the page.
 #[test]
 fn every_usage_all_skill_appears() {
     let repo = repo();
@@ -114,8 +102,6 @@ fn every_usage_all_skill_appears() {
     assert!(!page.contains("x\"<retired>"), "names are escaped");
 }
 
-/// The usage table's cells are `mazo usage`'s: a project row says so, and
-/// only the global row links to the card.
 #[test]
 fn a_project_row_is_marked_and_unlinked() {
     let repo = repo();
@@ -129,8 +115,6 @@ fn a_project_row_is_marked_and_unlinked() {
     assert!(page.contains("<tr><td>unslop (project)</td>"), "the project row is marked, unlinked");
 }
 
-/// The page's model is the `--json` model: its usage is `usage --all --json`
-/// and each card is `show --json`, so the page cannot drift from either.
 #[test]
 fn the_report_model_serializes_to_the_json_outputs() {
     let repo = repo();
@@ -150,8 +134,6 @@ fn the_report_model_serializes_to_the_json_outputs() {
     }
 }
 
-/// A hostile description, default prompt, real prompt, cwd and src path come
-/// out as text, and the page stays self-contained.
 #[test]
 fn hostile_text_is_escaped() {
     let repo = repo();
@@ -186,7 +168,6 @@ fn hostile_text_is_escaped() {
     assert_self_contained(&page);
 }
 
-/// AC3: nothing outside the file, inline CSS and SVG, both colour schemes.
 #[test]
 fn the_page_is_self_contained() {
     let repo = repo();
@@ -202,8 +183,6 @@ fn the_page_is_self_contained() {
     assert!(unslop.contains("<svg") && unslop.contains("strong 1 weak 0"), "the card histogram: {unslop}");
 }
 
-/// The legend is the help's marks and glyphs, the source the TUI's help
-/// and `mazo usage` share.
 #[test]
 fn the_legend_lists_the_helps_marks() {
     let repo = repo();
@@ -223,8 +202,6 @@ fn the_legend_lists_the_helps_marks() {
     assert_eq!(legend, format!("legend: {}", mazo::help::legend(|_, _| true)));
 }
 
-/// AC4: each missing or stale grade names `/grade <skill>`; a current grade
-/// and a skill outside the inventory do not appear.
 #[test]
 fn grades_to_run_name_the_command() {
     let repo = repo();
@@ -248,7 +225,6 @@ fn grades_to_run_name_the_command() {
     );
 }
 
-/// A config with one Claude home under a private `HOME` and data directory.
 struct Bin {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -282,8 +258,6 @@ fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
-/// AC1: the default output is `<data dir>/report.html`, mode 0600, and a
-/// previous file of any mode is overwritten.
 #[test]
 fn report_writes_the_data_dir_file_with_mode_0600() {
     let b = Bin::new();
@@ -301,8 +275,6 @@ fn report_writes_the_data_dir_file_with_mode_0600() {
     assert!(!stderr(&out).contains("git worktree"));
 }
 
-/// A symlink at `--out` is replaced by the report, not followed: its target
-/// keeps its text and mode.
 #[test]
 fn out_replaces_a_symlink_instead_of_writing_through_it() {
     let b = Bin::new();
@@ -320,8 +292,6 @@ fn out_replaces_a_symlink_instead_of_writing_through_it() {
     assert!(fs::read_to_string(&link).unwrap().starts_with("<!doctype html>"));
 }
 
-/// AC5: `--out` inside a git worktree warns, outside it does not, and
-/// `--open` runs the platform opener on the file.
 #[test]
 fn out_warns_in_a_worktree_and_open_runs_the_opener() {
     let b = Bin::new();
@@ -338,7 +308,6 @@ fn out_warns_in_a_worktree_and_open_runs_the_opener() {
         write(&stub, &format!("#!/bin/sh\necho \"{opener} $@\" > '{}'\n", log.display()));
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    // Relative to mazo's cwd; the opener gets the absolute path.
     let outside = b.root.join("elsewhere/report.html");
     let out = b.mazo(&["report", "--out", "elsewhere/report.html", "--open"]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -347,9 +316,6 @@ fn out_warns_in_a_worktree_and_open_runs_the_opener() {
     assert_eq!(fs::read_to_string(&log).unwrap(), format!("{opener} {}\n", outside.display()));
 }
 
-/// Every time on the page is in the local zone, as `show` prints it: an event
-/// at 20:30 UTC yesterday is 05:30 today in Tokyo, in the events table, the
-/// usage `last`, the card's last use and its histogram alike.
 #[test]
 fn times_are_local_under_a_fixed_zone() {
     let b = Bin::new();
@@ -374,9 +340,6 @@ fn times_are_local_under_a_fixed_zone() {
     assert!(generated.is_match(&page), "generated to the minute");
 }
 
-/// The usage table's audit column marks each skill `✓` when audited, else
-/// `vet` when vetted, else `-`; the card shows the vet verdict, and the audit's date, session count, rates, top three improvements
-/// and curated examples, escaped; an older record is not shown.
 #[test]
 fn the_latest_audit_is_in_the_usage_table_and_the_card() {
     let repo = repo();

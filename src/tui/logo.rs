@@ -1,8 +1,3 @@
-//! The logo: the fanned deck of three cards beside the `mazo` wordmark,
-//! baked from the logo image into half blocks so each cell holds two square
-//! pixels. The cards keep the image's colours; the wordmark takes the
-//! terminal's foreground, so it reads on a dark theme and a light one.
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Stylize};
@@ -12,13 +7,10 @@ use ratatui::widgets::Widget;
 use super::logo_art::{INK, LOGO};
 use crate::theme;
 
-/// What the logo stands for, said beside it.
 pub const TAGLINE: &str = "Make every skill earn its place.";
 
 pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
-/// The colour of the pixel `p`: `None` for none, the foreground
-/// ([`Color::Reset`]) for the wordmark's ink.
 fn colour(p: u32) -> Option<Color> {
     match p {
         0 => None,
@@ -27,7 +19,6 @@ fn colour(p: u32) -> Option<Color> {
     }
 }
 
-/// The full logo, [`Logo::WIDTH`] by [`Logo::HEIGHT`] cells.
 pub struct Logo;
 
 impl Logo {
@@ -36,9 +27,6 @@ impl Logo {
 }
 
 impl Widget for Logo {
-    /// From `area`'s top left, clipped to it; a cell with no pixel is left
-    /// as it was. Ink is only ever a foreground: a background of
-    /// [`Color::Reset`] would be the terminal's background, not its text.
     fn render(self, area: Rect, buf: &mut Buffer) {
         for (y, pair) in (area.y..).zip(LOGO.chunks(2)) {
             for (x, (&top, &bottom)) in (area.x..).zip(pair[0].iter().zip(&pair[1])) {
@@ -59,7 +47,6 @@ impl Widget for Logo {
     }
 }
 
-/// The version, then the tagline.
 pub fn about() -> Line<'static> {
     Line::from(vec![
         Span::raw(VERSION).fg(theme::ACCENT),
@@ -68,7 +55,6 @@ pub fn about() -> Line<'static> {
     ])
 }
 
-/// The logo in one line: the deck edge on, back to front, then the name.
 pub fn mark() -> Line<'static> {
     Line::from(vec![
         Span::raw("▍").fg(Color::Rgb(3, 113, 146)),

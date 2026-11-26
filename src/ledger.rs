@@ -1,5 +1,3 @@
-//! The append-only event ledger: schema, append rule, lock, coverage.
-
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -43,13 +41,11 @@ pub enum Channel {
 }
 
 impl Channel {
-    /// Strong channels feed the headline `sess` column; weak ones never do.
     pub fn strong(self) -> bool {
         matches!(self, Channel::Slash | Channel::Tool | Channel::Typed)
     }
 }
 
-/// The serde name of a unit variant, as the ledger and `--json` write it.
 pub fn name(v: impl Serialize) -> String {
     serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
@@ -70,7 +66,6 @@ pub enum Origin {
     Other,
 }
 
-/// Event schema v1. Field order is the serialised key order.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Event {
     pub v: u32,
@@ -91,7 +86,6 @@ pub struct Event {
 }
 
 impl Event {
-    /// The transcript file named by `src` (`<path>:<line>`).
     pub fn src_file(&self) -> &str {
         self.src.rsplit_once(':').map_or(&self.src, |(f, _)| f)
     }
@@ -104,33 +98,24 @@ pub struct Coverage {
 }
 
 impl Coverage {
-    /// `first` as a timestamp; one that does not parse counts as none, so a
-    /// scan fills it again.
     pub fn first_at(&self) -> Option<jiff::Timestamp> {
         self.first.as_deref()?.parse().ok()
     }
 }
 
-/// The ledger, held under `scan.lock` while a scan or reparse writes it.
 pub struct Ledger {
     dir: PathBuf,
-    /// Last line per id, in first-appearance order of the id.
     events: Vec<Event>,
     index: HashMap<String, usize>,
-    /// Whether a line of the file did not parse, so the next write rewrites it.
     unreadable: bool,
     _lock: Option<File>,
 }
 
 impl Ledger {
-    /// Read-only load: no lock, keeps the last line for each id.
     pub fn load(dir: &Path) -> Result<Ledger> {
         let mut ledger = Ledger::empty(dir);
         let path = dir.join("events.jsonl");
         for (n, event) in jsonl::<Event>(&path)? {
-            // A torn line (crash mid-append), or one from before timestamps were
-            // checked whose `ts` does not parse, is skipped, and the next scan
-            // drops it from the file; `scan --reparse` re-derives its event.
             match event {
                 Some(event) => ledger.keep(event),
                 None => {
@@ -142,7 +127,6 @@ impl Ledger {
         Ok(ledger)
     }
 
-    /// Takes `scan.lock` with a blocking flock, then loads the id set.
     pub fn open_locked(dir: &Path) -> Result<Ledger> {
         let lock = lock(dir)?;
         let mut ledger = Ledger::load(dir)?;
@@ -150,7 +134,6 @@ impl Ledger {
         Ok(ledger)
     }
 
-    /// An empty in-memory ledger for the same directory (reparse builds into it).
     pub fn empty_like(other: &Ledger) -> Ledger {
         Ledger::empty(&other.dir)
     }
@@ -181,9 +164,6 @@ impl Ledger {
         self.index.get(id).map(|&i| &self.events[i])
     }
 
-    /// The append rule. Returns the line to append, if any: a new id, or a
-    /// `path: null` event upgraded with a path, which copies the stored event and
-    /// sets only `path`.
     pub fn admit(&mut self, event: Event) -> Option<Event> {
         let line = match self.get(&event.id) {
             None => event,
@@ -196,8 +176,6 @@ impl Ledger {
         Some(line)
     }
 
-    /// Appends lines admitted by [`Ledger::admit`], or rewrites the file
-    /// without its unreadable lines when it has any.
     pub fn append(&self, lines: &[Event]) -> Result<()> {
         if self.unreadable {
             return self.replace(&self.events);
@@ -208,14 +186,11 @@ impl Ledger {
         append_lines(&self.dir.join("events.jsonl"), to_lines(lines))
     }
 
-    /// Replaces the ledger file with `lines`.
     pub fn replace(&self, lines: &[Event]) -> Result<()> {
         write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes(), 0o666)
     }
 }
 
-/// Takes `<dir>/scan.lock` with a blocking flock, held until the file is
-/// dropped. Every writer of the data directory holds it.
 pub fn lock(dir: &Path) -> Result<File> {
     fs::create_dir_all(dir).map_err(crate::at(dir))?;
     let path = dir.join("scan.lock");
@@ -224,9 +199,6 @@ pub fn lock(dir: &Path) -> Result<File> {
     Ok(lock)
 }
 
-/// Appends whole lines to an append-only log. A crash mid-append leaves a torn
-/// last line; appending to it would make the first new line unreadable too, so
-/// the new lines start on their own.
 pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
     let err = crate::at(path);
     let mut f = OpenOptions::new().create(true).read(true).append(true).open(path).map_err(err)?;
@@ -242,8 +214,6 @@ pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
     Ok(f.sync_data().map_err(err)?)
 }
 
-/// Rebuilt from the transcripts still on disk when the file does not parse,
-/// so a home whose oldest transcripts are gone reports a later start.
 pub fn load_coverage(dir: &Path) -> Result<BTreeMap<String, Coverage>> {
     Ok(read_derived(&dir.join("coverage.json"))?.unwrap_or_default())
 }
@@ -252,15 +222,12 @@ pub fn save_coverage(dir: &Path, coverage: &BTreeMap<String, Coverage>) -> Resul
     write_json(&dir.join("coverage.json"), coverage)
 }
 
-/// State a scan rebuilds from the transcripts, such as cursors, roots and coverage:
-/// `None` when the file is missing or, with a warning, does not parse.
 pub(crate) fn read_derived<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>> {
     Ok(read(path)?.and_then(|bytes| {
         serde_json::from_slice(&bytes).map_err(|e| eprintln!("warning: {}: {e}; rebuilding it", path.inert())).ok()
     }))
 }
 
-/// The bytes of `path`, `None` when it is missing.
 fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -277,11 +244,6 @@ pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     write_atomic(path, &serde_json::to_vec(value).expect("state serialises"), 0o666)
 }
 
-/// Write to a fresh `<path>.new` created with `mode` (less the umask), fsync
-/// it, rename it over `path`, then fsync the parent directory. A crash leaves
-/// either the old or the new file, never a truncated one; once this returns
-/// `Ok` the new file survives power loss. A symlink at either path is
-/// replaced, never followed.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".new");
@@ -298,10 +260,6 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     Ok(fs::File::open(parent).and_then(|d| d.sync_all()).map_err(crate::at(parent))?)
 }
 
-/// Each non-blank line of the JSONL file at `path`, numbered from 1, parsed as
-/// `T` or `None` when it does not parse; empty when the file is missing. Lines
-/// are split as bytes, so a torn write that cuts a UTF-8 character costs that
-/// line, not the file.
 pub fn jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<(usize, Option<T>)>> {
     let file = match File::open(path) {
         Ok(f) => f,

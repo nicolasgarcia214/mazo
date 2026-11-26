@@ -1,6 +1,3 @@
-//! Incremental JSONL reading: resume offsets, partial-line
-//! safety, and the byte prefilter that skips almost every line.
-
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
@@ -18,27 +15,19 @@ pub struct Cursor {
     pub dev: u64,
     pub ino: u64,
     pub offset: u64,
-    /// Lines before `offset`, so `src` can name a line without recounting.
     pub line: u64,
-    /// A hash of the [`WINDOW`] bytes before `offset`, so a file rewritten in
-    /// place is read again from the start.
     pub window: u64,
 }
 
 pub type Cursors = BTreeMap<String, Cursor>;
 
-/// How far before a cursor's offset its file must be unchanged to resume.
 const WINDOW: u64 = 4 << 10;
 
-/// The longest line kept. Real transcript lines reach a few MB when a tool
-/// returns a large output; a longer one is skipped as malformed, not buffered.
 const MAX_LINE: u64 = 64 << 20;
 
-/// Lines that mention any skill marker, the source root or a home's skills dir.
 pub struct Prefilter(Regex);
 
 impl Prefilter {
-    /// Generic markers, beside each adapter's own.
     const MARKERS: [&'static str; 4] = ["\"Skill\"", "\"commandName\"", "SKILL.md", "/skills/"];
 
     pub fn new<'a>(extra: impl IntoIterator<Item = &'a str>) -> Prefilter {
@@ -53,19 +42,12 @@ impl Prefilter {
     }
 }
 
-/// What one read of a file produced.
 pub struct Chunk {
-    /// `(1-based line number, bytes without the newline)` for lines that pass the prefilter.
     pub lines: Vec<(u64, Vec<u8>)>,
-    /// Complete lines longer than [`MAX_LINE`], skipped unread.
     pub oversized: usize,
-    /// The cursor to store: it only ever advances past a `\n`.
     pub cursor: Cursor,
 }
 
-/// Reads complete lines of `path` from the stored cursor when it still applies
-/// (same device and inode, file at least as long, same bytes before it), else
-/// from the start.
 pub fn read(path: &Path, stored: Option<&Cursor>, filter: &Prefilter) -> io::Result<Chunk> {
     let file = open(path)?;
     let meta = file.metadata()?;
@@ -86,7 +68,7 @@ pub fn read(path: &Path, stored: Option<&Cursor>, filter: &Prefilter) -> io::Res
         if buf.len() as u64 > MAX_LINE && buf.last() != Some(&b'\n') {
             match skip_line(&mut reader)? {
                 Some(rest) => n += rest,
-                None => break, // a long line still being written
+                None => break,
             }
             cursor.offset += n as u64;
             cursor.line += 1;
@@ -94,7 +76,7 @@ pub fn read(path: &Path, stored: Option<&Cursor>, filter: &Prefilter) -> io::Res
             continue;
         }
         if n == 0 || buf.last() != Some(&b'\n') {
-            break; // EOF, or a line still being written
+            break;
         }
         cursor.offset += n as u64;
         cursor.line += 1;
@@ -107,8 +89,6 @@ pub fn read(path: &Path, stored: Option<&Cursor>, filter: &Prefilter) -> io::Res
     Ok(Chunk { lines, oversized, cursor })
 }
 
-/// Consumes the rest of a line without keeping it: the bytes through its
-/// `\n`, or `None` at EOF before one.
 fn skip_line(reader: &mut impl BufRead) -> io::Result<Option<usize>> {
     let mut n = 0;
     loop {
@@ -125,7 +105,6 @@ fn skip_line(reader: &mut impl BufRead) -> io::Result<Option<usize>> {
     }
 }
 
-/// A hash of the [`WINDOW`] bytes of `file` before `offset`.
 fn window(file: &File, offset: u64) -> io::Result<u64> {
     let start = offset.saturating_sub(WINDOW);
     let mut buf = vec![0; (offset - start) as usize];
@@ -134,7 +113,6 @@ fn window(file: &File, offset: u64) -> io::Result<u64> {
     Ok(u64::from_be_bytes(digest[..8].try_into().expect("a SHA-1 digest is 20 bytes")))
 }
 
-/// Opens a regular file, non-blocking so a FIFO is refused rather than waited on.
 fn open(path: &Path) -> io::Result<File> {
     let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
     if !file.metadata()?.is_file() {
@@ -143,14 +121,10 @@ fn open(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// Line 1 of a file, which carries the Codex and Pi session header.
 pub fn first_line(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(head(path)?.next())
 }
 
-/// The complete lines of a file from the start, one at a time, ending at a
-/// line over [`MAX_LINE`], an unterminated last line or a read error. A Pi header names its parent's
-/// file, so this reads only a regular file and bounded lines.
 pub fn head(path: &Path) -> io::Result<impl Iterator<Item = Vec<u8>>> {
     let mut reader = BufReader::new(open(path)?);
     Ok(std::iter::from_fn(move || {
@@ -195,7 +169,7 @@ mod tests {
         std::fs::remove_file(&p).unwrap();
         std::fs::write(&p, "SKILL.md one\nSKILL.md two\n").unwrap();
         let mut c = a.cursor;
-        c.ino = 0; // a different inode, as after replacement
+        c.ino = 0;
         let b = read(&p, Some(&c), &f).unwrap();
         assert_eq!(b.lines.len(), 2);
     }
@@ -207,7 +181,6 @@ mod tests {
         let f = Prefilter::new([]);
         std::fs::write(&p, "SKILL.md a\n").unwrap();
         let a = read(&p, None, &f).unwrap();
-        // Truncated and rewritten through the same inode, now longer.
         std::fs::write(&p, "SKILL.md one\nSKILL.md two\n").unwrap();
         let b = read(&p, Some(&a.cursor), &f).unwrap();
         assert_eq!(b.cursor.ino, a.cursor.ino);

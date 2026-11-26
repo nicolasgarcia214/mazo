@@ -1,6 +1,3 @@
-//! Codex rollouts: `$name` expansions and shell reads of skill
-//! files, keyed by a hash of the record payload so fork copies collapse.
-
 use std::path::Path;
 
 use serde_json::Value;
@@ -12,7 +9,6 @@ use crate::tail::Chunk;
 
 pub struct Codex;
 
-/// The opening of a `$name` expansion.
 pub const MARKER: &str = "<skill>";
 
 impl Adapter for Codex {
@@ -27,12 +23,9 @@ impl Adapter for Codex {
         }
         for (line, bytes) in &chunk.lines {
             let Ok(rec) = serde_json::from_slice::<Value>(bytes) else { continue };
-            // Only the model-facing record counts: `event_msg` duplicates,
-            // `compacted` history and the session_meta copies in forks do not.
             if rec["type"] != "response_item" {
                 continue;
             }
-            // A missing timestamp reaches classify, which counts the load it drops.
             let ts = rec["timestamp"].as_str().unwrap_or_default();
             let payload = &rec["payload"];
             let found = match payload["type"].as_str() {
@@ -49,13 +42,12 @@ impl Adapter for Codex {
                             Err(()) => opaque = true,
                         }
                     }
-                    // One record counts once, however many calls in it are opaque.
                     if opaque && roots.names_skill_doc(input, session.cwd.as_deref()) {
                         out.unparsed.push(input.to_string());
                     }
                     found
                 }
-                _ => continue, // `*_output` records and developer listings land here
+                _ => continue,
             };
             if found.is_empty() {
                 continue;
@@ -85,10 +77,6 @@ impl Adapter for Codex {
     }
 }
 
-/// What the judge keeps of a record: the user's turns from
-/// `event_msg`, and from `response_item` the assistant's text, tool calls and
-/// tool results. `response_item` user messages repeat the turns or carry
-/// `<skill>` bodies, so they keep nothing.
 fn render(v: &Value) -> Vec<String> {
     if let Some(text) = user_turn(v) {
         return vec![format!("user: {text}")];
@@ -108,9 +96,6 @@ fn render(v: &Value) -> Vec<String> {
     }
 }
 
-/// An `event_msg` `user_message`, or the `item_completed`
-/// `UserMessage` that replaced it from 2026-08. A bare `$name` gives way to the
-/// turn before it, and a `<skill>` injection is never the user's.
 fn user_turn(v: &Value) -> Option<String> {
     if v["type"] != "event_msg" {
         return None;
@@ -126,14 +111,12 @@ fn user_turn(v: &Value) -> Option<String> {
     (!bare && !text.starts_with(MARKER)).then_some(text)
 }
 
-/// The session a Codex `session_meta` header line describes; `None` for any other line.
 pub fn session_of_header(line: &[u8]) -> Option<Session> {
     parse_header(line).map(|h| h.session)
 }
 
 struct Header {
     session: Session,
-    /// A guardian review replays other sessions' transcripts as evidence.
     guardian: bool,
 }
 
@@ -163,7 +146,6 @@ fn parse_header(line: &[u8]) -> Option<Header> {
     })
 }
 
-/// One event found in a record, before it gets the record's hash.
 struct Found {
     index: String,
     skill: String,
@@ -172,8 +154,6 @@ struct Found {
     cwd: Option<String>,
 }
 
-/// `$name` expansions: `input_text` blocks starting
-/// `<skill>\n<name>NAME</name>\n<path>PATH</path>`, indexed by content position.
 fn slash_blocks(payload: &Value) -> Vec<Found> {
     let Some(content) = payload["content"].as_array() else {
         return Vec::new();
@@ -200,20 +180,16 @@ fn slash_blocks(payload: &Value) -> Vec<Found> {
         .collect()
 }
 
-/// A shell command and the directory it ran in.
 struct Call {
     cmd: String,
     workdir: Option<String>,
 }
 
-/// A `function_call` whose JSON `arguments` carry a string `cmd`.
 fn function_call(payload: &Value) -> Option<Call> {
     let args: Value = serde_json::from_str(payload["arguments"].as_str()?).ok()?;
     Some(Call { cmd: args["cmd"].as_str()?.to_string(), workdir: args["workdir"].as_str().map(str::to_string) })
 }
 
-/// Skill files that one command loads, indexed `<call>.<file>` by position in
-/// the command's read list.
 fn read_events(roots: &SkillRoots, session: &Session, call: usize, c: &Call, unparsed: &mut Vec<String>) -> Vec<Found> {
     let workdir = match (&c.workdir, &session.cwd) {
         (Some(w), Some(cwd)) => Some(config::resolve(Path::new(cwd), w).to_string_lossy().into_owned()),
@@ -233,13 +209,8 @@ fn read_events(roots: &SkillRoots, session: &Session, call: usize, c: &Call, unp
         .collect()
 }
 
-// ---- The JavaScript of an `exec` input -------------------------------------
-
 const CALLEE: &[u8] = b"tools.exec_command";
 
-/// The `cmd` and `workdir` of each `tools.exec_command({...})` call, in source
-/// order. `Err` marks a call whose `cmd` is not a string literal or a template
-/// literal without `${…}`, so the command it runs is unknown.
 fn exec_calls(src: &str) -> Vec<Result<Call, ()>> {
     let s = src.as_bytes();
     let mut out = Vec::new();
@@ -262,7 +233,6 @@ fn exec_calls(src: &str) -> Vec<Result<Call, ()>> {
     out
 }
 
-/// Reads the object literal at `s[i] == '{'`; returns the call and the end.
 fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
     let mut cmd: Option<Result<String, ()>> = None;
     let mut workdir = None;
@@ -271,7 +241,6 @@ fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
         let entry_start = i;
         i = skip_ws(s, i);
         match s.get(i) {
-            // `)` or `]` here means the object was never closed: stop, do not spin.
             None | Some(b')') | Some(b']') => break,
             Some(b'}') => {
                 i += 1;
@@ -296,7 +265,7 @@ fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
                 }
                 Some(String::from_utf8_lossy(&s[start..i]).into_owned())
             }
-            _ => None, // a spread or computed key: skip the entry
+            _ => None,
         };
         i = skip_ws(s, i);
         let value = if s.get(i) == Some(&b':') {
@@ -306,7 +275,7 @@ fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
             v
         } else {
             i = skip_expr(s, i);
-            None // shorthand `{cmd}` or a skipped entry
+            None
         };
         match key.as_deref() {
             Some("cmd") => cmd = Some(value.ok_or(())),
@@ -314,7 +283,7 @@ fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
             _ => {}
         }
         if i == entry_start {
-            break; // malformed input that no rule consumes
+            break;
         }
     }
     let call = match cmd {
@@ -324,21 +293,17 @@ fn object_call(s: &[u8], mut i: usize) -> (Result<Call, ()>, usize) {
     (call, i)
 }
 
-/// A string or substitution-free template literal at `i`, decoded, else `None`;
-/// either way returns where the value expression ends.
 fn literal(s: &[u8], i: usize) -> (Option<String>, usize) {
     let end = skip_expr(s, i);
     match s.get(i) {
         Some(b'"' | b'\'' | b'`') => {
             let (v, lit_end) = string_lit(s, i);
-            if skip_ws(s, lit_end) == end { (v, end) } else { (None, end) } // `"a" + b`
+            if skip_ws(s, lit_end) == end { (v, end) } else { (None, end) }
         }
         _ => (None, end),
     }
 }
 
-/// Decodes the string or template literal at `i`; `None` for a template with
-/// `${…}`. Returns the index after the closing quote.
 fn string_lit(s: &[u8], i: usize) -> (Option<String>, usize) {
     let q = s[i];
     let mut out = Vec::new();
@@ -361,7 +326,6 @@ fn string_lit(s: &[u8], i: usize) -> (Option<String>, usize) {
     (None, j)
 }
 
-/// Decodes the escape after a backslash at `s[j - 1]`; returns the next index.
 fn unescape(s: &[u8], j: usize, out: &mut Vec<u8>) -> usize {
     let Some(&c) = s.get(j) else { return j };
     let simple = match c {
@@ -399,7 +363,6 @@ fn unescape(s: &[u8], j: usize, out: &mut Vec<u8>) -> usize {
         }
         b'u' => {
             let Some(hi) = hex(j + 1, j + 5) else { return j + 1 };
-            // A surrogate pair is two `\uXXXX` escapes.
             if (0xD800..0xDC00).contains(&hi)
                 && s.get(j + 5..j + 7) == Some(b"\\u")
                 && let Some(lo @ 0xDC00..0xE000) = hex(j + 7, j + 11)
@@ -411,14 +374,12 @@ fn unescape(s: &[u8], j: usize, out: &mut Vec<u8>) -> usize {
             j + 5
         }
         _ => {
-            // Any other escaped character stands for itself, whole UTF-8 sequence included.
             out.push(c);
             j + 1
         }
     }
 }
 
-/// Skips one token: a whole string, template or comment, else one byte.
 fn skip_token(s: &[u8], i: usize) -> usize {
     match (s[i], s.get(i + 1)) {
         (b'"' | b'\'' | b'`', _) => string_lit(s, i).1,
@@ -428,7 +389,6 @@ fn skip_token(s: &[u8], i: usize) -> usize {
     }
 }
 
-/// Skips an expression up to the `,`, `}`, `)` or `]` that ends it at depth 0.
 fn skip_expr(s: &[u8], mut i: usize) -> usize {
     let mut depth = 0usize;
     while i < s.len() {
@@ -443,11 +403,8 @@ fn skip_expr(s: &[u8], mut i: usize) -> usize {
     i
 }
 
-/// Skips a `{…}` group starting at `s[i] == '{'`; returns the index after `}`.
-/// Templates and `${…}` inside it go on a stack, not the call stack, so no
-/// nesting depth can overflow it.
 fn skip_braces(s: &[u8], mut i: usize) -> usize {
-    let mut open = Vec::new(); // each unclosed `{` or `` ` ``, innermost last
+    let mut open = Vec::new();
     while i < s.len() {
         match (open.last() == Some(&b'`'), s[i]) {
             (true, b'`') | (false, b'}') => {
@@ -500,7 +457,6 @@ mod tests {
 
     #[test]
     fn deep_template_nesting_does_not_overflow_the_stack() {
-        // Each `${` once cost a recursion, so 120k levels aborted `mazo scan`.
         let deep = "`${".repeat(120_000);
         assert_eq!(calls(&format!("// SKILL.md\n{deep}")), vec![]);
         assert_eq!(calls(&format!("tools.exec_command({{cmd: {deep}")), vec![None]);
@@ -510,7 +466,6 @@ mod tests {
 
     #[test]
     fn unclosed_objects_end_instead_of_spinning() {
-        // A missing `}` once made the scanner loop forever while holding scan.lock.
         let r = exec_calls("tools.exec_command({cmd: 'cat /s/a/SKILL.md')");
         assert_eq!(r.len(), 1);
         let r = exec_calls("tools.exec_command({a: [1, 2]], cmd: 'x'})");
@@ -533,7 +488,6 @@ mod tests {
             calls("tools.exec_command({cmd: '\\u00e9\\u{1F600}\\uD83D\\uDE00\\x41'})"),
             vec![Some(("é😀😀A".into(), None))]
         );
-        // A callee named inside a string or comment is not a call.
         assert_eq!(calls("// tools.exec_command({cmd:'x'})\nlog(\"tools.exec_command({cmd:'y'})\")"), vec![]);
         assert_eq!(
             calls("tools.exec_command({cmd: `x`, opts: {a: [1, ')']}, workdir: \"/d\"})"),

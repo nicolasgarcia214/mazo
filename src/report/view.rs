@@ -1,5 +1,3 @@
-//! The ledger as reports see it, and the windows they count over.
-
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -11,25 +9,17 @@ use crate::ctx::Contexts;
 use crate::inventory::Scope;
 use crate::ledger::{Actor, Agent, Channel, Event, Origin};
 
-/// The collapse key, within one skill.
 pub(super) type Key<'e> = (Agent, &'e str, Channel);
 
-/// The ledger as reports see it: parsed timestamps, local days, the
-/// report-time authoring sessions, and the events of project skills.
 pub(super) struct View<'a> {
     pub(super) input: &'a Input<'a>,
     today: Date,
     authoring_sessions: HashSet<(Agent, &'a str)>,
-    /// The ids of the events whose path is in a project skill's directory.
     project: HashSet<&'a str>,
-    /// The source repository's GitHub URL and HEAD, read once a card needs them.
     pub(super) upstream: OnceCell<Option<(String, String)>>,
-    /// What each skill's ctx reads, read once a row or card needs it.
     ctx: OnceCell<Contexts>,
 }
 
-/// Which events a report counts. The default is canonical origin, no probe
-/// actor and no authoring read.
 #[derive(Default)]
 pub(super) struct Filter {
     all: bool,
@@ -44,12 +34,10 @@ impl From<&UsageArgs> for Filter {
     }
 }
 
-/// `t`'s day in the report zone.
 pub(super) fn day(input: &Input, t: Timestamp) -> Date {
     t.to_zoned(input.tz.clone()).date()
 }
 
-/// `today`, `2d ago`.
 pub(super) fn relative(input: &Input, t: Timestamp) -> String {
     match (day(input, input.now) - day(input, t)).get_days() {
         ..=0 => "today".into(),
@@ -60,8 +48,6 @@ pub(super) fn relative(input: &Input, t: Timestamp) -> String {
 impl<'a> View<'a> {
     pub(super) fn new(input: &'a Input<'a>) -> View<'a> {
         let today = day(input, input.now);
-        // `policy.authoring_skills` matched on the name after the last `:`, so a
-        // plugin's `skill-creator:skill-creator` counts.
         let authoring = &input.cfg.policy.authoring_skills;
         let authoring_sessions = input
             .events
@@ -80,7 +66,6 @@ impl<'a> View<'a> {
         self.ctx.get_or_init(|| Contexts::new(self.input.cfg, self.input.inv))
     }
 
-    /// A project skill's event is one in its directory; every other is global.
     pub(super) fn scope(&self, e: &Event) -> Scope {
         if self.project.contains(e.id.as_str()) { Scope::Project } else { Scope::Global }
     }
@@ -96,14 +81,11 @@ impl<'a> View<'a> {
         }
     }
 
-    /// A weak event is authoring when stored so (cwd) or when its
-    /// root session holds a strong authoring-skill event anywhere in the ledger.
     fn is_authoring(&self, e: &Event) -> bool {
         !e.channel.strong() && (e.authoring || self.authoring_sessions.contains(&(e.agent, e.session.as_str())))
     }
 
     fn kept(&self, e: &Event, f: &Filter) -> bool {
-        // A project skill's event is canonical whatever the scan, which knows no project, made it.
         let canonical = e.origin == Origin::Canonical || self.scope(e) == Scope::Project;
         (f.all || (canonical && e.actor != Actor::Probe))
             && (f.authoring || !self.is_authoring(e))
@@ -111,7 +93,6 @@ impl<'a> View<'a> {
             && f.channel.is_none_or(|c| e.channel == c)
     }
 
-    /// Filtered events of one skill (all skills when `skill` is None) at or after `start`.
     pub(super) fn select<'s>(
         &'s self,
         f: &'s Filter,
@@ -124,14 +105,11 @@ impl<'a> View<'a> {
             .filter(move |e| skill.is_none_or(|s| e.skill == s) && start.is_none_or(|s| e.ts >= s) && self.kept(e, f))
     }
 
-    /// Skills with a strong event at or after `start`, under the default filter.
     pub(super) fn used(&self, start: Option<Timestamp>) -> BTreeSet<&'a str> {
         let f = Filter::default();
         self.select(&f, None, start).filter(|e| e.channel.strong()).map(|e| e.skill.as_str()).collect()
     }
 
-    /// Distinct (agent, session) pairs with a strong event on a local day
-    /// `days` ago, today being 0.
     pub(super) fn strong_sessions<'s>(
         &self,
         events: impl Iterator<Item = &'s Event>,
@@ -142,7 +120,6 @@ impl<'a> View<'a> {
         pairs.map(|e| (e.agent, e.session.as_str())).collect::<HashSet<_>>().len()
     }
 
-    /// Distinct collapse keys of strong events per local day, for the last `days` days.
     pub(super) fn daily_strong<'s>(&self, events: impl Iterator<Item = &'s Event>, days: i64) -> Vec<usize> {
         let mut per_day: Vec<HashSet<Key>> = vec![HashSet::new(); days as usize];
         for e in events.filter(|e| e.channel.strong()) {
@@ -154,9 +131,6 @@ impl<'a> View<'a> {
         per_day.iter().map(HashSet::len).collect()
     }
 
-    /// Distinct (agent, session) pairs with a strong event per bucket of
-    /// `since`'s [`Unit`], from the bucket of the window's start (of the first
-    /// event, for all time) to today's.
     pub(super) fn buckets<'s>(&self, events: impl Iterator<Item = &'s Event>, since: Since) -> Vec<Bucket> {
         let unit = Unit::of(since);
         let mut per: BTreeMap<Date, HashSet<(Agent, &str)>> = BTreeMap::new();
@@ -175,8 +149,6 @@ impl<'a> View<'a> {
         out
     }
 
-    /// Per home: the effective window start, the later of the report window
-    /// and the home's coverage, with the earliest typed event.
     pub(super) fn coverage(&self, start: Option<Timestamp>) -> Vec<(String, String)> {
         self.input
             .cfg
@@ -189,7 +161,6 @@ impl<'a> View<'a> {
                         None => "no transcripts".to_string(),
                         Some(first) => {
                             let from = start.map_or(first, |s| s.max(first));
-                            // Typed events reach back before the first transcript.
                             let typed = self
                                 .input
                                 .events
@@ -215,9 +186,6 @@ impl<'a> View<'a> {
     }
 }
 
-/// What one bar of a card's activity chart spans: a day over 30 days or
-/// fewer, an ISO week from Monday over a longer window, a calendar month
-/// over all time.
 #[derive(Clone, Copy)]
 enum Unit {
     Day,
@@ -242,7 +210,6 @@ impl Unit {
         }
     }
 
-    /// The first day of the bucket holding `d`.
     fn start(self, d: Date) -> Date {
         match self {
             Unit::Day => d,
@@ -259,7 +226,6 @@ impl Unit {
         }
     }
 
-    /// `13`, `W42`, `Oct`: short enough to sit under a chart's bar.
     fn label(self, d: Date) -> String {
         match self {
             Unit::Day => d.strftime("%d").to_string(),
@@ -269,24 +235,17 @@ impl Unit {
     }
 }
 
-/// What a bar of a card's activity chart over `since` spans, in the plural:
-/// `days`, `weeks` or `months`.
 pub fn buckets_of(since: Since) -> &'static str {
     Unit::of(since).plural()
 }
 
-/// A bar of a card's activity chart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bucket {
     pub label: String,
-    /// Distinct (agent, session) pairs with a strong event in the bucket.
     pub sessions: usize,
-    /// Whether the bucket holds today, so is still filling.
     pub partial: bool,
 }
 
-/// `label: home window · …`: the coverage note under `usage` and `unused`;
-/// `label: no home` for none.
 pub fn coverage_note<'s>(label: &str, homes: impl IntoIterator<Item = (&'s String, &'s String)>) -> String {
     let parts: Vec<String> = homes.into_iter().map(|(h, t)| format!("{h} {t}")).collect();
     if parts.is_empty() {

@@ -1,6 +1,3 @@
-//! The dialogs over the screen: what each asks, the change `y` applies, and
-//! how a dialog and the help overlay are drawn.
-
 use std::sync::mpsc;
 
 use ratatui::Frame;
@@ -22,46 +19,27 @@ use crate::render::PathExt;
 use crate::store;
 use crate::theme;
 
-/// A change `y` applies at once, through its CLI command's code path.
 pub(super) enum Act {
     Retire(String),
-    /// The plan the dialog shows, applied as shown.
     Sync(Plan),
 }
 
-/// What `y` does in a dialog.
 pub(super) enum Ask {
     Act(Act),
-    /// Starts the job.
     Audit(String),
-    /// Starts the job: one store skill, or every one.
     Update(Option<String>),
-    /// Stops the running job and quits; any other key reopens the dialog
-    /// it interrupted, still unanswered.
     Quit(Option<Box<Dialog>>),
-    /// The add source typed so far; Enter starts the job, Esc cancels.
     Source(String),
-    /// The add job's picker; its selection, none when cancelled, is the reply.
     Pick(Picker, mpsc::Sender<Vec<String>>),
-    /// The add job's y/N question and its default: Enter takes it, `y` and
-    /// `n` answer, and Esc or quitting is No.
     Answer(mpsc::Sender<bool>, bool),
-    /// The help overlay, its lines scrolled to this first one: `j`/`k` and
-    /// `PgUp`/`PgDn` scroll it, and `Esc` or `H` closes it.
     Help(usize),
 }
 
-/// Lines over the screen that take the next key: `y` does `ask`, any other
-/// key closes it; a source, a picker, an answer or the help takes keys of
-/// its own.
 pub(super) struct Dialog {
     pub(super) lines: Vec<String>,
     pub(super) ask: Option<Ask>,
 }
 
-/// Applies the confirmed sync `plan` under the data lock, as `mazo sync`
-/// does, or refuses when a re-plan on the inventory read under it differs
-/// or is refused itself.
 fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<String>> {
     let _lock = ledger::lock(&d.dir)?;
     let inv = store::inventory(d.cfg.source.as_deref(), &d.dir)?;
@@ -74,8 +52,6 @@ fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<String>> {
 }
 
 impl App {
-    /// The dialog that asks to audit `skill` under the cap `mazo audit` would
-    /// use, or shows why it would refuse.
     pub(super) fn audit(&self, skill: String) -> Dialog {
         if let Some(busy) = self.one_job() {
             return busy;
@@ -96,17 +72,12 @@ impl App {
         }
     }
 
-    /// The dialog that refuses a second job while one runs.
     pub(super) fn one_job(&self) -> Option<Dialog> {
         let job = self.running()?;
         let lines = vec![format!("the {} of {} is running; one job at a time", job.verb, job.target)];
         Some(Dialog { lines, ask: None })
     }
 
-    /// The dialog that asks to update `skill`, or every store skill, as
-    /// `mazo update` does, or shows why `skill` is not updatable. Each
-    /// re-vet's verdict is asked in a dialog; with no `--force`, a security
-    /// finding still refuses.
     pub(super) fn update(&self, skill: Option<String>) -> Dialog {
         if let Some(busy) = self.one_job() {
             return busy;
@@ -144,8 +115,6 @@ impl App {
         Dialog { lines, ask: Some(Ask::Update(skill)) }
     }
 
-    /// Opens the y/N dialog that retires `skill`, unless a job is running:
-    /// the plan is of the inventory the job may change.
     pub(super) fn retire(&mut self, skill: String) {
         if let Some(busy) = self.one_job() {
             self.dialog = Some(busy);
@@ -161,8 +130,6 @@ impl App {
         self.dialog = Some(Dialog { lines, ask: Some(Ask::Act(Act::Retire(skill))) });
     }
 
-    /// Runs `act` through the CLI command's code path, never forced, then
-    /// re-reads the data. The lines it reports.
     pub(super) fn act(&mut self, act: Act) -> Vec<String> {
         self.clear = true;
         let d = &self.data;
@@ -187,8 +154,6 @@ impl App {
 }
 
 impl Dialog {
-    /// The title and colour of its border: red for what removes or stops,
-    /// yellow for a verdict to answer, the accent for the rest.
     fn frame(&self) -> (&'static str, Color) {
         match &self.ask {
             Some(Ask::Act(Act::Retire(_))) => ("retire", theme::BAD),
@@ -205,8 +170,6 @@ impl Dialog {
     }
 }
 
-/// `dialog` in a rounded box centred over `area`, sized to its lines; a
-/// picker takes the whole area less a margin.
 pub(super) fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
     let (title, colour) = dialog.frame();
     let block = Block::bordered()
@@ -221,15 +184,12 @@ pub(super) fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
         frame.render_widget(block, modal);
         return;
     }
-    // Borders and padding take 6 columns and 4 rows.
     let raw: Vec<&str> = dialog.lines.iter().flat_map(|l| l.lines()).collect();
     let mut wide = raw.iter().map(|l| l.chars().count()).max().unwrap_or(0);
     if let Some(Ask::Source(source)) = &dialog.ask {
         wide = wide.max(source.chars().count() + 3);
     }
     let width = (wide as u16 + 6).clamp(area.width.min(48), area.width);
-    // A line wider than the screen wraps rather than losing its end; a
-    // question's first line, its headline, is bold.
     let mut lines: Vec<Line> = Vec::new();
     for (i, line) in raw.iter().enumerate() {
         for piece in wrap(line, width.saturating_sub(6).into()) {
@@ -258,10 +218,6 @@ pub(super) fn draw_dialog(frame: &mut Frame, dialog: &Dialog, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), modal);
 }
 
-/// The help `lines` in a rounded box over `area` less a margin, wrapped to
-/// its width from the line `scroll`, which is clamped to the last page; the
-/// page's height is returned. A heading is bold in the accent, an entry's
-/// name before its two spaces is in the accent, and a question is bold.
 pub(super) fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize, area: Rect) -> usize {
     let modal = area.inner(Margin::new(2, 1));
     let block = Block::bordered()
@@ -272,7 +228,6 @@ pub(super) fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize,
     frame.render_widget(Clear, modal);
     let mut inner = block.inner(modal);
     frame.render_widget(block, modal);
-    // On a tall screen the logo heads the help, the version and tagline under it.
     if inner.height >= 4 * (Logo::HEIGHT + 2) && inner.width >= Logo::WIDTH {
         let [art, at, _, rest] = Layout::vertical([
             Constraint::Length(Logo::HEIGHT),
@@ -310,8 +265,6 @@ pub(super) fn draw_help(frame: &mut Frame, lines: &[String], scroll: &mut usize,
     page
 }
 
-/// `line` broken at spaces into lines of at most `width` columns, each
-/// continuation indented two columns past its leading spaces.
 fn wrap(line: &str, width: usize) -> Vec<String> {
     let body = line.trim_start();
     let indent = line.len() - body.len();
@@ -331,14 +284,11 @@ fn wrap(line: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// The dialog that takes an add's source.
 pub(super) fn source_dialog(source: String) -> Dialog {
     let lines = vec!["add a skill from a local path, a git URL or owner/repo[/path]:".into()];
     Dialog { lines, ask: Some(Ask::Source(source)) }
 }
 
-/// The source as typed, `> source_`, cut to its last `width` columns with
-/// `…` marking the cut, so the cursor stays in view.
 fn typed_line(source: &str, width: usize) -> String {
     let line = format!("> {source}_");
     let n = line.chars().count();
