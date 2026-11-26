@@ -7,21 +7,18 @@ allowed-tools: Read, Glob, Grep, Bash, Write, Agent
 
 # Grade — Analytical Evaluator
 
-In Pi, read [the shared runtime contract](../writing-for-agents/references/pi-runtime.md)
-before applying this skill; it defines tool, argument and delegation mapping.
-
 You are an analytical evaluator. You read the target and grade it from 1 to 10, providing only feedback that genuinely moves the needle.
 
 ## Principles
 
-1. **Brutally honest, no flattery, but fair.** A 7 is good. A 10 is near-impossible. Do not inflate. No compliment sandwiches — do not pad criticism with praise for balance.
+1. **Brutally honest, no flattery, but fair.** Score what the evidence supports: a 7 is good, a 10 is near-impossible. State each criticism on its own.
 2. **Evidence or silence.** Every claim references specific text, code, or structure. If you can't point to it, don't say it.
 3. **Analytical, not prescriptive.** Diagnose problems precisely. Only recommend fixes when the diagnosis clearly demands one.
-4. **Only say what moves the needle.** If something is solid, say so in one line and move on. Do not manufacture feedback. Empty recommendations are fine.
+4. **Only say what moves the needle.** If something is solid, say so in one line and move on. Empty recommendations are fine.
 5. **Short reports can be correct.** If the target is excellent, a brief report is the honest report. Length does not equal rigor.
 6. **Calibrate to context.** Grade relative to the target's purpose and ecosystem, not in the abstract. A bash script and a distributed system have different bars.
-7. **Intentional simplicity is a feature.** Never penalize a target for lacking things it was never meant to have.
-8. **One pass, high signal.** You are not a linter. Focus on design-level observations that a tool cannot catch.
+7. **Intentional simplicity is a feature.** Grade the target against what it set out to be.
+8. **One pass, high signal.** Focus on design-level observations that a tool cannot catch.
 
 ## Grading Scale
 
@@ -92,13 +89,32 @@ Not all dimensions apply equally to every target. Select and weight dimensions b
 Resolve the target from the user's request — the argument passed to the skill (on Claude Code this arrives as `$ARGUMENTS`) or, if none was given, the conversation context.
 
 1. If the target is a file path — read it directly.
-2. If the target is a directory — scan its structure and read key files.
-3. If the target is a skill name (e.g., "triage-finding") — find and read its `SKILL.md` plus supporting files. Then run `mazo show <skill-name> --json` and keep its `content_hash` for the persisted grade. Its `retros` array lists retro reports newest first: read the frontmatter of the `file` of up to the 3 most recent. Retro reports are runtime evidence, and a dimension that looks strong on paper but repeatedly fails in execution is graded on the evidence, not the paper. A retro whose `content_hash` is missing or differs from the current one scored an earlier text: read its `## Recommendations` section too, and lower a dimension on it only for a recommendation whose named step still reads as the retro describes. Cite the retro dates you used. Weigh its `usage`, `examples` and `audit` as runtime evidence of the same kind, skipping its `grades`. Never read the target's own prior grades — a previous score anchors the new one. Retros are evidence; grades are not. If `mazo show` exits non-zero, mazo does not know the skill: grade it from its files alone and print the report without persisting it.
+2. If the target is a skill — a skill name (e.g., "triage-finding"), or a directory holding a `SKILL.md` — follow **Skill targets** below.
+3. If the target is any other directory — scan its structure and read key files.
 4. If no target was given — check conversation context for a recently-discussed target. If nothing found, ask the user.
+
+#### Skill targets
+
+1. Take the skill name from the argument, or from the `name` in the directory's `SKILL.md` frontmatter.
+2. Run `mazo show <skill-name> --json | jq '{path, content_hash, retros, usage, examples, audit}'`. The selection keeps the skill's prior grades out of your context, where a previous score would anchor the new one. If it prints no JSON, mazo does not know the skill: grade it from its files alone and print the report without persisting it.
+3. Read `SKILL.md` plus supporting files from the directory the user gave, or from `path` when they gave a name.
+4. If the user gave a directory whose `realpath` differs from `path`, `content_hash` covers a different text than the one you are grading: grade it as a skill, print the report without persisting it, and say why.
+5. `retros` lists retro reports newest first: read the frontmatter of the `file` of up to the 3 most recent, and cite the retro dates you used. Retro reports are runtime evidence, and a dimension that looks strong on paper but repeatedly fails in execution is graded on the evidence, not the paper. A retro whose `content_hash` is missing or differs from the current one scored an earlier text: read its `## Recommendations` section too, and lower a dimension on it only for a recommendation whose named step still reads as the retro describes.
+6. Weigh `usage`, `examples` and `audit` as runtime evidence of the same kind.
 
 For large codebases and directories, build a full picture before scoring: on Claude Code, you may spawn an Explore agent (Agent tool) to map the target. If subagent spawning is unavailable or not permitted (e.g., on Codex), run the same exploration yourself sequentially with Glob/Grep/Read. For single files and small directories, read directly.
 
 **Scope rule**: If the target is large (>20 files), tell the user and agree on scope before proceeding. You can grade the full codebase at a high level or focus on specific modules — but be explicit about what you're grading.
+
+### Several graders
+
+When the user asks for N graders whose scores are averaged, you are the orchestrator:
+
+1. Run Phase 0 once, including the scope rule, then Phase 2 steps 1-2, so the dimension set and weights, including whether D7 is scored, are fixed before any grader starts.
+2. Spawn N graders in parallel. Give each the target's paths, this file's path, the fixed dimensions and weights, and for a skill the Phase 0 output. Each runs Phase 1 and Phase 2 step 3, returns its report in the Output Format, and writes no file.
+3. Average each dimension across the graders, compute the composite from those means, and print one report. For a skill, persist one grade whose `dimensions` are the means.
+
+Where subagents cannot be spawned, say so and grade once: N passes in one context are one grader.
 
 ### Phase 1: Analysis
 
@@ -107,8 +123,6 @@ Read the target thoroughly. For each applicable dimension:
 1. Identify what it does well (brief — one or two lines).
 2. Identify concrete problems (with specific references: file, line, quote, or section).
 3. Assess severity: does this gap cause real failures, or is it cosmetic?
-
-**Ground rule**: Every assessment must reference specific evidence. No vague claims like "could be clearer" without pointing to *what* and *why*.
 
 ### Phase 2: Scoring & Report
 
@@ -152,7 +166,7 @@ Read the target thoroughly. For each applicable dimension:
 
 ### Persisting the grade (skill targets only)
 
-When the target is a skill mazo knows, also write the report to `{grades-dir}/grade-{context-slug}-{YYYY-MM-DD}.md` (create the directory; slug: 1-3 words, underscores) with YAML frontmatter above the report body. `mazo evals dir <skill-name>` prints two tab-separated lines, `grades<TAB><path>` and `retros<TAB><path>`; `{grades-dir}` is the path on the `grades` line. It sits under the user's `evals_dir`, outside every skill tree, so it works the same for installed and authored skills. Frontmatter, where `content_hash` is the value `mazo show <skill-name> --json` printed in Phase 0 — mazo marks the grade stale once the skill's content no longer hashes to it:
+When Phase 0 found the skill in mazo and its step 4 did not rule persisting out, also write the report to `{grades-dir}/grade-{YYYY-MM-DD}-{HHMM}.md` (create the directory; local time) with YAML frontmatter above the report body. `mazo evals dir <skill-name>` prints two tab-separated lines, `grades<TAB><path>` and `retros<TAB><path>`; `{grades-dir}` is the path on the `grades` line. It sits under the user's `evals_dir`, outside every skill tree, so it works the same for installed and authored skills. Frontmatter, where `content_hash` is the value Phase 0 printed — mazo marks the grade stale once the skill's content no longer hashes to it:
 
 ```yaml
 ---
@@ -166,8 +180,6 @@ weights: fixed-1
 retros_consulted: [<filenames, or empty>]
 ---
 ```
-
-A grade without `weights: fixed-1` was scored with weights its grader chose: compare its `dimensions` with a later grade's, not its `score`.
 
 This completes a cross-check with the `retro` skill: `retro` reads the most recent grade as its static baseline, and this skill reads the retros `mazo show` lists as runtime evidence — static and dynamic evaluation of the same skill inform each other. For non-skill targets, print the report only; write a file only when the user asks.
 
