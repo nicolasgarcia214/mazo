@@ -7,9 +7,9 @@ use ratatui::widgets::Widget;
 use super::logo_art::{INK, LOGO};
 use crate::theme;
 
-pub const TAGLINE: &str = "Make every skill earn its place.";
+pub(super) const TAGLINE: &str = "Make every skill earn its place.";
 
-pub const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+pub(super) const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 fn colour(p: u32) -> Option<Color> {
     match p {
@@ -19,7 +19,7 @@ fn colour(p: u32) -> Option<Color> {
     }
 }
 
-pub struct Logo;
+pub(super) struct Logo;
 
 impl Logo {
     pub const WIDTH: u16 = LOGO[0].len() as u16;
@@ -47,7 +47,7 @@ impl Widget for Logo {
     }
 }
 
-pub fn about() -> Line<'static> {
+pub(super) fn about() -> Line<'static> {
     Line::from(vec![
         Span::raw(VERSION).fg(theme::ACCENT),
         Span::raw(" · ").fg(theme::MUTED),
@@ -55,7 +55,7 @@ pub fn about() -> Line<'static> {
     ])
 }
 
-pub fn mark() -> Line<'static> {
+pub(super) fn mark() -> Line<'static> {
     Line::from(vec![
         Span::raw("▍").fg(Color::Rgb(3, 113, 146)),
         Span::raw("▍").fg(Color::Rgb(3, 175, 213)),

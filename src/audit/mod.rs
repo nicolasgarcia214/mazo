@@ -177,7 +177,6 @@ pub struct JudgeRecord {
     pub agent: JudgeAgent,
     pub model: Option<String>,
     pub cost_usd: Option<Box<RawValue>>,
-    #[serde(default)]
     pub billing: Option<Billing>,
 }
 
@@ -365,7 +364,7 @@ fn judge_sessions<'c>(a: &Audit, candidates: &'c [Candidate]) -> Result<Run<'c>>
                     session: &c.event.session,
                     agent: c.event.agent,
                     src: &c.event.src,
-                    session_ts: Some(c.started().to_string()),
+                    session_ts: Some(c.started.to_string()),
                     audited_at: stamp(),
                     skill_commit: skill.commit.as_deref(),
                     condensed_chars: c.condensed.chars().count(),

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashSet};
+use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use serde::de::IgnoredAny;
 
 use crate::Result;
 use crate::adapters::{self, Adapter, Raw, SkillRoots};
@@ -15,7 +15,7 @@ use crate::ledger::{self, Agent, Channel, Event, Ledger};
 use crate::render::Diag;
 use crate::tail::{self, Cursors, Prefilter};
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Serialize, Debug, Default)]
 pub struct HomeReport {
     pub new_events: Vec<Event>,
     pub files: usize,
@@ -86,10 +86,9 @@ pub fn scan_with<'a>(
     let mut progress = Progress { tty: std::io::stderr().is_terminal(), start: Instant::now(), shown: false };
     let mut report = ScanReport::default();
     let now = jiff::Timestamp::now();
-    let mut lines: Vec<Event> = Vec::new();
     let files: Vec<Vec<PathBuf>> = cfg.homes.iter().map(|h| adapter_for(h.agent).files(h)).collect();
     let listed: HashSet<String> = files.iter().flatten().map(|p| p.to_string_lossy().into_owned()).collect();
-    let audit_runs = std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf()).join("audit-runs");
+    let audit_runs = fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf()).join("audit-runs");
 
     let stored = Roots::load(data)?;
     let rebuild = stored.is_none();
@@ -115,7 +114,7 @@ pub fn scan_with<'a>(
             progress.update(&home.name, i + 1, total);
             let key = path.to_string_lossy().into_owned();
             let unvisited = rebuild || cursors.get(&key).is_none_or(|c| c.line == 0);
-            let chunk = match tail::read(&path, cursors.get(&key), &filter) {
+            let mut chunk = match tail::read(&path, cursors.get(&key), &filter) {
                 Ok(c) => c,
                 Err(e) => {
                     hr.io_errors.push(crate::at(&path)(e));
@@ -142,12 +141,9 @@ pub fn scan_with<'a>(
                 cursors.insert(key, chunk.cursor);
                 continue;
             }
-            let header = tail::first_line(&path).ok().flatten();
+            let header = chunk.header.take().or_else(|| tail::first_line(&path).ok().flatten());
             let parsed = adapter.parse(&roots, &path, header.as_deref(), &chunk);
-            if !parsed.skipped {
-                hr.malformed +=
-                    chunk.lines.iter().filter(|(_, l)| serde_json::from_slice::<IgnoredAny>(l).is_err()).count();
-            }
+            hr.malformed += parsed.malformed;
             hr.unparsed += parsed.unparsed.len();
             for s in parsed.unparsed {
                 if hr.unparsed_samples.len() < 5 {
@@ -158,7 +154,7 @@ pub fn scan_with<'a>(
                 hr.canary.push(key.clone());
             }
             let target = if reparse { &mut fresh } else { &mut ledger };
-            admit(&classifier, &mut roots_cache, parsed.raws, &path, target, &mut hr, &mut lines);
+            admit(&classifier, &mut roots_cache, parsed.raws, &path, target, &mut hr);
             cursors.insert(key, chunk.cursor);
         }
 
@@ -166,7 +162,7 @@ pub fn scan_with<'a>(
         if home.agent == Agent::Claude && first_scan {
             let raws = adapters::claude::backfill(home, &inv.known);
             let target = if reparse { &mut fresh } else { &mut ledger };
-            admit(&classifier, &mut roots_cache, raws, &home.path.join("history.jsonl"), target, &mut hr, &mut lines);
+            admit(&classifier, &mut roots_cache, raws, &home.path.join("history.jsonl"), target, &mut hr);
         }
 
         let entry = coverage.entry(home.name.clone()).or_default();
@@ -180,7 +176,7 @@ pub fn scan_with<'a>(
     if reparse {
         ledger.replace(fresh.events())?;
     } else {
-        ledger.append(&lines)?;
+        ledger.append(cfg.homes.iter().flat_map(|h| &report.homes[&h.name].new_events))?;
     }
     roots_cache.save(data)?;
     cursors.retain(|k, _| listed.contains(k));
@@ -197,7 +193,6 @@ fn admit(
     path: &Path,
     target: &mut Ledger,
     hr: &mut HomeReport,
-    lines: &mut Vec<Event>,
 ) {
     for raw in raws {
         let event = match classifier.event(cache, raw, path) {
@@ -208,10 +203,7 @@ fn admit(
             }
             Err(Dropped::AuditRun) => continue,
         };
-        if let Some(line) = target.admit(event) {
-            hr.new_events.push(line.clone());
-            lines.push(line);
-        }
+        hr.new_events.extend(target.admit(event));
     }
 }
 

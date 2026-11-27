@@ -112,7 +112,7 @@ pub fn pick(items: Vec<(String, String)>) -> std::io::Result<Vec<String>> {
 mod tests {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-    use super::{Picker, Step};
+    use super::*;
 
     fn picker() -> Picker {
         Picker::new(["one", "two", "three"].iter().map(|n| (n.to_string(), format!("The {n} skill."))).collect())

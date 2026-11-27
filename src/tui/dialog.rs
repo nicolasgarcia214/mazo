@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 use super::draw::{scrollbar, status_line};
 use super::logo::{self, Logo};
 use super::{App, Data};
+use crate::Result;
 use crate::audit;
 use crate::config::Home;
 use crate::durable;
@@ -49,7 +50,7 @@ pub(super) fn refused(errors: Vec<Diag>) -> Vec<Note> {
     [vec!["sync refused:".into()], notes(errors)].concat()
 }
 
-fn synced(d: &Data, plan: &Plan) -> crate::Result<Vec<Note>> {
+fn synced(d: &Data, plan: &Plan) -> Result<Vec<Note>> {
     let _lock = durable::lock(&d.dir)?;
     let inv = store::inventory(d.cfg.source.as_deref(), &d.dir)?;
     let homes: Vec<&Home> = d.cfg.homes.iter().collect();
@@ -289,7 +290,7 @@ fn wrap(line: &str, width: usize) -> Vec<String> {
     let indent = line.len() - body.len();
     let mut out = vec![" ".repeat(indent)];
     for (i, word) in body.split(' ').enumerate() {
-        let cur = out.last_mut().unwrap();
+        let cur = out.last_mut().expect("out starts with the indent line");
         let fits = cur.chars().count() + 1 + word.chars().count() <= width;
         if i == 0 || fits || word.is_empty() {
             if i > 0 {
@@ -321,7 +322,7 @@ fn typed_line(source: &str, width: usize) -> String {
 mod tests {
     use ratatui::style::Color;
 
-    use super::Dialog;
+    use super::*;
     use crate::render::{Diag, Level};
     use crate::theme;
     use crate::tui::draw::status_line;

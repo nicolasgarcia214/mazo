@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
 use super::dialog::{Ask, Dialog};
 use super::draw::status_line;
 use super::{App, Data};
+use crate::Result;
 use crate::audit;
 use crate::pick::Picker;
 use crate::render::{Diag, Note};
@@ -59,13 +60,13 @@ impl store::Io for Dialogs<'_> {
         true
     }
 
-    fn yes_no(&self, lines: Vec<String>, prompt: String, default: bool) -> crate::Result<bool> {
+    fn yes_no(&self, lines: Vec<String>, prompt: String, default: bool) -> Result<bool> {
         let (reply, answer) = mpsc::channel();
         _ = self.asks.send(Question::YesNo { lines, prompt, default, reply });
         Ok(answer.recv().unwrap_or(false))
     }
 
-    fn pick(&self, items: Vec<(String, String)>) -> crate::Result<Option<Vec<String>>> {
+    fn pick(&self, items: Vec<(String, String)>) -> Result<Option<Vec<String>>> {
         let (reply, picked) = mpsc::channel();
         _ = self.asks.send(Question::Pick(items, reply));
         Ok(Some(picked.recv().unwrap_or_default()))
@@ -243,7 +244,7 @@ fn caught(verb: &str, job: impl FnOnce() -> (Note, bool)) -> (Note, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{STOP_WAIT, caught};
+    use super::*;
     use crate::audit;
     use crate::render::Diag;
 

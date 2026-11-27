@@ -184,7 +184,7 @@ fn the_skill_is_read_as_of_the_last_commit_before_the_session_started() {
         .into_iter()
         .find(|c| c.event.agent == Agent::Claude)
         .unwrap();
-    assert_eq!(c.started(), ts("2026-10-14T04:00:01Z"));
+    assert_eq!(c.started, ts("2026-10-14T04:00:01Z"));
     let (skill, input) = audit::input(&source, &c).unwrap();
     assert!(skill.commit.is_some());
     assert_eq!(skill.text, "v1\n");
@@ -1163,7 +1163,7 @@ fn session_records_hold_every_field_and_are_judged_once() {
         assert_eq!(r["session"], c.event.session.as_str());
         assert_eq!(r["agent"], mazo::ledger::name(c.event.agent).as_str());
         assert_eq!(r["src"], c.event.src.as_str());
-        assert_eq!(r["session_ts"], c.started().to_string().as_str());
+        assert_eq!(r["session_ts"], c.started.to_string().as_str());
         assert!(r["audited_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
         assert_eq!(r["skill_commit"], serde_json::Value::Null, "the source is no repository");
         assert_eq!(r["condensed_chars"], c.condensed.chars().count());

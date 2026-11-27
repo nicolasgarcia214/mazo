@@ -3,6 +3,7 @@ pub mod codex;
 pub mod pi;
 
 use std::collections::{BTreeSet, HashMap};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -156,6 +157,17 @@ pub struct Parsed {
     pub raws: Vec<Raw>,
     pub unparsed: Vec<String>,
     pub skipped: bool,
+    pub malformed: usize,
+}
+
+fn values<'a>(chunk: &'a Chunk, malformed: &'a mut usize) -> impl Iterator<Item = (u64, Value)> + 'a {
+    chunk.lines.iter().filter_map(|(n, l)| match serde_json::from_slice(l) {
+        Ok(v) => Some((*n, v)),
+        Err(_) => {
+            *malformed += usize::from(serde_json::from_slice::<serde::de::IgnoredAny>(l).is_err());
+            None
+        }
+    })
 }
 
 pub trait Adapter {
@@ -333,7 +345,7 @@ pub fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        let Ok(entries) = fs::read_dir(&d) else { continue };
         for e in entries.flatten() {
             let Ok(ft) = e.file_type() else { continue };
             let p = e.path();
@@ -353,12 +365,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn values_count_only_lines_that_are_not_json() {
+        let lines = [&br#"{"a":1}"#[..], br#"{"a":"\ud800"}"#, br#"{"a":1e400}"#, b"{not json", b""];
+        let lines = lines.iter().zip(1..).map(|(l, n)| (n, l.to_vec())).collect();
+        let chunk = Chunk { lines, oversized: 0, cursor: Default::default(), header: None };
+        let mut malformed = 0;
+        let kept: Vec<u64> = values(&chunk, &mut malformed).map(|(n, _)| n).collect();
+        assert_eq!((kept, malformed), (vec![1], 2));
+    }
+
+    #[test]
     fn skill_files_resolve_relative_paths_and_skip_non_skills() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("skills");
-        std::fs::create_dir_all(src.join("grade/references")).unwrap();
-        std::fs::write(src.join("grade/SKILL.md"), "x").unwrap();
-        std::fs::create_dir_all(src.join(".grades/grade")).unwrap();
+        fs::create_dir_all(src.join("grade/references")).unwrap();
+        fs::write(src.join("grade/SKILL.md"), "x").unwrap();
+        fs::create_dir_all(src.join(".grades/grade")).unwrap();
         let roots = SkillRoots { source: Some(src.clone()), home_skills: vec![], known: BTreeSet::new() };
         let s = src.to_str().unwrap();
         let r = roots.classify("SKILL.md", Some(&format!("{s}/grade"))).unwrap();

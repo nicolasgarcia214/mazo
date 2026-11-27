@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -13,13 +14,14 @@ use super::{Input, SINCE, Since, UsageArgs, json_line};
 use crate::adapters::Transcripts;
 use crate::audit::{Improvement, SkillRecord, VetVerdict};
 use crate::ctx::Ctx;
-use crate::evals::{self, Eval, Evals};
+use crate::evals::{Eval, Evals};
 use crate::examples::{self, Examples};
 use crate::history::Commit;
 use crate::inventory::{self, Inventory, Scope};
 use crate::ledger::{Actor, Agent, Channel, name};
 use crate::render::{self, Align};
 use crate::store::Locked;
+use crate::{Error, Result};
 
 #[derive(Serialize)]
 pub struct ShownEvent<'e> {
@@ -214,7 +216,7 @@ fn origin_of(view: &View, skill: &str) -> Option<SkillOrigin> {
             Some((repo, inventory::git(worktree, &["rev-parse", "HEAD"])?.trim().to_string()))
         })
         .clone()?;
-    let dir = std::fs::canonicalize(source.join(skill)).ok()?;
+    let dir = fs::canonicalize(source.join(skill)).ok()?;
     Some(SkillOrigin {
         repo,
         subpath: dir.strip_prefix(worktree).ok()?.to_string_lossy().into_owned(),
@@ -282,8 +284,8 @@ pub fn links(ls: &[Link], skill: impl Fn(&str) -> String) -> String {
     or_none(ls.iter().map(|l| if l.held { format!("{} (held)", skill(&l.skill)) } else { skill(&l.skill) }).collect())
 }
 
-pub fn check_skill(inv: &Inventory, skill: &str) -> crate::Result<()> {
-    if inv.known.contains(skill) { Ok(()) } else { Err(crate::Error::Usage(format!("unknown skill: {skill}"))) }
+pub fn check_skill(inv: &Inventory, skill: &str) -> Result<()> {
+    if inv.known.contains(skill) { Ok(()) } else { Err(Error::Usage(format!("unknown skill: {skill}"))) }
 }
 
 pub(super) fn card<'a>(
@@ -331,7 +333,7 @@ pub(super) fn card<'a>(
         uncommitted: h.wip(skill),
     });
 
-    let Evals { content_hash, grades, mut retros, skipped } = evals::load(&view.input.cfg.evals_dir, inv, skill);
+    let Evals { content_hash, grades, mut retros, skipped } = view.evals(skill);
     let grades: Vec<GradeOut> = grades.into_iter().rev().map(GradeOut::from).collect();
     retros.reverse();
     let strong_since_retro = retros.first().and_then(|r| r.date.parse::<Date>().ok()).map(|d| {
@@ -428,15 +430,21 @@ fn locator(e: &ShownEvent) -> String {
     format!("{}:{}:{line}", name(e.agent), crate::render::inert_line(&file))
 }
 
-pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> crate::Result<String> {
+pub fn show(input: &Input, skill: &str, since: Since, limit: usize, json: bool, tty: bool) -> Result<String> {
     check_skill(input.inv, skill)?;
-    let card = skill_card(input, skill, &UsageArgs::new(since), limit);
+    let graph = inventory::citations(input.inv).held;
+    let card = skill_card(input, &graph, skill, &UsageArgs::new(since), limit);
     Ok(if json { json_line(&card) } else { card_text(input, &card, tty) })
 }
 
-pub fn skill_card<'a>(input: &'a Input<'a>, skill: &'a str, args: &UsageArgs, limit: usize) -> Card<'a> {
-    let graph = inventory::fan_in(input.inv);
-    card(&View::new(input), &graph, skill, args, limit, &mut Transcripts::default())
+pub fn skill_card<'a>(
+    input: &'a Input<'a>,
+    graph: &inventory::Graph,
+    skill: &'a str,
+    args: &UsageArgs,
+    limit: usize,
+) -> Card<'a> {
+    card(&View::new(input), graph, skill, args, limit, &mut Transcripts::default())
 }
 
 pub fn card_text(input: &Input, card: &Card, tty: bool) -> String {

@@ -15,12 +15,7 @@ pub const MAX_CHARS: usize = 60_000;
 pub struct Candidate {
     pub event: Event,
     pub condensed: String,
-}
-
-impl Candidate {
-    pub fn started(&self) -> Timestamp {
-        crate::scan::first_timestamp(Path::new(self.event.src_file())).unwrap_or(self.event.ts)
-    }
+    pub started: Timestamp,
 }
 
 pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: Option<usize>) -> Vec<Candidate> {
@@ -53,7 +48,8 @@ pub fn select(events: &[Event], skill: &str, audited: &HashSet<String>, limit: O
         while let Some(loads) = queue.pop_front() {
             let found = loads.iter().find_map(|(_, e)| {
                 let condensed = adapters::for_agent(e.agent).condense(&mut memo, &e.src, MAX_CHARS)?;
-                Some(Candidate { event: (*e).clone(), condensed })
+                let started = crate::scan::first_timestamp(Path::new(e.src_file())).unwrap_or(e.ts);
+                Some(Candidate { event: (*e).clone(), condensed, started })
             });
             if let Some(c) = found {
                 return Some((loads[0].0, c));
@@ -103,7 +99,7 @@ pub fn skill_at(source: &Path, skill: &str, started: Timestamp) -> Result<SkillT
 }
 
 pub fn input(source: &Path, c: &Candidate) -> Result<(SkillText, String)> {
-    let skill = skill_at(source, &c.event.skill, c.started())?;
+    let skill = skill_at(source, &c.event.skill, c.started)?;
     let text = format!(
         "{}\n{}",
         frame(&format!("skill name={:?}", c.event.skill), &skill.text),

@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -9,8 +10,9 @@ use crate::ledger::Agent;
 use crate::render::PathExt;
 use crate::store::content_hash;
 use crate::yaml;
+use crate::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct Eval {
     pub file: PathBuf,
     pub date: String,
@@ -19,7 +21,7 @@ pub struct Eval {
     pub verdict: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct Grade {
     #[serde(flatten)]
     pub eval: Eval,
@@ -45,13 +47,13 @@ pub fn dirs(evals_dir: &Path, skill: &str) -> [PathBuf; 2] {
     ["grades", "retros"].map(|kind| evals_dir.join(kind).join(skill))
 }
 
-pub fn transcript(homes: &[Home], session: &str) -> crate::Result<(Agent, PathBuf)> {
-    let usage = |m: String| crate::Error::Usage(m);
+pub fn transcript(homes: &[Home], session: &str) -> Result<(Agent, PathBuf)> {
+    let usage = |m: String| Error::Usage(m);
     if session.is_empty() {
         return Err(usage("the session is empty: give a transcript's path or a session id".into()));
     }
-    if let Some(file) = std::fs::canonicalize(session).ok().filter(|f| f.is_file()) {
-        let under = |h: &&Home| std::fs::canonicalize(h.transcripts()).is_ok_and(|t| file.starts_with(t));
+    if let Some(file) = fs::canonicalize(session).ok().filter(|f| f.is_file()) {
+        let under = |h: &&Home| fs::canonicalize(h.transcripts()).is_ok_and(|t| file.starts_with(t));
         let home =
             homes.iter().find(under).ok_or_else(|| usage(format!("{}: under no home's transcripts", file.inert())))?;
         return Ok((home.agent, file));
@@ -85,12 +87,12 @@ pub fn load(evals_dir: &Path, inv: &Inventory, skill: &str) -> Evals {
 
 fn read_dir(dir: &Path, skipped: &mut Vec<String>) -> Vec<(Eval, Option<String>)> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
         let file = entry.path();
         if !file.is_file() || file.extension().is_none_or(|x| x != "md") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&file) else {
+        let Ok(text) = fs::read_to_string(&file) else {
             continue;
         };
         if !text.trim_start_matches('\u{feff}').starts_with("---") {

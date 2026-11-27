@@ -3,13 +3,14 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use mazo::adapters::claude::{self, Claude};
 use mazo::adapters::{ActorInputs, Adapter, Key, Parsed, Raw, Session, SkillRoots, Transcripts};
 use mazo::classify::{Classifier, Roots};
-use mazo::config::{Config, Home};
+use mazo::config::Home;
 use mazo::inventory::Inventory;
 use mazo::ledger::{Actor, Agent, Channel, Ledger, Origin};
 use mazo::tail::Cursor;
@@ -108,8 +109,8 @@ fn result_and_meta_merge_into_one_event_with_the_result_ts_and_the_meta_path() {
 fn meta_with_source_tool_use_id_alone_is_a_tool_event() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
-    let meta = std::fs::read_to_string(fixture("pair.jsonl")).unwrap().lines().nth(1).unwrap().to_string();
-    std::fs::write(&p, meta + "\n").unwrap();
+    let meta = fs::read_to_string(fixture("pair.jsonl")).unwrap().lines().nth(1).unwrap().to_string();
+    fs::write(&p, meta + "\n").unwrap();
     let (parsed, _) = parse_from(&p, None);
     assert_eq!(
         parsed.raws,
@@ -142,12 +143,12 @@ fn slash_meta_without_source_tool_use_id_is_slash_and_the_command_record_is_igno
 
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
-    let text = std::fs::read_to_string(fixture("slash.jsonl")).unwrap();
+    let text = fs::read_to_string(fixture("slash.jsonl")).unwrap();
     let lines: Vec<&str> = text.lines().collect();
-    std::fs::write(&p, format!("{}\n", lines[0])).unwrap();
+    fs::write(&p, format!("{}\n", lines[0])).unwrap();
     let (first, cursor) = parse_from(&p, None);
     assert!(first.raws.is_empty());
-    writeln!(std::fs::OpenOptions::new().append(true).open(&p).unwrap(), "{}", lines[1]).unwrap();
+    writeln!(fs::OpenOptions::new().append(true).open(&p).unwrap(), "{}", lines[1]).unwrap();
     let (second, _) = parse_from(&p, Some(&cursor));
     assert_eq!(second.raws, vec![slash]);
 }
@@ -218,12 +219,12 @@ fn subagent_meta_whose_result_has_no_tool_use_result_is_one_tool_event() {
 fn scan_boundary_between_result_and_meta_upgrades_to_the_fresh_merge() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
-    let text = std::fs::read_to_string(fixture("pair.jsonl")).unwrap();
+    let text = fs::read_to_string(fixture("pair.jsonl")).unwrap();
     let lines: Vec<&str> = text.lines().collect();
-    std::fs::write(&p, format!("{}\n", lines[0])).unwrap();
+    fs::write(&p, format!("{}\n", lines[0])).unwrap();
     let (first, cursor) = parse_from(&p, None);
     assert_eq!(first.raws, vec![Raw { path: None, ..unslop_pair() }]);
-    writeln!(std::fs::OpenOptions::new().append(true).open(&p).unwrap(), "{}", lines[1]).unwrap();
+    writeln!(fs::OpenOptions::new().append(true).open(&p).unwrap(), "{}", lines[1]).unwrap();
     let (second, _) = parse_from(&p, Some(&cursor));
     assert_eq!(second.raws.len(), 1);
     assert_eq!(second.raws[0].key, unslop_pair().key);
@@ -273,10 +274,10 @@ fn refused_skill_calls_yield_nothing() {
 fn skill_result_without_success_true_yields_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
-    let result = std::fs::read_to_string(fixture("pair.jsonl")).unwrap().lines().next().unwrap().to_string();
+    let result = fs::read_to_string(fixture("pair.jsonl")).unwrap().lines().next().unwrap().to_string();
     let flipped = result.replace(r#""success": true"#, r#""success": false"#);
     assert_ne!(flipped, result);
-    std::fs::write(&p, flipped + "\n").unwrap();
+    fs::write(&p, flipped + "\n").unwrap();
     let (parsed, _) = parse_from(&p, None);
     assert!(parsed.raws.is_empty(), "{:?}", parsed.raws);
 }
@@ -338,8 +339,7 @@ fn unknown_command_naming_a_skill_file_is_counted_as_unparsed() {
     let tmp = tempfile::tempdir().unwrap();
     let skills = tmp.path().join("skills");
     common::write(&skills.join("unslop/SKILL.md"), "x");
-    let line =
-        std::fs::read_to_string(fixture("unparsed.jsonl")).unwrap().replace(HOME_SKILLS, skills.to_str().unwrap());
+    let line = fs::read_to_string(fixture("unparsed.jsonl")).unwrap().replace(HOME_SKILLS, skills.to_str().unwrap());
     let transcript = tmp.path().join("unparsed.jsonl");
     common::write(&transcript, &line);
     let roots = SkillRoots { home_skills: vec![skills.clone()], ..roots() };
@@ -353,7 +353,7 @@ const HISTORY_ARGUS_TS: &str = "2026-03-13T15:43:39.625Z";
 #[test]
 fn history_backfill_emits_typed_only_for_known_names_without_a_transcript() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::copy(fixture("history.jsonl"), dir.path().join("history.jsonl")).unwrap();
+    fs::copy(fixture("history.jsonl"), dir.path().join("history.jsonl")).unwrap();
     let projects = dir.path().join("projects/-home-nicolas-projects-argus");
     common::write(&projects.join(format!("{ARGUS}.jsonl")), "");
     let known: BTreeSet<String> =
@@ -406,25 +406,14 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
     let source = dir.path().join("skills");
     common::write(&source.join("grade/SKILL.md"), "x");
     let claude_home = dir.path().join("claude");
-    std::fs::create_dir_all(claude_home.join("projects")).unwrap();
-    std::fs::copy(fixture("history.jsonl"), claude_home.join("history.jsonl")).unwrap();
+    fs::create_dir_all(claude_home.join("projects")).unwrap();
+    fs::copy(fixture("history.jsonl"), claude_home.join("history.jsonl")).unwrap();
     let data = dir.path().join("data");
-    let cfg = Config {
-        source: Some(source.clone()),
-        loose: vec![],
-        trusted: vec![],
-        evals_dir: Default::default(),
-        context_window: mazo::config::CONTEXT_WINDOW,
-        homes: vec![home(&claude_home)],
-        policy: Default::default(),
-        judge: Default::default(),
-    };
+    let cfg = common::config(&source, vec![home(&claude_home)]);
     let inv = Inventory {
         source: Some(source.clone()),
         skills: ["grade".to_string()].into(),
         known: ["grade".to_string(), "argus".to_string(), "gitmoji-conventional-commit".to_string()].into(),
-        worktree: None,
-        history: None,
         ..Default::default()
     };
     let first = mazo::scan::scan(&cfg, &inv, &data, false).unwrap();
@@ -441,7 +430,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
             && e.src.ends_with(".jsonl:1") == (e.skill == "gitmoji-conventional-commit"))
     );
 
-    let mut h = std::fs::OpenOptions::new().append(true).open(claude_home.join("history.jsonl")).unwrap();
+    let mut h = fs::OpenOptions::new().append(true).open(claude_home.join("history.jsonl")).unwrap();
     writeln!(h, r#"{{"display":"/grade","pastedContents":{{}},"timestamp":1791921825029,"project":"/x","sessionId":"00000000-0000-0000-0000-000000000000"}}"#).unwrap();
     let second = mazo::scan::scan(&cfg, &inv, &data, false).unwrap();
     assert_eq!(second.homes["claude"].new_events.len(), 0);
@@ -450,7 +439,7 @@ fn history_backfill_runs_on_the_first_scan_only_with_typed_origin_from_canonical
 #[test]
 fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = fs::canonicalize(tmp.path()).unwrap();
     let dotfiles = root.join("dotfiles");
     for s in ["gitmoji-conventional-commit", "unslop"] {
         common::write(&dotfiles.join(format!("skills/{s}/SKILL.md")), "x");
@@ -470,7 +459,7 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
             .replace("/home/nicolas/.claude", claude_home.to_str().unwrap())
             .replace("/home/nicolas/projects/argus", dotfiles.to_str().unwrap())
     };
-    let read = move_paths(std::fs::read_to_string(fixture("subagents/agent-a5b86c28fed127eef.jsonl")).unwrap());
+    let read = move_paths(fs::read_to_string(fixture("subagents/agent-a5b86c28fed127eef.jsonl")).unwrap());
     let cwd_field = |p: &Path| format!(r#""cwd": "{}""#, p.display());
     let read_in = |uuid: &str, cwd: &Path| {
         read.replace("850b0039-5f37-4f9a-909f-cf9e7084bf15", uuid).replace(&cwd_field(&dotfiles), &cwd_field(cwd))
@@ -480,21 +469,12 @@ fn authoring_tags_weak_reads_whose_cwd_is_the_worktree_or_a_home_skills_dir() {
         read.clone(),
         read_in("00000000-0000-4000-8000-000000000001", &home_skill_dir),
         read_in("00000000-0000-4000-8000-000000000002", &elsewhere),
-        move_paths(std::fs::read_to_string(fixture("pair.jsonl")).unwrap()),
+        move_paths(fs::read_to_string(fixture("pair.jsonl")).unwrap()),
     ]
     .concat();
     common::write(&claude_home.join("projects/p/2e112b1e-0233-4375-99fd-cd21d2102ac1.jsonl"), &transcript);
 
-    let cfg = Config {
-        source: Some(source),
-        loose: vec![],
-        trusted: vec![],
-        evals_dir: Default::default(),
-        context_window: mazo::config::CONTEXT_WINDOW,
-        homes: vec![home(&claude_home)],
-        policy: Default::default(),
-        judge: Default::default(),
-    };
+    let cfg = common::config(&source, vec![home(&claude_home)]);
     let data = root.join("data");
     mazo::scan::scan(&cfg, &inv, &data, false).unwrap();
     let got: Vec<(String, Channel, Option<String>, bool)> = Ledger::load(&data)
@@ -583,11 +563,11 @@ fn a_fifo_transcript_is_refused_without_blocking() {
 fn one_memo_reads_a_transcript_once_for_several_examples() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.jsonl");
-    std::fs::copy(fixture("prompt_tool.jsonl"), &path).unwrap();
+    fs::copy(fixture("prompt_tool.jsonl"), &path).unwrap();
     let mut memo = Transcripts::default();
     let want = Some("Improve the scrubbed skill and check its retros.".to_string());
     assert_eq!(Claude.prompt_at(&mut memo, &format!("{}:5", path.display())), want);
-    std::fs::remove_file(&path).unwrap();
+    fs::remove_file(&path).unwrap();
     assert_eq!(Claude.prompt_at(&mut memo, &format!("{}:6", path.display())), want);
     assert_eq!(Claude.prompt_at(&mut Transcripts::default(), &format!("{}:6", path.display())), None);
 }
@@ -631,11 +611,11 @@ fn trace_runs_from_the_skills_last_prompt_to_its_reviewers_load() {
 }
 
 fn spliced(dir: &Path, keep: &[usize], edit: impl Fn(String) -> String) -> PathBuf {
-    let fixture = std::fs::read_to_string(fixture("condense.jsonl")).unwrap();
+    let fixture = fs::read_to_string(fixture("condense.jsonl")).unwrap();
     let all: Vec<&str> = fixture.lines().collect();
     let text: String = keep.iter().map(|n| format!("{}\n", all[n - 1])).collect();
     let path = dir.join("spliced.jsonl");
-    std::fs::write(&path, edit(text)).unwrap();
+    fs::write(&path, edit(text)).unwrap();
     path
 }
 
@@ -661,7 +641,7 @@ fn trace_ends_at_the_first_review_of_the_run() {
 #[test]
 fn trace_without_a_reviewer_runs_to_the_end_and_needs_a_load_of_the_skill() {
     let file = fixture("condense.jsonl");
-    let last = std::fs::read_to_string(&file).unwrap().lines().count() as u64;
+    let last = fs::read_to_string(&file).unwrap().lines().count() as u64;
     let got = Claude.trace(&file, "grade", "retro").unwrap();
     assert_eq!(got.lines, (9, last), "from the prompt behind the load at line 14 to the last line");
     assert!(got.text.starts_with("L9: user: Now check the tone.\n"), "{}", got.text);
@@ -679,7 +659,7 @@ fn condense_needs_a_strong_load_at_src() {
 }
 
 fn transcript_with(dir: &Path, rest: impl Iterator<Item = serde_json::Value>) -> PathBuf {
-    let fixture = std::fs::read_to_string(fixture("condense.jsonl")).unwrap();
+    let fixture = fs::read_to_string(fixture("condense.jsonl")).unwrap();
     let load = fixture.lines().skip(3).take(3);
     let record = |kind: &str, content: serde_json::Value| {
         serde_json::json!({"type": kind, "timestamp": "2026-10-14T05:00:00Z", "sessionId": "s",
@@ -691,7 +671,7 @@ fn transcript_with(dir: &Path, rest: impl Iterator<Item = serde_json::Value>) ->
         .chain(rest.map(|v| record(v["role"].as_str().unwrap(), v["content"].clone())))
         .collect();
     let path = dir.join("t.jsonl");
-    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
     path
 }
 

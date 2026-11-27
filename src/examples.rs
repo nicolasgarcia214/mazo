@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 
 use clap::ValueEnum;
@@ -53,7 +54,7 @@ pub fn examples<'e>(
     agents.sort();
     agents.dedup();
     let default_prompt = dir
-        .and_then(|d| std::fs::read_to_string(d.join("agents/openai.yaml")).ok())
+        .and_then(|d| fs::read_to_string(d.join("agents/openai.yaml")).ok())
         .and_then(|text| yaml::load(&text).ok())
         .and_then(|m| {
             yaml::get(&m, "interface")

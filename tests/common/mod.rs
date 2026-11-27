@@ -18,6 +18,7 @@ use mazo::inventory::Inventory;
 use mazo::ledger::{Actor, Agent, Channel, Coverage, Event, Origin};
 use mazo::report::Input;
 use mazo::tail::{self, Chunk, Cursor, Prefilter};
+use mazo::tui::{App, Data};
 
 pub const NOW: &str = "2026-10-13T12:00:00Z";
 
@@ -62,16 +63,7 @@ pub struct World {
 
 impl World {
     pub fn new(source: &Path, homes: &[(&str, Agent, &str)]) -> World {
-        let cfg = Config {
-            source: Some(source.into()),
-            loose: vec![],
-            trusted: vec![],
-            evals_dir: source.join(".evals"),
-            context_window: mazo::config::CONTEXT_WINDOW,
-            homes: homes.iter().map(|&(name, agent, _)| home(name, agent, &source.join(name))).collect(),
-            policy: Default::default(),
-            judge: None,
-        };
+        let cfg = config(source, homes.iter().map(|&(name, agent, _)| home(name, agent, &source.join(name))).collect());
         let coverage = homes
             .iter()
             .map(|&(name, _, first)| (name.into(), Coverage { first: Some(first.into()), last_scan: Some(NOW.into()) }))
@@ -203,6 +195,19 @@ pub fn real_skills() -> PathBuf {
     test_skills_env().unwrap_or_else(|| fixture("skills"))
 }
 
+pub fn config(source: &Path, homes: Vec<Home>) -> Config {
+    Config {
+        source: Some(source.into()),
+        loose: vec![],
+        trusted: vec![],
+        evals_dir: source.join(".evals"),
+        context_window: mazo::config::CONTEXT_WINDOW,
+        homes,
+        policy: Default::default(),
+        judge: None,
+    }
+}
+
 pub fn home(name: &str, agent: Agent, path: &Path) -> Home {
     Home { name: name.into(), agent, path: path.to_path_buf(), links: Default::default() }
 }
@@ -219,7 +224,7 @@ pub fn parse_file(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path, cursor
 pub fn parse_unfiltered(adapter: &dyn Adapter, roots: &SkillRoots, path: &Path) -> Parsed {
     let text = fs::read_to_string(path).unwrap();
     let lines: Vec<(u64, Vec<u8>)> = text.lines().zip(1..).map(|(l, n)| (n, l.as_bytes().to_vec())).collect();
-    let chunk = Chunk { lines, oversized: 0, cursor: Cursor::default() };
+    let chunk = Chunk { lines, oversized: 0, cursor: Cursor::default(), header: None };
     let header = tail::first_line(path).unwrap();
     adapter.parse(roots, path, header.as_deref(), &chunk)
 }
@@ -335,4 +340,17 @@ impl Chain {
     pub fn roots(&self) -> BTreeMap<String, String> {
         fs::read(self.roots_json()).map_or_else(|_| BTreeMap::new(), |b| serde_json::from_slice(&b).unwrap())
     }
+}
+
+pub fn app(input: &Input) -> App {
+    App::new(Data {
+        cfg: input.cfg.clone(),
+        inv: input.inv.clone(),
+        events: input.events.to_vec(),
+        coverage: input.coverage.clone(),
+        audits: input.audits.clone(),
+        now: input.now,
+        tz: input.tz.clone(),
+        dir: PathBuf::from("/nonexistent"),
+    })
 }

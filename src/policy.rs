@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::Result;
 use crate::config::{Config, Home, Policy};
 use crate::inventory::Inventory;
 use crate::ledger::{Agent, Coverage};
@@ -15,14 +17,14 @@ pub fn per_skill(cfg: &Config, inv: &Inventory) -> Vec<Diag> {
         .iter()
         .filter_map(|(name, roots)| {
             let dir = roots[0].join(name);
-            check_skill(&cfg.policy, &dir, name).err().map(|e| Diag::error(format!("{}: {e}", dir.inert())))
+            check_skill(&cfg.policy, &dir, name).err().map(|e| Diag::error(crate::at(&dir)(e)))
         })
         .collect()
 }
 
-fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
+fn check_skill(policy: &Policy, dir: &Path, name: &str) -> Result<()> {
     let skill_md = dir.join("SKILL.md");
-    let text = std::fs::read_to_string(&skill_md).map_err(crate::at(&skill_md))?;
+    let text = fs::read_to_string(&skill_md).map_err(crate::at(&skill_md))?;
     let meta = yaml::frontmatter(&text)?;
     always_on(&meta, name)?;
     if policy.no_disable_model_invocation && yaml::get(&meta, "disable-model-invocation").is_some() {
@@ -30,7 +32,7 @@ fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
     }
     if policy.codex_manifest {
         let manifest_path = dir.join("agents/openai.yaml");
-        let text = std::fs::read_to_string(&manifest_path).map_err(crate::at(&manifest_path))?;
+        let text = fs::read_to_string(&manifest_path).map_err(crate::at(&manifest_path))?;
         let manifest = yaml::load(&text)?;
         let value = yaml::get(&manifest, "policy").and_then(|p| yaml::get(p, "allow_implicit_invocation"));
         if !value.is_some_and(yaml::is_plain_false) {
@@ -40,7 +42,7 @@ fn check_skill(policy: &Policy, dir: &Path, name: &str) -> crate::Result<()> {
     Ok(())
 }
 
-pub fn always_on(meta: &Yaml, name: &str) -> crate::Result<()> {
+pub fn always_on(meta: &Yaml, name: &str) -> Result<()> {
     if !meta.is_mapping() {
         return Err("SKILL.md frontmatter must be a mapping".into());
     }
@@ -107,9 +109,9 @@ fn per_home(policy: &Policy, inv: &Inventory, home: &Home) -> Vec<Diag> {
     missing.into_iter().map(error).collect()
 }
 
-pub(crate) fn settings(home: &Home) -> impl Iterator<Item = (PathBuf, Result<serde_json::Value, String>)> {
+pub(crate) fn settings(home: &Home) -> impl Iterator<Item = (PathBuf, std::result::Result<serde_json::Value, String>)> {
     [home.settings(), home.path.join("settings.local.json")].into_iter().filter_map(|path| {
-        let parsed = match std::fs::read(&path) {
+        let parsed = match fs::read(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
             Err(e) => Err(e.to_string()),
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
@@ -133,7 +135,7 @@ pub fn overrides(home: &Home) -> (BTreeMap<String, (PathBuf, serde_json::Value)>
         };
         match set {
             Ok(set) => values.extend(set.into_iter().map(|(skill, v)| (skill, (path.clone(), v)))),
-            Err(e) => errors.push(Diag::error(format!("{}: {e}", path.inert()))),
+            Err(e) => errors.push(Diag::error(crate::at(&path)(e))),
         }
     }
     (values, errors)

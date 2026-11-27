@@ -10,7 +10,7 @@ const SKILLS: usize = 20;
 const SUMMARY_BYTES: usize = 8 * 1024;
 const CUT: &str = "(cut to fit the size cap)\n";
 
-pub fn summary(events: &[Event], now: Timestamp) -> String {
+pub(super) fn summary(events: &[Event], now: Timestamp) -> String {
     let since = now - SignedDuration::from_hours(24 * DAYS);
     let recent: Vec<&Event> = events
         .iter()

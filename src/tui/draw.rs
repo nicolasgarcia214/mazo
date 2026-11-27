@@ -84,7 +84,6 @@ fn tinted(t: &str, colour: Option<Colour>) -> Span<'static> {
 }
 
 fn styled(head: &str, cell: &str) -> Vec<Span<'static>> {
-    let muted = |s: &str| Span::raw(s.to_string()).fg(theme::MUTED);
     match (head, cell) {
         (_, "-" | "0") => vec![muted(cell)],
         (_, "today") => vec![Span::raw("today").fg(theme::ACCENT)],
@@ -359,7 +358,7 @@ impl App {
         }
         let rule = Block::new().borders(Borders::LEFT).border_style(theme::MUTED);
         frame.render_widget(&rule, area);
-        let (skill, lines, chart) = self.side.as_ref().unwrap();
+        let (skill, lines, chart) = self.side.as_ref().expect("the side card was set above");
         draw_card(frame, skill, lines, chart, self.usage_since, 0, rule.inner(area));
     }
 

@@ -210,7 +210,7 @@ impl Remote {
         let spawned = git.spawn().and_then(|child| audit::wait(child, None, CLONE_LIMIT, cancel));
         let Some(out) = spawned.map_err(|e| format!("git: {e}"))? else {
             if cancel() {
-                return Err(crate::Error::Cancelled);
+                return Err(Error::Cancelled);
             }
             let minutes = CLONE_LIMIT.as_secs() / 60;
             return Err(format!("git {verb} {}: not done within {minutes} minutes; it was killed", self.url).into());
@@ -271,7 +271,7 @@ pub(super) fn local(path: &Path, home: &str) -> Result<PathBuf> {
 mod tests {
     use std::path::Path;
 
-    use super::{Remote, Source, github_repo, local};
+    use super::*;
 
     fn remote(arg: &str) -> Remote {
         match Source::parse(arg) {
@@ -327,9 +327,9 @@ mod tests {
     #[test]
     fn a_file_named_like_the_remote_does_not_hide_it() {
         let (owner, url) = ("git@github.com:cwd-probe", "git@github.com:cwd-probe/r.git");
-        std::fs::create_dir_all(url).unwrap();
+        fs::create_dir_all(url).unwrap();
         let got = github_repo(url);
-        std::fs::remove_dir_all(owner).unwrap();
+        fs::remove_dir_all(owner).unwrap();
         assert_eq!(got.as_deref(), Some("https://github.com/cwd-probe/r.git"));
     }
 

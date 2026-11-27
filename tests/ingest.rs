@@ -78,24 +78,9 @@ impl Env {
         fs::create_dir_all(&homes[0].path).unwrap();
         fs::copy(fixture("history.jsonl"), homes[0].path.join("history.jsonl")).unwrap();
         let skills: BTreeSet<String> = ["unslop", "gitmoji-conventional-commit", "grade"].map(String::from).into();
-        let inv = Inventory {
-            source: Some(source.clone()),
-            skills: skills.clone(),
-            known: skills,
-            worktree: None,
-            history: None,
-            ..Default::default()
-        };
-        let cfg = Config {
-            source: Some(source),
-            loose: vec![],
-            trusted: vec![],
-            evals_dir: Default::default(),
-            context_window: mazo::config::CONTEXT_WINDOW,
-            homes,
-            policy: Default::default(),
-            judge: Default::default(),
-        };
+        let inv =
+            Inventory { source: Some(source.clone()), skills: skills.clone(), known: skills, ..Default::default() };
+        let cfg = common::config(&source, homes);
         let env = Env { data: tmp.path().join("data/mazo"), tmp, cfg, inv };
         for (dest, src) in files {
             env.put(dest, &fs::read(fixture(src)).unwrap());
@@ -649,8 +634,8 @@ fn a_torn_ledger_tail_does_not_swallow_the_next_append() {
 #[test]
 fn a_torn_ledger_line_that_cuts_a_utf8_character_is_skipped_mid_file_too() {
     let env = Env::new(&[("slash.jsonl", "slash.jsonl")], &[]);
-    std::fs::create_dir_all(&env.data).unwrap();
-    std::fs::write(env.data.join("events.jsonl"), b"{\"v\":1,\"cwd\":\"/caf\xC3").unwrap();
+    fs::create_dir_all(&env.data).unwrap();
+    fs::write(env.data.join("events.jsonl"), b"{\"v\":1,\"cwd\":\"/caf\xC3").unwrap();
     env.scan();
     env.scan();
     let fresh = env.tmp.path().join("fresh");
@@ -753,16 +738,7 @@ fn scan_one_load_each(edit: impl Fn(&str, &str, &Path) -> String) -> Vec<scan::H
         common::write(&home.transcripts().join(dest), &edit(&text, cwd, &data));
         homes.push(home);
     }
-    let cfg = Config {
-        source: Some(tmp.path().join("skills")),
-        loose: vec![],
-        trusted: vec![],
-        evals_dir: Default::default(),
-        context_window: mazo::config::CONTEXT_WINDOW,
-        homes,
-        policy: Default::default(),
-        judge: None,
-    };
+    let cfg = common::config(&tmp.path().join("skills"), homes);
     let mut report = scan::scan(&cfg, &Inventory::default(), &data, false).unwrap();
     cfg.homes.iter().map(|h| report.homes.remove(&h.name).unwrap()).collect()
 }

@@ -1,11 +1,13 @@
-use std::cell::OnceCell;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::cell::{OnceCell, RefCell};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 use jiff::civil::Date;
 use jiff::{SignedDuration, Timestamp, ToSpan};
 
 use super::{Input, Since, UsageArgs};
 use crate::ctx::Contexts;
+use crate::evals::{self, Evals};
 use crate::inventory::Scope;
 use crate::ledger::{Actor, Agent, Channel, Event, Origin};
 
@@ -16,6 +18,9 @@ pub(super) struct View<'a> {
     today: Date,
     authoring_sessions: HashSet<(Agent, &'a str)>,
     project: HashSet<&'a str>,
+    by_skill: HashMap<&'a str, Vec<&'a Event>>,
+    used: RefCell<HashMap<Option<Timestamp>, Rc<BTreeSet<&'a str>>>>,
+    evals: RefCell<HashMap<String, Evals>>,
     pub(super) upstream: OnceCell<Option<(String, String)>>,
     ctx: OnceCell<Contexts>,
 }
@@ -59,7 +64,26 @@ impl<'a> View<'a> {
             let of = |e: &Event| e.path.as_deref().and_then(|path| p.skill_of(path)).is_some();
             input.events.iter().filter(|e| of(e)).map(|e| e.id.as_str()).collect()
         });
-        View { input, today, authoring_sessions, project, upstream: OnceCell::new(), ctx: OnceCell::new() }
+        let mut by_skill: HashMap<&str, Vec<&Event>> = HashMap::new();
+        for e in input.events {
+            by_skill.entry(&e.skill).or_default().push(e);
+        }
+        View {
+            input,
+            today,
+            authoring_sessions,
+            project,
+            by_skill,
+            used: RefCell::default(),
+            evals: RefCell::default(),
+            upstream: OnceCell::new(),
+            ctx: OnceCell::new(),
+        }
+    }
+
+    pub(super) fn evals(&self, skill: &str) -> Evals {
+        let load = || evals::load(&self.input.cfg.evals_dir, self.input.inv, skill);
+        self.evals.borrow_mut().entry(skill.to_string()).or_insert_with(load).clone()
     }
 
     pub(super) fn ctx(&self) -> &Contexts {
@@ -99,15 +123,17 @@ impl<'a> View<'a> {
         skill: Option<&'s str>,
         start: Option<Timestamp>,
     ) -> impl Iterator<Item = &'a Event> + 's {
-        self.input
-            .events
-            .iter()
-            .filter(move |e| skill.is_none_or(|s| e.skill == s) && start.is_none_or(|s| e.ts >= s) && self.kept(e, f))
+        let all = skill.is_none().then_some(self.input.events).into_iter().flatten();
+        let one = skill.and_then(|s| self.by_skill.get(s)).into_iter().flatten().copied();
+        all.chain(one).filter(move |e| start.is_none_or(|s| e.ts >= s) && self.kept(e, f))
     }
 
-    pub(super) fn used(&self, start: Option<Timestamp>) -> BTreeSet<&'a str> {
-        let f = Filter::default();
-        self.select(&f, None, start).filter(|e| e.channel.strong()).map(|e| e.skill.as_str()).collect()
+    pub(super) fn used(&self, start: Option<Timestamp>) -> Rc<BTreeSet<&'a str>> {
+        let strong = || {
+            let f = Filter::default();
+            Rc::new(self.select(&f, None, start).filter(|e| e.channel.strong()).map(|e| e.skill.as_str()).collect())
+        };
+        self.used.borrow_mut().entry(start).or_insert_with(strong).clone()
     }
 
     pub(super) fn strong_sessions<'s>(

@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fs;
 use std::path::Path;
 
 use serde_json::Value;
@@ -19,15 +20,16 @@ impl Adapter for Claude {
         let in_subagents = path.to_string_lossy().contains("/subagents/");
         let mut out = Parsed::default();
         let mut loads: HashMap<String, usize> = HashMap::new();
-        for (line, bytes) in &chunk.lines {
-            let Ok(rec) = serde_json::from_slice::<Value>(bytes) else { continue };
-            let Some(r) = Record::new(&rec, *line, in_subagents) else { continue };
+        let mut malformed = 0;
+        for (line, rec) in super::values(chunk, &mut malformed) {
+            let Some(r) = Record::new(&rec, line, in_subagents) else { continue };
             match rec["type"].as_str() {
                 Some("user") => user(&r, &mut loads, &mut out),
                 Some("assistant") => assistant(roots, &r, &mut out),
                 _ => {}
             }
         }
+        out.malformed = malformed;
         out
     }
 
@@ -182,7 +184,7 @@ fn assistant(roots: &SkillRoots, r: &Record, out: &mut Parsed) {
 }
 
 pub fn backfill(home: &Home, known: &BTreeSet<String>) -> Vec<Raw> {
-    let Ok(bytes) = std::fs::read(home.path.join("history.jsonl")) else { return Vec::new() };
+    let Ok(bytes) = fs::read(home.path.join("history.jsonl")) else { return Vec::new() };
     let transcripts: HashSet<String> = super::jsonl_files(&home.transcripts())
         .iter()
         .filter_map(|p| p.file_stem()?.to_str().map(str::to_string))

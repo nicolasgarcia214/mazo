@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::inventory::git;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct Commit {
     pub hash: String,
     pub date: String,
@@ -59,7 +59,7 @@ fn parse_log(log: &str) -> Vec<Commit> {
     for line in log.lines().filter(|l| !l.is_empty()) {
         match line.split('\0').collect::<Vec<_>>()[..] {
             [hash, _, _] if commits.last().is_some_and(|c| c.hash == hash) => {
-                commits.last_mut().unwrap().files.push(Vec::new());
+                commits.last_mut().expect("the guard saw a last commit").files.push(Vec::new());
             }
             [hash, date, subject] => commits.push(Commit {
                 hash: hash.into(),

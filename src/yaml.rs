@@ -4,7 +4,9 @@ pub use saphyr::YamlOwned as Yaml;
 use saphyr::{LoadableYamlNode, ScalarOwned, ScalarStyle, YamlLoader};
 use saphyr_parser::Parser;
 
-pub fn load(text: &str) -> crate::Result<Yaml> {
+use crate::Result;
+
+pub fn load(text: &str) -> Result<Yaml> {
     if Yaml::load_from_str(text).map_err(|e| e.to_string())?.len() > 1 {
         return Err("YAML holds more than one document".into());
     }
@@ -49,11 +51,11 @@ pub fn is_plain_false(node: &Yaml) -> bool {
     matches!(node, Yaml::Representation(s, ScalarStyle::Plain, None) if s == "false")
 }
 
-pub fn frontmatter(text: &str) -> crate::Result<Yaml> {
+pub fn frontmatter(text: &str) -> Result<Yaml> {
     load(&split_frontmatter(text)?.0)
 }
 
-pub fn split_frontmatter(text: &str) -> crate::Result<(String, String)> {
+pub fn split_frontmatter(text: &str) -> Result<(String, String)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let lines: Vec<&str> = text.lines().collect();
     if lines.first() != Some(&"---") {
@@ -67,7 +69,7 @@ pub fn split_frontmatter(text: &str) -> crate::Result<(String, String)> {
 mod tests {
     use super::*;
 
-    fn policy(yaml: &str) -> crate::Result<bool> {
+    fn policy(yaml: &str) -> Result<bool> {
         let doc = load(yaml)?;
         Ok(get(&doc, "policy").and_then(|p| get(p, "allow_implicit_invocation")).is_some_and(is_plain_false))
     }

@@ -280,16 +280,7 @@ fn new_with_every_rule_on_writes_a_skill_that_syncs_to_a_clean_status() {
         claude_name_only: true,
         authoring_skills: vec![],
     };
-    let cfg = mazo::config::Config {
-        source: Some(hs.source.clone()),
-        loose: vec![],
-        trusted: vec![],
-        evals_dir: Default::default(),
-        context_window: mazo::config::CONTEXT_WINDOW,
-        homes: vec![],
-        policy,
-        judge: None,
-    };
+    let cfg = mazo::config::Config { policy, ..common::config(&hs.source, vec![]) };
     let inv = mazo::inventory::Inventory::load(&hs.source).unwrap();
     assert_eq!(mazo::policy::per_skill(&cfg, &inv), Vec::<mazo::render::Diag>::new());
 

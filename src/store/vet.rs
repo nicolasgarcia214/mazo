@@ -108,7 +108,7 @@ pub(super) fn gate(
 
 #[cfg(test)]
 mod tests {
-    use super::{JUDGE_EXAMPLES, no_judge};
+    use super::*;
 
     #[test]
     fn each_judge_example_is_printed_and_loads_as_a_valid_config_judge() {
@@ -116,7 +116,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         for example in JUDGE_EXAMPLES {
             assert!(no_judge().contains(example), "{example}");
-            std::fs::write(&path, format!("source = \".\"\n{example}")).unwrap();
+            fs::write(&path, format!("source = \".\"\n{example}")).unwrap();
             let cfg = crate::config::load(&path).unwrap_or_else(|e| panic!("{example}: {e}")).unwrap();
             assert!(cfg.judge.is_some(), "{example}");
         }

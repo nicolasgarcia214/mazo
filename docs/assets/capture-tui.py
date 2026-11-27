@@ -35,8 +35,7 @@ fn capture() {
         common::copy_tree(&bundled.join(skill), &golden.repo.path().join(skill), &|s| s);
     }
     golden.world.inv = mazo::inventory::Inventory::load(golden.repo.path()).unwrap();
-    let input = golden.world.input(&golden.events);
-    let mut app = mazo::tui::App::new(&input, std::path::Path::new("/nonexistent"));
+    let mut app = common::app(&golden.world.input(&golden.events));
     let mut terminal = Terminal::new(TestBackend::new(140, 25)).unwrap();
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let buffer = terminal.backend().buffer();

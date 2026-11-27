@@ -3,6 +3,7 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use mazo::adapters::codex::{self, Codex};
@@ -43,7 +44,7 @@ fn parse(name: &str) -> Parsed {
 fn parse_text(text: &str) -> Parsed {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("rollout.jsonl");
-    std::fs::write(&p, text).unwrap();
+    fs::write(&p, text).unwrap();
     parse_path(&p)
 }
 
@@ -153,42 +154,26 @@ impl ForkMachine {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("dotfiles/skills");
         common::write(&source.join("argus/SKILL.md"), "x");
-        let source = std::fs::canonicalize(source).unwrap();
+        let source = fs::canonicalize(source).unwrap();
         let codex_home = tmp.path().join("codex");
         let day = codex_home.join("sessions/2026/03/30");
-        std::fs::create_dir_all(&day).unwrap();
+        fs::create_dir_all(&day).unwrap();
         let fixture_day = fixtures().join("fork/sessions/2026/03/30");
         let lines = [FORK_PARENT, FORK_CHILD]
             .map(|f| {
-                let text = std::fs::read_to_string(fixture_day.join(f)).unwrap();
+                let text = fs::read_to_string(fixture_day.join(f)).unwrap();
                 (f, text.replace(SOURCE, source.to_str().unwrap()).lines().map(String::from).collect())
             })
             .into();
         let skills: BTreeSet<String> = ["argus".to_string()].into();
-        let inv = Inventory {
-            source: Some(source.clone()),
-            known: skills.clone(),
-            skills,
-            worktree: None,
-            history: None,
-            ..Default::default()
-        };
-        let cfg = Config {
-            source: Some(source),
-            loose: vec![],
-            trusted: vec![],
-            evals_dir: Default::default(),
-            context_window: mazo::config::CONTEXT_WINDOW,
-            homes: vec![home(&codex_home)],
-            policy: Default::default(),
-            judge: None,
-        };
+        let inv = Inventory { source: Some(source.clone()), known: skills.clone(), skills, ..Default::default() };
+        let cfg = common::config(&source, vec![home(&codex_home)]);
         ForkMachine { tmp, cfg, inv, day, lines }
     }
 
     fn append(&self, file: &str, range: std::ops::Range<usize>) {
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.day.join(file)).unwrap();
+        let mut f = fs::OpenOptions::new().create(true).append(true).open(self.day.join(file)).unwrap();
         for l in &self.lines[file][range] {
             writeln!(f, "{l}").unwrap();
         }
@@ -344,6 +329,6 @@ fn child_keeps_its_ids_and_root_after_the_middle_rollout_is_deleted() {
     let before = chain.child(&chain.scan(false));
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].1, chain.ids[0]);
-    std::fs::remove_file(&chain.files[1]).unwrap();
+    fs::remove_file(&chain.files[1]).unwrap();
     assert_eq!(chain.child(&chain.scan(true)), before);
 }

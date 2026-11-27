@@ -3,6 +3,7 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 
 use common::{
@@ -37,9 +38,9 @@ fn counts(r: &Value) -> [u64; 6] {
 }
 
 #[test]
-fn fan_in_on_the_fixture_tree_matches_each_rule() {
+fn held_citations_on_the_fixture_tree_matches_each_rule() {
     let src = common::fixture("skills");
-    let g = inventory::fan_in(&Inventory::load(&src).unwrap());
+    let g = inventory::citations(&Inventory::load(&src).unwrap()).held;
     let edges: Vec<String> = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
     assert_eq!(
         edges,
@@ -54,14 +55,14 @@ fn fan_in_on_the_fixture_tree_matches_each_rule() {
 }
 
 #[test]
-fn fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
+fn held_citations_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
     let Some(src) = common::test_skills_env() else {
-        eprintln!("fan_in real repo: SKIPPED (MAZO_TEST_SKILLS unset)");
+        eprintln!("held citations real repo: SKIPPED (MAZO_TEST_SKILLS unset)");
         return;
     };
     let inv = Inventory::load(&src).unwrap();
     let skills = &inv.skills;
-    let g = inventory::fan_in(&inv);
+    let g = inventory::citations(&inv).held;
     assert_eq!(&g.keys().cloned().collect::<BTreeSet<_>>(), skills);
     for (a, cited) in &g {
         assert!(!cited.contains(a), "self-edge {a}");
@@ -70,9 +71,9 @@ fn fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets() {
 }
 
 #[test]
-fn fan_in_on_fixtures_ignores_frontmatter_and_name_suffixes() {
+fn held_citations_on_fixtures_ignores_frontmatter_and_name_suffixes() {
     let repo = report_repo();
-    let g = inventory::fan_in(&Inventory::load(repo.path()).unwrap());
+    let g = inventory::citations(&Inventory::load(repo.path()).unwrap()).held;
     let edges: Vec<String> = g.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
     assert_eq!(
         edges,
@@ -181,11 +182,10 @@ fn a_store_skill_is_new_from_its_install_date() {
 }
 
 #[test]
-fn mentions_on_fixtures_are_whole_words_that_are_not_edges() {
+fn named_citations_on_fixtures_are_whole_words_that_are_not_edges() {
     let repo = report_repo();
     let inv = Inventory::load(repo.path()).unwrap();
-    let edges = inventory::fan_in(&inv);
-    let m = inventory::mentions(&inv, &edges);
+    let m = inventory::citations(&inv).named;
     let pairs: Vec<String> = m.iter().flat_map(|(a, bs)| bs.iter().map(move |b| format!("{a}->{b}"))).collect();
     assert_eq!(pairs, ["unslop->goal-plan"]);
     assert_eq!(m.keys().cloned().collect::<BTreeSet<_>>(), inv.skills);
@@ -234,7 +234,7 @@ fn status_tokens_are_coloured_on_a_tty_unless_no_color() {
     git(repo.path(), &["add", "router"], NOW);
     git(repo.path(), &["commit", "-q", "-m", "router"], "2026-01-01T00:00:00Z");
     let skill_md = repo.path().join("unslop/SKILL.md");
-    write(&skill_md, &(std::fs::read_to_string(&skill_md).unwrap() + "\nEdited.\n"));
+    write(&skill_md, &(fs::read_to_string(&skill_md).unwrap() + "\nEdited.\n"));
     let w = report_world(repo.path());
     let events =
         vec![event("r1", "router", Channel::Slash, "s1", &ago(5)), event("u1", "unslop", Channel::Tool, "s2", &ago(5))];
@@ -435,7 +435,7 @@ fn usage_audit_marks_a_security_finding_else_an_audit_else_a_vet() {
     assert!(line("goal-plan").ends_with(" -"), "{text}");
 
     let lock = data.path().join("mazo.lock");
-    let text = std::fs::read_to_string(&lock).unwrap();
+    let text = fs::read_to_string(&lock).unwrap();
     write(&lock, &text.replace("[skill.verdict]\n", "[skill.verdict]\nsecurity = \"Sends files to a remote host.\"\n"));
     w.inv = mazo::store::inventory(Some(repo.path()), data.path()).unwrap();
     let finding = "security: Sends files to a remote host.; quality weak, value low value";
@@ -472,8 +472,8 @@ fn usage_lists_a_projects_skills_apart_from_the_global_ones() {
     let p = project.path();
     git(p, &["init", "-q"], NOW);
     common::vetted(p);
-    std::fs::create_dir(p.join(".mazo")).unwrap();
-    std::fs::rename(p.join("store"), p.join(".mazo/skills")).unwrap();
+    fs::create_dir(p.join(".mazo")).unwrap();
+    fs::rename(p.join("store"), p.join(".mazo/skills")).unwrap();
     write(&p.join(".mazo/skills/unslop/SKILL.md"), "---\nname: unslop\n---\n");
     let at = |rel: &str| Some(p.join(rel).display().to_string());
     let other = |mut e: Event, path: Option<String>| {
@@ -652,7 +652,13 @@ fn the_cards_chart_buckets_strong_sessions_by_day_week_and_month() {
     ];
     let input = w.input(&events);
     let chart = |since| {
-        let card = report::skill_card(&input, "unslop", &UsageArgs::new(since), report::SHOW_LIMIT);
+        let card = report::skill_card(
+            &input,
+            &inventory::citations(input.inv).held,
+            "unslop",
+            &UsageArgs::new(since),
+            report::SHOW_LIMIT,
+        );
         card.activity.into_iter().map(|b| (b.label, b.sessions, b.partial)).collect::<Vec<_>>()
     };
 
@@ -1181,7 +1187,7 @@ fn the_usage_guide_sample_is_current() {
         event("d", "triage", Channel::Slash, "D", &ago(4)),
     ];
     let printed = format!("$ mazo usage\n{}", report::usage(&w.input(&events), &args(), false, false));
-    let guide = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/usage-tracking.md")).unwrap();
+    let guide = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/usage-tracking.md")).unwrap();
     let sample = guide.split("```console\n").nth(1).and_then(|s| s.split("```").next()).unwrap();
     assert_eq!(sample, printed);
 }

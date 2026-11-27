@@ -68,7 +68,11 @@ fn lex(cmd: &str) -> Option<Vec<Vec<Vec<String>>>> {
     let mut chars = cmd.chars().peekable();
     fn end_word(word: &mut String, in_word: &mut bool, segments: &mut [Vec<Vec<String>>]) {
         if *in_word {
-            segments.last_mut().unwrap().last_mut().unwrap().push(std::mem::take(word));
+            segments
+                .last_mut()
+                .and_then(|s| s.last_mut())
+                .expect("lex starts with one pipeline of one command and never empties one")
+                .push(std::mem::take(word));
             *in_word = false;
         }
     }
@@ -122,7 +126,7 @@ fn lex(cmd: &str) -> Option<Vec<Vec<Vec<String>>>> {
                     return None;
                 }
                 end_word(&mut word, &mut in_word, &mut segments);
-                segments.last_mut().unwrap().push(Vec::new());
+                segments.last_mut().expect("lex starts with one pipeline and never removes one").push(Vec::new());
             }
             '(' | ')' | '`' | '{' | '}' | '<' => return None,
             ch => {

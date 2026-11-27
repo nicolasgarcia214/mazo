@@ -75,8 +75,8 @@ These decisions about the command line, the config file, the sync and lifecycle 
 - `Inventory::load_roots` skips a missing non-source root, because the store does not exist before the first `add`.
 - `canonical_skills` skips, with a Debug-escaped warning, any directory name that is not UTF-8 or not already inert, because a project's store can be anyone's commit. Its test skips on `EILSEQ` because APFS refuses non-UTF-8 names, so macOS never lists one.
 - `git` passes `--no-optional-locks` so report commands such as `git status` never rewrite the user's index.
-- `fan_in` draws A → B when A's citing text (the SKILL.md body plus `references/**/*.md`, backticks removed, whitespace collapsed) contains `the B skill`, `owned by B`, or `B/` as a path component.
-- `mentions` draws A → B for a whole-word, case-sensitive match of B not already in the fan-in edges. A mention marks a boundary between siblings and never holds a skill. `names` treats `/b` as a skill name and `b/` as a path, so a match followed by `/` is not a mention.
+- `inventory::citations` draws the held edge A → B when A's citing text (the SKILL.md body plus `references/**/*.md`, backticks removed, whitespace collapsed) contains `the B skill`, `owned by B`, or `B/` as a path component.
+- `inventory::citations` draws the named edge A → B for a whole-word, case-sensitive match of B not already a held edge. A mention marks a boundary between siblings and never holds a skill. `names` treats `/b` as a skill name and `b/` as a path, so a match followed by `/` is not a mention.
 
 ### Lifecycle (`lifecycle`)
 - `lifecycle::new` parses the generated SKILL.md back through `policy::always_on` and checks that the description round-trips, so what it writes passes the rules `sync` runs. A rejected name or description is a usage error; an existing entry or a store skill of that name is a refusal. `new` never runs `sync`, so `status` reports the missing links until `sync` runs.

@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::Path;
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::adapters;
 use crate::render::PathExt;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Cursor {
     pub dev: u64,
     pub ino: u64,
@@ -45,47 +45,73 @@ pub struct Chunk {
     pub lines: Vec<(u64, Vec<u8>)>,
     pub oversized: usize,
     pub cursor: Cursor,
+    pub header: Option<Vec<u8>>,
 }
 
 pub fn read(path: &Path, stored: Option<&Cursor>, filter: &Prefilter) -> io::Result<Chunk> {
-    let file = open(path)?;
-    let meta = file.metadata()?;
+    let (file, meta) = open(path)?;
     let (dev, ino) = (meta.dev(), meta.ino());
     let start = match stored {
-        Some(c) if c.dev == dev && c.ino == ino && meta.len() >= c.offset && c.window == window(&file, c.offset)? => *c,
+        Some(c) if c.dev == dev && c.ino == ino && meta.len() >= c.offset && c.window == window(&file, c.offset)? => {
+            if meta.len() == c.offset {
+                return Ok(Chunk { lines: Vec::new(), oversized: 0, cursor: *c, header: None });
+            }
+            *c
+        }
         _ => Cursor { dev, ino, ..Cursor::default() },
     };
     let mut reader = BufReader::with_capacity(1 << 20, file);
     reader.seek(SeekFrom::Start(start.offset))?;
     let mut cursor = start;
-    let mut lines = Vec::new();
-    let mut oversized = 0;
+    let (mut lines, mut oversized, mut header) = (Vec::new(), 0, None);
     let mut buf = Vec::new();
     loop {
-        buf.clear();
-        let mut n = (&mut reader).take(MAX_LINE + 1).read_until(b'\n', &mut buf)?;
-        if buf.len() as u64 > MAX_LINE && buf.last() != Some(&b'\n') {
-            match skip_line(&mut reader)? {
-                Some(rest) => n += rest,
+        let (mut n, line) = next_line(&mut reader, &mut buf)?;
+        match line {
+            Line::Full => {}
+            Line::Oversized => match skip_line(&mut reader)? {
+                Some(rest) => {
+                    n += rest;
+                    oversized += 1;
+                }
                 None => break,
-            }
-            cursor.offset += n as u64;
-            cursor.line += 1;
-            oversized += 1;
-            continue;
-        }
-        if n == 0 || buf.last() != Some(&b'\n') {
-            break;
+            },
+            Line::Eof | Line::Partial => break,
         }
         cursor.offset += n as u64;
         cursor.line += 1;
-        buf.pop();
+        if line != Line::Full {
+            continue;
+        }
+        if cursor.line == 1 {
+            header = Some(buf.clone());
+        }
         if filter.0.is_match(&buf) {
-            lines.push((cursor.line, buf.clone()));
+            lines.push((cursor.line, std::mem::take(&mut buf)));
         }
     }
     cursor.window = window(reader.get_ref(), cursor.offset)?;
-    Ok(Chunk { lines, oversized, cursor })
+    Ok(Chunk { lines, oversized, cursor, header })
+}
+
+#[derive(PartialEq, Eq)]
+enum Line {
+    Eof,
+    Full,
+    Partial,
+    Oversized,
+}
+
+fn next_line(reader: &mut impl BufRead, buf: &mut Vec<u8>) -> io::Result<(usize, Line)> {
+    buf.clear();
+    let n = reader.take(MAX_LINE + 1).read_until(b'\n', buf)?;
+    if n == 0 {
+        return Ok((0, Line::Eof));
+    }
+    if buf.pop_if(|b| *b == b'\n').is_some() {
+        return Ok((n, Line::Full));
+    }
+    Ok((n, if buf.len() as u64 > MAX_LINE { Line::Oversized } else { Line::Partial }))
 }
 
 fn skip_line(reader: &mut impl BufRead) -> io::Result<Option<usize>> {
@@ -112,33 +138,36 @@ fn window(file: &File, offset: u64) -> io::Result<u64> {
     Ok(u64::from_be_bytes(digest[..8].try_into().expect("a SHA-1 digest is 20 bytes")))
 }
 
-fn open(path: &Path) -> io::Result<File> {
+fn open(path: &Path) -> io::Result<(File, Metadata)> {
     let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
-    if !file.metadata()?.is_file() {
+    let meta = file.metadata()?;
+    if !meta.is_file() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a regular file", path.inert())));
     }
-    Ok(file)
+    Ok((file, meta))
 }
 
 pub fn whole(path: &Path) -> io::Result<Chunk> {
-    let mut reader = BufReader::with_capacity(1 << 20, open(path)?);
+    let mut reader = BufReader::with_capacity(1 << 20, open(path)?.0);
     let (mut lines, mut oversized, mut line) = (Vec::new(), 0, 0);
+    let mut buf = Vec::new();
     loop {
-        let mut buf = Vec::new();
-        if (&mut reader).take(MAX_LINE + 1).read_until(b'\n', &mut buf)? == 0 {
-            break;
-        }
-        line += 1;
-        if buf.pop_if(|b| *b == b'\n').is_none() && buf.len() as u64 > MAX_LINE {
-            oversized += 1;
-            if skip_line(&mut reader)?.is_none() {
-                break;
+        match next_line(&mut reader, &mut buf)?.1 {
+            Line::Eof => break,
+            Line::Full | Line::Partial => {
+                line += 1;
+                lines.push((line, std::mem::take(&mut buf)));
             }
-            continue;
+            Line::Oversized => {
+                line += 1;
+                oversized += 1;
+                if skip_line(&mut reader)?.is_none() {
+                    break;
+                }
+            }
         }
-        lines.push((line, buf));
     }
-    Ok(Chunk { lines, oversized, cursor: Cursor { line, ..Cursor::default() } })
+    Ok(Chunk { lines, oversized, cursor: Cursor { line, ..Cursor::default() }, header: None })
 }
 
 pub fn first_line(path: &Path) -> io::Result<Option<Vec<u8>>> {
@@ -146,11 +175,11 @@ pub fn first_line(path: &Path) -> io::Result<Option<Vec<u8>>> {
 }
 
 pub fn head(path: &Path) -> io::Result<impl Iterator<Item = Vec<u8>>> {
-    let mut reader = BufReader::new(open(path)?);
-    Ok(std::iter::from_fn(move || {
-        let mut buf = Vec::new();
-        (&mut reader).take(MAX_LINE + 1).read_until(b'\n', &mut buf).ok()?;
-        (buf.pop() == Some(b'\n')).then_some(buf)
+    let mut reader = BufReader::new(open(path)?.0);
+    let mut buf = Vec::new();
+    Ok(std::iter::from_fn(move || match next_line(&mut reader, &mut buf).ok()?.1 {
+        Line::Full => Some(std::mem::take(&mut buf)),
+        _ => None,
     })
     .fuse())
 }
@@ -158,6 +187,7 @@ pub fn head(path: &Path) -> io::Result<impl Iterator<Item = Vec<u8>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
 
     #[test]
@@ -165,16 +195,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("t.jsonl");
         let f = Prefilter::new([]);
-        std::fs::write(&p, "noise\n{\"x\":\"SKILL.md\"}\n{\"half\":\"SKILL").unwrap();
+        fs::write(&p, "noise\n{\"x\":\"SKILL.md\"}\n{\"half\":\"SKILL").unwrap();
         let a = read(&p, None, &f).unwrap();
         assert_eq!(a.lines.len(), 1);
         assert_eq!(a.lines[0].0, 2);
         assert_eq!(a.cursor.line, 2);
-        let mut fh = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+        assert_eq!(a.header.as_deref(), Some(&b"noise"[..]));
+        let mut fh = fs::OpenOptions::new().append(true).open(&p).unwrap();
         writeln!(fh, ".md\"}}").unwrap();
         let b = read(&p, Some(&a.cursor), &f).unwrap();
         assert_eq!(b.lines.len(), 1);
         assert_eq!(b.lines[0].0, 3);
+        assert!(b.header.is_none());
         let again = read(&p, Some(&b.cursor), &f).unwrap();
         assert!(again.lines.is_empty());
     }
@@ -184,10 +216,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("t.jsonl");
         let f = Prefilter::new([]);
-        std::fs::write(&p, "SKILL.md\n").unwrap();
+        fs::write(&p, "SKILL.md\n").unwrap();
         let a = read(&p, None, &f).unwrap();
-        std::fs::remove_file(&p).unwrap();
-        std::fs::write(&p, "SKILL.md one\nSKILL.md two\n").unwrap();
+        fs::remove_file(&p).unwrap();
+        fs::write(&p, "SKILL.md one\nSKILL.md two\n").unwrap();
         let mut c = a.cursor;
         c.ino = 0;
         let b = read(&p, Some(&c), &f).unwrap();
@@ -199,9 +231,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("t.jsonl");
         let f = Prefilter::new([]);
-        std::fs::write(&p, "SKILL.md a\n").unwrap();
+        fs::write(&p, "SKILL.md a\n").unwrap();
         let a = read(&p, None, &f).unwrap();
-        std::fs::write(&p, "SKILL.md one\nSKILL.md two\n").unwrap();
+        fs::write(&p, "SKILL.md one\nSKILL.md two\n").unwrap();
         let b = read(&p, Some(&a.cursor), &f).unwrap();
         assert_eq!(b.cursor.ino, a.cursor.ino);
         assert_eq!(b.lines, [(1, b"SKILL.md one".to_vec()), (2, b"SKILL.md two".to_vec())]);
@@ -213,10 +245,10 @@ mod tests {
         let p = dir.path().join("t.jsonl");
         let f = Prefilter::new([]);
         let long = vec![b'x'; MAX_LINE as usize + 1];
-        std::fs::write(&p, &long).unwrap();
+        fs::write(&p, &long).unwrap();
         let a = read(&p, None, &f).unwrap();
         assert_eq!((a.oversized, a.cursor.offset, a.cursor.line), (0, 0, 0));
-        let mut fh = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+        let mut fh = fs::OpenOptions::new().append(true).open(&p).unwrap();
         writeln!(fh, "\nSKILL.md").unwrap();
         let b = read(&p, Some(&a.cursor), &f).unwrap();
         assert_eq!(b.oversized, 1);
@@ -230,7 +262,7 @@ mod tests {
         let p = dir.path().join("t.jsonl");
         let mut text = vec![b'x'; MAX_LINE as usize];
         text.extend(b"\nSKILL.md\n");
-        std::fs::write(&p, &text).unwrap();
+        fs::write(&p, &text).unwrap();
         let a = read(&p, None, &Prefilter::new([])).unwrap();
         assert_eq!(a.oversized, 0);
         assert_eq!(a.lines, [(2, b"SKILL.md".to_vec())]);
@@ -244,7 +276,7 @@ mod tests {
         let mut text = b"one\n".to_vec();
         text.extend(vec![b'x'; MAX_LINE as usize + 1]);
         text.extend(b"\n\nfour");
-        std::fs::write(&p, &text).unwrap();
+        fs::write(&p, &text).unwrap();
         let c = whole(&p).unwrap();
         assert_eq!(c.lines, [(1, b"one".to_vec()), (3, Vec::new()), (4, b"four".to_vec())]);
         assert_eq!((c.oversized, c.cursor.line), (1, 4));

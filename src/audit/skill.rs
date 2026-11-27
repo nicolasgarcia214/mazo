@@ -17,9 +17,9 @@ use crate::ledger::Agent;
 use crate::render::Diag;
 
 pub const SKILL_PROMPT: &str = include_str!("../../prompts/skill.md");
-pub const SKILL_PROMPT_VERSION: &str = "skill-v2";
+const SKILL_PROMPT_VERSION: &str = "skill-v2";
 
-pub static SKILL: Stage = Stage { prompt: SKILL_PROMPT, schema: &SKILL_SCHEMA };
+static SKILL: Stage = Stage { prompt: SKILL_PROMPT, schema: &SKILL_SCHEMA };
 
 const VERDICT_CHARS: usize = 400;
 const REPORT_CHARS: usize = 300;
@@ -99,7 +99,7 @@ pub struct SkillReport {
     pub improvements: Vec<Improvement>,
     pub versus_grades: String,
     pub examples: Vec<Example>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#for: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r#try: Vec<String>,

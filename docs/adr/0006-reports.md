@@ -44,7 +44,7 @@ the way they are.
 - `UnusedRow::holders` lists the citers used in the window. Held status is not transitive: a skill whose only citer is held, not used, stays unused, and `UnusedRow::cluster` lists those unused citers.
 - New status wins over held, so an uncommitted skill cited by a used skill reports new.
 - `UnusedRow::named_by` lists skills used in the window that name this one, but being named never makes a skill held. A mention by a skill not used in the window gives no note.
-- `inventory::mentions` counts whole-word names that are not already `fan_in` edges. A path such as `x-goal-plan/` is not a word match.
+- `inventory::citations` reads each skill's citing text once and returns both graphs: `held` edges, and `named` whole-word names that are not already `held` edges. A path such as `x-goal-plan/` is not a word match.
 - `unused_of` dates a store skill from its install and a source skill from its first git commit. Outside a git worktree no source skill is new.
 - `retire_blockers` refuses to retire a skill that has a strong event in the last `days` days, or that a citing or naming skill with such an event holds.
 
@@ -89,8 +89,8 @@ the way they are.
 - `inert_value` makes every string inert, keys included, because a judge's answer or a committed lockfile is untrusted.
 
 ### Test design
-- `fan_in_on_the_fixture_tree_matches_each_rule` uses a fixture tree with one skill per citation rule, plus a description, an `owned by graders` mention and self-mentions that must yield no edges.
-- `fan_in_on_a_real_repo_has_no_self_edges_and_only_skill_targets` runs only with `MAZO_TEST_SKILLS` set and checks only invariants that hold on any skills repository.
+- `held_citations_on_the_fixture_tree_matches_each_rule` uses a fixture tree with one skill per citation rule, plus a description, an `owned by graders` mention and self-mentions that must yield no edges.
+- `held_citations_on_a_real_repo_has_no_self_edges_and_only_skill_targets` runs only with `MAZO_TEST_SKILLS` set and checks only invariants that hold on any skills repository.
 - `grade_of` builds a fresh report so the skill is hashed again after the test edits it.
 - `the_usage_guide_sample_is_current` pins the usage guide's `mazo usage` sample to the binary's output for its scenario.
 - `reports_match_their_golden_files` compares every rendered report and the judge schemas `audit::SESSION_SCHEMA` and `audit::SKILL_SCHEMA` byte for byte with `tests/golden/`, so a renderer or schema change is deliberate. `UPDATE_GOLDEN=1` rewrites the files so the change shows as a diff, and JSON outputs are pretty-printed so that diff is readable.

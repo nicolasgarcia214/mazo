@@ -32,11 +32,8 @@ pub fn project_root(verb: &str) -> Result<PathBuf> {
 
 pub fn scoped_inventory(inv: Inventory, project: Option<&Path>) -> Result<Inventory> {
     let Some(project) = project else { return Ok(inv) };
-    let store = project_dir(project);
-    let roots: Vec<&Path> = inv.roots.iter().map(PathBuf::as_path).chain([store.as_path()]).collect();
-    let mut with = Inventory::load_roots(inv.source.as_deref(), &roots)?;
-    let project_lock = Lock::load(project)?.skills.into_iter().map(|l| (l.name.clone(), l));
-    with.installed = inv.installed.into_iter().chain(project_lock).collect();
+    let mut with = inv.with_root(&project_dir(project))?;
+    with.installed.extend(Lock::installed(project)?);
     Ok(with)
 }
 
@@ -80,7 +77,7 @@ impl Project {
         }
         let store = root.join(PROJECT_STORE);
         let skills = if store.exists() { crate::inventory::canonical_skills(&store)? } else { BTreeSet::new() };
-        let installed = Lock::load(root)?.skills.into_iter().map(|l| (l.name.clone(), l)).collect();
+        let installed = Lock::installed(root)?;
         Ok(Some(Project { root: root.to_path_buf(), skills, installed }))
     }
 

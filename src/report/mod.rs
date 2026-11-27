@@ -136,7 +136,7 @@ pub fn report<'a>(input: &'a Input<'a>, since: Since) -> Report<'a> {
             Some(GradeDue { skill: r.skill.clone(), state, command: format!("/grade {}", r.skill) })
         })
         .collect();
-    let graph = inventory::fan_in(input.inv);
+    let graph = inventory::citations(input.inv).held;
     let args = UsageArgs::new(since);
     let mut memo = Transcripts::default();
     let cards = input.inv.skills.iter().map(|s| card(&view, &graph, s, &args, SHOW_LIMIT, &mut memo)).collect();

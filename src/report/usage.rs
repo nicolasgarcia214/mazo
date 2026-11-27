@@ -6,7 +6,7 @@ use serde::Serialize;
 use super::view::{Filter, Key, View, relative};
 use super::{Input, UsageArgs, json_line, legend};
 use crate::ctx::Ctx;
-use crate::evals::{self, Evals, Grade};
+use crate::evals::{Evals, Grade};
 use crate::inventory::{Inventory, Scope};
 use crate::ledger::{Agent, Channel};
 use crate::render::{self, Align};
@@ -64,7 +64,7 @@ pub struct UsageRow {
     pub mark: &'static str,
 }
 
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Trend {
     Up,
@@ -95,7 +95,7 @@ impl Trend {
     }
 }
 
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum VerdictSource {
     Audit,
@@ -158,7 +158,7 @@ fn usage_rows(view: &View, args: &UsageArgs) -> Vec<UsageRow> {
             let sessions = |days| view.strong_sessions(select(None), days);
             let sessions_30d = sessions(0..30);
             let global = scope == Scope::Global && input.inv.skills.contains(skill);
-            let grade = global.then(|| grade_out(&evals::load(&input.cfg.evals_dir, input.inv, skill))).flatten();
+            let grade = global.then(|| grade_out(&view.evals(skill))).flatten();
             let (mark, verdict) = verdict_of(input, skill, scope);
             let (verdict_source, verdict) = verdict.unzip();
             UsageRow {

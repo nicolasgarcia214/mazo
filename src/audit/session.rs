@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{Stage, list, object, text};
 
 pub const SESSION_PROMPT: &str = include_str!("../../prompts/session.md");
-pub const SESSION_PROMPT_VERSION: &str = "session-v1";
+pub(super) const SESSION_PROMPT_VERSION: &str = "session-v1";
 
 const ASKED_CHARS: usize = 240;
 const NOTES_CHARS: usize = 400;
@@ -31,7 +31,7 @@ pub static SESSION_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     .to_string()
 });
 
-pub static SESSION: Stage = Stage { prompt: SESSION_PROMPT, schema: &SESSION_SCHEMA };
+pub(super) static SESSION: Stage = Stage { prompt: SESSION_PROMPT, schema: &SESSION_SCHEMA };
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]

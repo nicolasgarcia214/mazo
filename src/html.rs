@@ -4,6 +4,7 @@ use std::process::Command;
 
 use jiff::tz::TimeZone;
 
+use crate::Result;
 use crate::examples::Examples;
 use crate::help;
 use crate::inventory::Scope;
@@ -296,7 +297,7 @@ pub fn render(model: &Report) -> String {
     )
 }
 
-pub fn write(path: &Path, html: &str) -> crate::Result<()> {
+pub fn write(path: &Path, html: &str) -> Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         fs::create_dir_all(dir).map_err(crate::at(dir))?;
     }
@@ -308,7 +309,7 @@ pub fn in_worktree(path: &Path) -> bool {
     crate::inventory::git(dir, &["rev-parse", "--is-inside-work-tree"]).is_some_and(|s| s.trim() == "true")
 }
 
-pub fn open(path: &Path) -> crate::Result<()> {
+pub fn open(path: &Path) -> Result<()> {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     let status = Command::new(opener).arg(path).status().map_err(|e| format!("{opener}: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("{opener} {}: {status}", path.inert()).into()) }

@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -11,17 +12,14 @@ use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 
+use common::app;
 use common::golden::Golden;
-use mazo::inventory::Inventory;
+use mazo::inventory::{Inventory, citations};
 use mazo::ledger::{self, Agent, Channel, Event, Ledger};
 use mazo::render::{self, Colour};
 use mazo::report::{self, Input, Since, UsageArgs};
-use mazo::tui::{App, Screen};
+use mazo::tui::{App, Data, Screen};
 use mazo::{config, links, store};
-
-fn app(input: &Input) -> App {
-    App::new(input, Path::new("/nonexistent"))
-}
 
 fn draw(app: &mut App, width: u16, height: u16) -> Vec<(String, Vec<Color>)> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -433,12 +431,18 @@ fn a_narrow_unused_list_cuts_the_notes_and_keeps_the_skill_names() {
 }
 
 fn card_of(input: &Input, skill: &str) -> Vec<String> {
-    let card = report::skill_card(input, skill, &UsageArgs::new(Since::Days(30)), report::SHOW_LIMIT);
+    let card = report::skill_card(
+        input,
+        &citations(input.inv).held,
+        skill,
+        &UsageArgs::new(Since::Days(30)),
+        report::SHOW_LIMIT,
+    );
     report::card_text(input, &card, false).lines().map(String::from).collect()
 }
 
 fn chart_of(input: &Input, skill: &str, since: Since) -> Vec<report::Bucket> {
-    report::skill_card(input, skill, &UsageArgs::new(since), report::SHOW_LIMIT).activity
+    report::skill_card(input, &citations(input.inv).held, skill, &UsageArgs::new(since), report::SHOW_LIMIT).activity
 }
 
 fn check_chart(
@@ -723,7 +727,7 @@ struct Actions {
 impl Actions {
     fn new(source: bool) -> Actions {
         let temp = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
         let (dir, home, data) = (root.join("skills"), root.join("home/.claude"), root.join("data"));
         for (name, body) in [("idle", ""), ("held", ""), ("busy", "Run the held skill.\n")] {
             common::write(
@@ -768,19 +772,16 @@ impl Actions {
     }
 
     fn app_at(&self, now: jiff::Timestamp) -> App {
-        let (inv, ledger) = (self.inv(), Ledger::load(&self.data).unwrap());
-        let coverage = ledger::load_coverage(&self.data).unwrap();
-        let audits = Default::default();
-        let input = Input {
-            cfg: &self.cfg,
-            inv: &inv,
-            events: ledger.events(),
-            coverage: &coverage,
-            audits: &audits,
+        App::new(Data {
+            cfg: self.cfg.clone(),
+            inv: self.inv(),
+            events: Ledger::load(&self.data).unwrap().into_events(),
+            coverage: ledger::load_coverage(&self.data).unwrap(),
+            audits: Default::default(),
             now,
             tz: jiff::tz::TimeZone::UTC,
-        };
-        App::new(&input, &self.data)
+            dir: self.data.clone(),
+        })
     }
 
     fn disk(&self) -> common::sync::Snapshot {
@@ -797,18 +798,18 @@ impl Actions {
             "command" => format!("argv = [\"{}\"]\n", stub(&root).display()),
             _ => String::new(),
         };
-        let toml = std::fs::read_to_string(root.join("mazo.toml")).unwrap();
+        let toml = fs::read_to_string(root.join("mazo.toml")).unwrap();
         common::write(&root.join("mazo.toml"), &format!("{toml}\n[judge]\nagent = \"{agent}\"\n{argv}"));
         self.cfg = config::load(&root.join("mazo.toml")).unwrap().unwrap();
         let ts = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(48)).unwrap().to_string();
         let src = format!("{}:5", common::fixture("claude/condense.jsonl").display());
         let e = Event { src, ..common::event("e2", "busy", Channel::Tool, "s2", &ts) };
-        let events = std::fs::read_to_string(self.data.join("events.jsonl")).unwrap();
+        let events = fs::read_to_string(self.data.join("events.jsonl")).unwrap();
         common::write(&self.data.join("events.jsonl"), &(events + &serde_json::to_string(&e).unwrap() + "\n"));
     }
 
     fn pids(&self) -> Vec<String> {
-        let pids = std::fs::read_to_string(self.data.parent().unwrap().join("pids")).unwrap_or_default();
+        let pids = fs::read_to_string(self.data.parent().unwrap().join("pids")).unwrap_or_default();
         pids.lines().map(String::from).collect()
     }
 }
@@ -953,10 +954,10 @@ fn a_blocked_retire_shows_its_blockers_and_changes_nothing() {
 fn a_store_skill_installed_long_ago_is_not_new_after_an_action() {
     let fx = Actions::new(true);
     let lock = fx.data.join("mazo.lock");
-    let toml = std::fs::read_to_string(&lock).unwrap();
+    let toml = fs::read_to_string(&lock).unwrap();
     let at = toml.lines().find(|l| l.starts_with("installed_at")).unwrap();
     let long_ago = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(24 * 100)).unwrap();
-    std::fs::write(&lock, toml.replace(at, &format!("installed_at = \"{long_ago}\""))).unwrap();
+    fs::write(&lock, toml.replace(at, &format!("installed_at = \"{long_ago}\""))).unwrap();
     let mut app = fx.app();
     press(&mut app, KeyCode::Tab);
     assert_eq!(row(&text(&mut app, 200, 20), "stored")[1], "unused");
@@ -990,7 +991,7 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
     store::add(&fx.cfg, &fx.inv(), &fx.data, &args).unwrap();
     let now: jiff::Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
     let lock = fx.data.join("mazo.lock");
-    let mut lines: Vec<String> = std::fs::read_to_string(&lock).unwrap().lines().map(String::from).collect();
+    let mut lines: Vec<String> = fs::read_to_string(&lock).unwrap().lines().map(String::from).collect();
     let mut name = "";
     for line in &mut lines {
         if let Some(n) = line.strip_prefix("name = ") {
@@ -1001,7 +1002,7 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
             *line = format!("installed_at = \"{at}\"");
         }
     }
-    std::fs::write(&lock, lines.join("\n") + "\n").unwrap();
+    fs::write(&lock, lines.join("\n") + "\n").unwrap();
     let before = fx.disk();
 
     let mut app = fx.app_at(now);
@@ -1036,7 +1037,7 @@ fn enter_on_an_unused_store_skill_asks_to_retire_it_and_on_any_other_row_opens_t
 #[test]
 fn s_shows_the_dry_run_plan_and_y_applies_it() {
     let fx = Actions::new(true);
-    std::fs::remove_file(fx.skills.join("idle")).unwrap();
+    fs::remove_file(fx.skills.join("idle")).unwrap();
     let homes: Vec<_> = fx.cfg.homes.iter().collect();
     let plan = links::planned(&links::checked(&fx.cfg, &fx.inv(), &homes).unwrap());
     assert_eq!(plan, [format!("would link  {}", fx.skills.join("idle").display())]);
@@ -1050,7 +1051,7 @@ fn s_shows_the_dry_run_plan_and_y_applies_it() {
 
     press(&mut app, KeyCode::Char('s'));
     press(&mut app, KeyCode::Char('y'));
-    assert_eq!(std::fs::read_link(fx.skills.join("idle")).unwrap(), fx.source.join("idle"));
+    assert_eq!(fs::read_link(fx.skills.join("idle")).unwrap(), fx.source.join("idle"));
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('s'));
     let screen = text(&mut app, 200, 20);
@@ -1199,7 +1200,7 @@ impl Actions {
     fn hosted_repo(&self, name: &str) -> String {
         static REWRITE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
         let tmp = REWRITE.get_or_init(|| {
-            let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+            let tmp = fs::canonicalize(std::env::temp_dir()).unwrap();
             let key = format!("url.file://{}/.insteadOf", tmp.display());
             unsafe {
                 std::env::set_var("GIT_CONFIG_KEY_0", key);
@@ -1258,7 +1259,7 @@ impl Actions {
             "try": [],
         });
         common::write(&root.join("verdict.json"), &verdict.to_string());
-        let toml = std::fs::read_to_string(root.join("mazo.toml")).unwrap();
+        let toml = fs::read_to_string(root.join("mazo.toml")).unwrap();
         let judge = format!("\n[judge]\nagent = \"command\"\nargv = [\"{}\"]\n", path.display());
         common::write(&root.join("mazo.toml"), &(toml + &judge));
         self.cfg = config::load(&root.join("mazo.toml")).unwrap().unwrap();
@@ -1305,7 +1306,7 @@ fn u_updates_a_trusted_skill_without_the_judge_and_re_vets_an_untrusted_one_in_t
     let to = store::dir(&fx.data).join("ours");
     assert!(screen.iter().any(|l| l.contains(" update ours · done · Esc closes ")), "{screen:#?}");
     assert!(screen.iter().any(|l| l.contains(&format!("updated {} to ", to.display()))), "{screen:#?}");
-    assert!(std::fs::read_to_string(to.join("SKILL.md")).unwrap().ends_with("v2\n"));
+    assert!(fs::read_to_string(to.join("SKILL.md")).unwrap().ends_with("v2\n"));
     assert!(fx.pids().is_empty(), "a trusted update calls no judge");
 
     let was = fx.commit("theirs");
@@ -1341,7 +1342,7 @@ fn a_poor_re_vet_asks_before_the_update_is_applied() {
     let mut fx = Actions::new(true);
     fx.vetter(None);
     let verdict = fx.data.parent().unwrap().join("verdict.json");
-    let poor = std::fs::read_to_string(&verdict).unwrap().replace(r#""quality":"good""#, r#""quality":"poor""#);
+    let poor = fs::read_to_string(&verdict).unwrap().replace(r#""quality":"good""#, r#""quality":"poor""#);
     common::write(&verdict, &poor);
     let theirs = fx.repo("theirs");
     fx.install(&theirs);
@@ -1373,7 +1374,7 @@ fn a_poor_re_vet_asks_before_the_update_is_applied() {
     assert_eq!(fx.pids().len(), 2, "one re-vet per update");
     assert_ne!(fx.commit("theirs"), was);
     let to = store::dir(&fx.data).join("theirs");
-    assert!(std::fs::read_to_string(to.join("SKILL.md")).unwrap().ends_with("v2\n"));
+    assert!(fs::read_to_string(to.join("SKILL.md")).unwrap().ends_with("v2\n"));
 }
 
 #[test]
@@ -1381,7 +1382,7 @@ fn declining_ctrl_c_at_a_jobs_question_reopens_it_unanswered() {
     let mut fx = Actions::new(true);
     fx.vetter(None);
     let verdict = fx.data.parent().unwrap().join("verdict.json");
-    let poor = std::fs::read_to_string(&verdict).unwrap().replace(r#""quality":"good""#, r#""quality":"poor""#);
+    let poor = fs::read_to_string(&verdict).unwrap().replace(r#""quality":"good""#, r#""quality":"poor""#);
     common::write(&verdict, &poor);
     let theirs = fx.repo("theirs");
     fx.install(&theirs);
@@ -1433,7 +1434,7 @@ fn quitting_during_an_update_of_every_skill_leaves_every_store_skill_in_place() 
     for name in ["stored", "one", "two"] {
         assert!(store.join(name).join("SKILL.md").is_file(), "{name} is gone");
     }
-    let hidden: Vec<_> = std::fs::read_dir(&store)
+    let hidden: Vec<_> = fs::read_dir(&store)
         .unwrap()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
@@ -1481,15 +1482,15 @@ fn u_on_a_source_or_local_path_skill_says_it_is_not_updatable() {
 
 fn binary(judge: bool) -> (tempfile::TempDir, PathBuf, common::Mazo) {
     let temp = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let root = fs::canonicalize(temp.path()).unwrap();
     let (home, source) = (root.join("home"), root.join("skills"));
     common::write(&source.join("idle/SKILL.md"), "---\nname: idle\ndescription: Idle.\n---\n");
     let mut toml =
         "source = \".\"\n\n[[home]]\nname = \"claude\"\nagent = \"claude\"\npath = \"~/.claude\"\n".to_string();
     if judge {
         common::write(&source.join("unslop/SKILL.md"), "---\nname: unslop\ndescription: X.\n---\n");
-        std::fs::create_dir_all(home.join(".claude/projects/p")).unwrap();
-        std::fs::copy(common::fixture("claude/condense.jsonl"), home.join(".claude/projects/p/s.jsonl")).unwrap();
+        fs::create_dir_all(home.join(".claude/projects/p")).unwrap();
+        fs::copy(common::fixture("claude/condense.jsonl"), home.join(".claude/projects/p/s.jsonl")).unwrap();
         common::write(&root.join("hang"), "");
         toml += &format!("\n[judge]\nagent = \"command\"\nargv = [\"{}\"]\n", stub(&root).display());
     }
@@ -1575,7 +1576,7 @@ fn bare_mazo_on_a_terminal_quits_on_q_and_ctrl_c_and_restores_the_terminal() {
 #[test]
 fn quitting_bare_mazo_mid_audit_kills_the_judge_and_restores_the_terminal() {
     let (_temp, root, mazo) = binary(true);
-    let pids = || std::fs::read_to_string(root.join("pids")).unwrap_or_default();
+    let pids = || fs::read_to_string(root.join("pids")).unwrap_or_default();
     let steps: [(&[u8], &dyn Fn() -> bool); 2] = [(b"/unslop\rxy", &|| true), (b"qy", &|| !pids().is_empty())];
     let Some((code, out)) = on_a_pty(mazo, &steps) else { return };
     assert_eq!(code, Some(0), "{}", String::from_utf8_lossy(&out));

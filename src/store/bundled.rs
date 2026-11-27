@@ -103,7 +103,7 @@ fn semver(tag: &str) -> Option<(u64, u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{behind, semver, tag};
+    use super::*;
     use crate::store::Locked;
 
     fn entry(origin: &str, subpath: &str, r#ref: Option<&str>) -> Locked {

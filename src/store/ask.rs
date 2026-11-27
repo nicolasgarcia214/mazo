@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{BufRead, IsTerminal};
 use std::path::Path;
 
@@ -151,7 +152,7 @@ pub(super) fn name(path: &str) -> &str {
 
 fn skill_dirs(root: &Path) -> std::result::Result<Vec<String>, String> {
     fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) -> std::result::Result<(), String> {
-        let entries = std::fs::read_dir(dir).map_err(crate::at(dir))?;
+        let entries = fs::read_dir(dir).map_err(crate::at(dir))?;
         for e in entries.flatten() {
             let child = e.file_name().to_string_lossy().into_owned();
             if child.starts_with('.') || child == "node_modules" {

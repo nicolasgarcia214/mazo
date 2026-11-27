@@ -24,14 +24,14 @@ impl Adapter for Pi {
             return Parsed { skipped: true, ..Parsed::default() };
         };
         let mut out = Parsed::default();
-        for (line, bytes) in &chunk.lines {
-            let Ok(v) = serde_json::from_slice::<Value>(bytes) else { continue };
+        let mut malformed = 0;
+        for (line, v) in super::values(chunk, &mut malformed) {
             if v["type"] != "message" {
                 continue;
             }
             let Some(id) = v["id"].as_str() else { continue };
             let ts = v["timestamp"].as_str().unwrap_or_default();
-            let entry = Entry { roots, session: &session, id, ts, line: *line };
+            let entry = Entry { roots, session: &session, id, ts, line };
             let msg = &v["message"];
             match msg["role"].as_str() {
                 Some("user") => out.raws.extend(entry.slash(&msg["content"])),
@@ -39,6 +39,7 @@ impl Adapter for Pi {
                 _ => {}
             }
         }
+        out.malformed = malformed;
         out
     }
 

@@ -15,7 +15,7 @@ pub fn colour(tty: bool, no_color: Option<&OsStr>) -> bool {
     tty && no_color.is_none_or(OsStr::is_empty)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Colour {
     Red,
     Yellow,
@@ -43,7 +43,7 @@ fn tint(token: &str, colour: Option<Colour>, on: bool) -> String {
     format!("\x1b[{code}m{token}\x1b[0m")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
     Error,
     Warning,
@@ -65,7 +65,7 @@ impl Level {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diag {
     pub level: Level,
     pub text: String,
@@ -91,7 +91,7 @@ impl std::fmt::Display for Diag {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Note {
     Plain(String),
     Diag(Diag),

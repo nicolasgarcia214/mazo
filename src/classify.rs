@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use jiff::{SignedDuration, Timestamp};
@@ -180,7 +181,7 @@ impl Classifier<'_> {
         };
         let p = Path::new(path);
         let rooted = |r: PathBuf| self.inv.roots.iter().any(|root| r.starts_with(root));
-        if std::fs::canonicalize(p).is_ok_and(rooted) {
+        if fs::canonicalize(p).is_ok_and(rooted) {
             return Origin::Canonical;
         }
         let in_home_skills = self.homes.iter().any(|h| {
@@ -230,12 +231,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let tmp = tmp.path().canonicalize().unwrap();
         let (source, data) = (tmp.join("source"), tmp.join("data"));
-        std::fs::create_dir(tmp.join("real")).unwrap();
+        fs::create_dir(tmp.join("real")).unwrap();
         std::os::unix::fs::symlink(tmp.join("real"), &data).unwrap();
         let store = data.join("store");
         for dir in [source.join("mine"), store.join("theirs"), tmp.join("elsewhere/theirs")] {
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("SKILL.md"), "x").unwrap();
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("SKILL.md"), "x").unwrap();
         }
         let inv = crate::store::inventory(Some(&source), &data).unwrap();
         let home =

@@ -9,7 +9,7 @@ use crate::durable::{append_lines, jsonl, lock, write_atomic};
 use crate::render::PathExt;
 
 #[derive(
-    Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, clap::ValueEnum,
+    Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, clap::ValueEnum,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
@@ -29,7 +29,7 @@ impl Agent {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, clap::ValueEnum)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
     Slash,
@@ -49,7 +49,7 @@ pub fn name(v: impl Serialize) -> String {
     serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Actor {
     Probe,
@@ -58,14 +58,14 @@ pub enum Actor {
     Main,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Origin {
     Canonical,
     Other,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Event {
     pub v: u32,
     pub id: String,
@@ -90,7 +90,7 @@ impl Event {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct Coverage {
     pub first: Option<String>,
     pub last_scan: Option<String>,
@@ -175,14 +175,15 @@ impl Ledger {
         Some(line)
     }
 
-    pub fn append(&self, lines: &[Event]) -> Result<()> {
+    pub fn append<'a>(&self, lines: impl IntoIterator<Item = &'a Event>) -> Result<()> {
         if self.unreadable {
             return self.replace(&self.events);
         }
-        if lines.is_empty() {
+        let text = to_lines(lines);
+        if text.is_empty() {
             return Ok(());
         }
-        append_lines(&self.dir.join("events.jsonl"), to_lines(lines))
+        append_lines(&self.dir.join("events.jsonl"), text)
     }
 
     pub fn replace(&self, lines: &[Event]) -> Result<()> {
@@ -212,8 +213,8 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
-fn to_lines(events: &[Event]) -> String {
-    events.iter().map(|e| serde_json::to_string(e).expect("event serialises") + "\n").collect()
+fn to_lines<'a>(events: impl IntoIterator<Item = &'a Event>) -> String {
+    events.into_iter().map(|e| serde_json::to_string(e).expect("event serialises") + "\n").collect()
 }
 
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {

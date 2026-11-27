@@ -29,7 +29,7 @@ pub static VET_SCHEMA: LazyLock<String> = LazyLock::new(|| {
     object(fields).to_string()
 });
 
-pub static VET: Stage = Stage { prompt: VET_PROMPT, schema: &VET_SCHEMA };
+static VET: Stage = Stage { prompt: VET_PROMPT, schema: &VET_SCHEMA };
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -53,11 +53,11 @@ pub enum Worth {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VetVerdict {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<String>,
     pub quality: Quality,
     pub value: Worth,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub redundant_with: Option<String>,
     pub reasons: Vec<String>,
 }

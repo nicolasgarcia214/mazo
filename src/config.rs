@@ -25,7 +25,7 @@ pub struct Config {
     pub judge: Option<Judge>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Judge {
     pub agent: JudgeAgent,
@@ -72,7 +72,7 @@ fn cleartext(url: &str) -> bool {
     url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://")) && !url::Url::parse(url).is_ok_and(loopback)
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 #[serde(try_from = "String", into = "&'static str")]
 pub enum JudgeAgent {
     #[default]
@@ -118,7 +118,7 @@ impl From<JudgeAgent> for &'static str {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Billing {
     #[default]
@@ -126,7 +126,7 @@ pub enum Billing {
     Api,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Policy {
     pub no_disable_model_invocation: bool,
@@ -170,7 +170,7 @@ impl Home {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,7 +234,7 @@ impl RawConfig {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawHome {
     name: String,

@@ -19,9 +19,8 @@ pub fn retire_blockers(input: &Input, skill: &str, days: u32) -> Vec<String> {
     if used.contains(skill) {
         out.push(format!("{skill} has a strong event in the last {days} days"));
     }
-    let graph = inventory::fan_in(input.inv);
-    let named = inventory::mentions(input.inv, &graph);
-    for (citing, verb) in [(&graph, "held"), (&named, "named")] {
+    let inventory::Citations { held, named } = inventory::citations(input.inv);
+    for (citing, verb) in [(&held, "held"), (&named, "named")] {
         let who: Vec<String> = citers(citing, skill).into_iter().filter(|a| used.contains(a.as_str())).collect();
         if !who.is_empty() {
             out.push(format!("{skill} is {verb} by {}", who.join(", ")));
@@ -53,8 +52,7 @@ fn unused_of(view: &View, since: Since) -> Unused {
     let start = view.start(since);
     let used = view.used(start);
     let weak: BTreeSet<&str> = view.select(&f, None, start).map(|e| e.skill.as_str()).collect();
-    let graph = inventory::fan_in(input.inv);
-    let named = inventory::mentions(input.inv, &graph);
+    let inventory::Citations { held: graph, named } = inventory::citations(input.inv);
     let mut rows: Vec<UnusedRow> = input
         .inv
         .skills

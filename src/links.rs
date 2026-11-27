@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::Result;
 use crate::config::{Config, Home};
 use crate::inventory::{Inventory, Scope};
 use crate::policy;
@@ -263,7 +264,7 @@ fn physical(dir: &Path) -> PathBuf {
     p
 }
 
-fn check_dir(dir: &Path) -> Result<(), PathBuf> {
+fn check_dir(dir: &Path) -> std::result::Result<(), PathBuf> {
     let mut p = dir.to_path_buf();
     while fs::symlink_metadata(&p).is_err() {
         if !p.pop() {
@@ -293,7 +294,7 @@ pub fn sync_errors(cfg: &Config, inv: &Inventory, homes: &[&Home], plan: &Plan) 
         .collect()
 }
 
-pub fn checked(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> Result<Plan, Vec<Diag>> {
+pub fn checked(cfg: &Config, inv: &Inventory, homes: &[&Home]) -> std::result::Result<Plan, Vec<Diag>> {
     let plan = plan(cfg, inv, homes, None);
     let errors = sync_errors(cfg, inv, homes, &plan);
     if errors.is_empty() { Ok(plan) } else { Err(errors) }
@@ -310,11 +311,11 @@ pub fn planned(plan: &Plan) -> Vec<String> {
         .collect()
 }
 
-pub fn apply(plan: &Plan) -> crate::Result<Vec<String>> {
+pub fn apply(plan: &Plan) -> Result<Vec<String>> {
     apply_after(Vec::new(), plan)
 }
 
-pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> crate::Result<Vec<String>> {
+pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> Result<Vec<String>> {
     assert!(plan.conflicts.is_empty(), "apply() is only called on a conflict-free plan");
     for a in &plan.actions {
         let (path, done) = match a {
@@ -340,14 +341,14 @@ pub fn apply_after(mut out: Vec<String>, plan: &Plan) -> crate::Result<Vec<Strin
 mod tests {
     use std::path::Path;
 
-    use super::{Action, Plan, State, plan};
+    use super::*;
     use crate::config::{Config, Home};
     use crate::inventory::Inventory;
     use crate::ledger::Agent;
 
     fn skill(root: &Path, name: &str) {
-        std::fs::create_dir_all(root.join(name)).unwrap();
-        std::fs::write(root.join(name).join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+        fs::create_dir_all(root.join(name)).unwrap();
+        fs::write(root.join(name).join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
     }
 
     fn setup(tmp: &Path) -> (Config, Inventory) {
@@ -375,7 +376,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (cfg, inv) = setup(tmp.path());
         let skills = tmp.path().join("home/skills");
-        std::fs::create_dir_all(&skills).unwrap();
+        fs::create_dir_all(&skills).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("store/gone"), skills.join("gone")).unwrap();
         let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
         assert!(p.conflicts.is_empty(), "{:?}", p.conflicts);
@@ -398,15 +399,15 @@ mod tests {
         let (cfg, inv) = setup(tmp.path());
         let homes: Vec<&Home> = cfg.homes.iter().collect();
         let skills = tmp.path().join("home/skills");
-        std::fs::create_dir_all(&skills).unwrap();
+        fs::create_dir_all(&skills).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("source/theirs"), skills.join("theirs")).unwrap();
         let p = plan(&cfg, &inv, &homes, None);
         assert!(p.conflicts.is_empty(), "{:?}", p.conflicts);
         assert_eq!(p.entries.iter().find(|e| e.path == skills.join("theirs")).unwrap().state, State::Dangling);
         super::apply(&p).unwrap();
-        assert_eq!(std::fs::read_link(skills.join("theirs")).unwrap(), tmp.path().join("store/theirs"));
+        assert_eq!(fs::read_link(skills.join("theirs")).unwrap(), tmp.path().join("store/theirs"));
 
-        std::fs::remove_file(skills.join("mine")).unwrap();
+        fs::remove_file(skills.join("mine")).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("store/theirs"), skills.join("mine")).unwrap();
         let p = plan(&cfg, &inv, &homes, None);
         let errors: Vec<String> = p.conflicts.iter().map(|(_, e)| e.to_string()).collect();
@@ -429,12 +430,12 @@ mod tests {
     #[test]
     fn a_home_sharing_a_skills_dir_keeps_its_links_entries() {
         let tmp = tempfile::tempdir().unwrap();
-        let tmp = std::fs::canonicalize(tmp.path()).unwrap();
+        let tmp = fs::canonicalize(tmp.path()).unwrap();
         let (mut cfg, inv) = setup(&tmp);
-        std::fs::write(tmp.join("source/extra.md"), "extra\n").unwrap();
+        fs::write(tmp.join("source/extra.md"), "extra\n").unwrap();
         let skills = tmp.join("home/skills");
-        std::fs::create_dir_all(&skills).unwrap();
-        std::fs::create_dir_all(tmp.join("pi")).unwrap();
+        fs::create_dir_all(&skills).unwrap();
+        fs::create_dir_all(tmp.join("pi")).unwrap();
         std::os::unix::fs::symlink(&skills, tmp.join("pi/skills")).unwrap();
         let links = [("skills/extra.md".to_string(), "extra.md".to_string())].into();
         cfg.homes.push(Home { name: "pi".into(), agent: Agent::Pi, path: tmp.join("pi"), links });
@@ -453,9 +454,9 @@ mod tests {
     #[test]
     fn a_skills_dir_that_resolves_to_a_root_is_one_conflict() {
         let tmp = tempfile::tempdir().unwrap();
-        let tmp = std::fs::canonicalize(tmp.path()).unwrap();
+        let tmp = fs::canonicalize(tmp.path()).unwrap();
         let (cfg, inv) = setup(&tmp);
-        std::fs::create_dir_all(tmp.join("home")).unwrap();
+        fs::create_dir_all(tmp.join("home")).unwrap();
         std::os::unix::fs::symlink(tmp.join("source"), tmp.join("home/skills")).unwrap();
         let p = plan(&cfg, &inv, &cfg.homes.iter().collect::<Vec<_>>(), None);
         let errors: Vec<String> = p.conflicts.iter().map(|(_, e)| e.to_string()).collect();

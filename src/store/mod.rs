@@ -39,7 +39,7 @@ pub fn inventory(source: Option<&Path>, data: &Path) -> Result<Inventory> {
     let store = fs::canonicalize(&store).unwrap_or(store);
     let roots: Vec<&Path> = source.into_iter().chain([store.as_path()]).collect();
     let mut inv = Inventory::load_roots(source, &roots)?;
-    inv.installed = Lock::load(data)?.skills.into_iter().map(|l| (l.name.clone(), l)).collect();
+    inv.installed = Lock::installed(data)?;
     Ok(inv)
 }
 
@@ -78,7 +78,7 @@ pub fn precheck(cfg: &Config, arg: &str) -> Result<()> {
     resolve(cfg, arg, false).map(drop)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Outcome {
     Done,
     Failed,
@@ -322,7 +322,7 @@ fn install(
 
 #[cfg(test)]
 mod tests {
-    use super::unclaimed;
+    use super::*;
     use crate::Error;
 
     #[test]
@@ -331,7 +331,7 @@ mod tests {
         let (dir, link) = (tmp.path().join("dir"), tmp.path().join("link"));
         assert!(unclaimed([dir.clone(), link.clone()]).is_ok());
         std::os::unix::fs::symlink(tmp.path().join("gone"), &link).unwrap();
-        std::fs::create_dir(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
         for (paths, taken) in [([link.clone(), dir.clone()], &link), ([tmp.path().join("free"), dir.clone()], &dir)] {
             match unclaimed(paths) {
                 Err(Error::Usage(e)) => assert!(e.contains(&format!("{} already exists", taken.display())), "{e}"),

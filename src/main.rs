@@ -279,10 +279,10 @@ fn run(cmd: Option<Cmd>) -> mazo::Result<ExitCode> {
     let data = config::data_dir()?;
     let inv = store::inventory(cfg.source.as_deref(), &data)?;
     let Some(cmd) = cmd else {
-        return scanned(&cfg, &inv, &data, |input| {
-            tui::run(input, &data).map_err(|e| e.to_string())?;
-            Ok(ExitCode::SUCCESS)
-        });
+        let r = scan::scan(&cfg, &inv, &data, false)?;
+        r.warn();
+        tui::run(tui::Data::load(cfg, inv, r.events, &data)?).map_err(|e| e.to_string())?;
+        return Ok(ExitCode::SUCCESS);
     };
     let no_color = std::env::var_os("NO_COLOR");
     let tty = render::colour(std::io::stdout().is_terminal(), no_color.as_deref());
@@ -647,7 +647,7 @@ fn cmd_retire(cfg: &Config, data: &std::path::Path, name: &str, force: bool, pro
 mod tests {
     use clap::CommandFactory;
 
-    use super::Cli;
+    use super::*;
 
     fn undocumented(cmd: &clap::Command, path: &str, out: &mut Vec<String>) {
         for arg in cmd.get_arguments() {

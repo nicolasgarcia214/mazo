@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
@@ -9,7 +10,7 @@ use crate::inventory::{self, Inventory, Scope};
 use crate::ledger::Agent;
 use crate::{links, policy, store, yaml};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub enum Invocation {
     On,
@@ -47,7 +48,7 @@ impl Invocation {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Serialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Ctx {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude: Option<Invocation>,
@@ -202,7 +203,7 @@ impl Contexts {
 }
 
 fn disables_model_invocation(dir: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else { return false };
+    let Ok(text) = fs::read_to_string(dir.join("SKILL.md")) else { return false };
     yaml::frontmatter(&text).is_ok_and(|m| yaml::get(&m, "disable-model-invocation").is_some_and(yaml::is_true))
 }
 
@@ -210,15 +211,15 @@ fn disables_model_invocation(dir: &Path) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{Contexts, Ctx, Invocation, Tokens, approx};
+    use super::*;
     use crate::config::{Config, Home};
     use crate::inventory::{Inventory, Scope};
     use crate::ledger::Agent;
     use crate::store::Project;
 
     fn write(path: &Path, text: &str) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
     }
 
     fn skill(dir: &Path, extra: &str) {

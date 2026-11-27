@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,34 +10,34 @@ use crate::audit::VetVerdict;
 use crate::render::PathExt;
 use crate::{durable, policy, yaml};
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Lock {
     #[serde(default, rename = "skill")]
     pub skills: Vec<Locked>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Locked {
     #[serde(deserialize_with = "skill_name")]
     pub name: String,
     pub origin: String,
     pub subpath: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     pub content_hash: String,
     pub trusted: bool,
     pub installed_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub vetted_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#for: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub r#try: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub verdict: Option<VetVerdict>,
 }
 
@@ -73,6 +74,10 @@ fn parse(text: &str) -> std::result::Result<Lock, String> {
 }
 
 impl Lock {
+    pub(super) fn installed(data: &Path) -> Result<BTreeMap<String, Locked>> {
+        Ok(Lock::load(data)?.skills.into_iter().map(|l| (l.name.clone(), l)).collect())
+    }
+
     pub fn load(data: &Path) -> Result<Lock> {
         let path = data.join("mazo.lock");
         match fs::read_to_string(&path) {
@@ -224,7 +229,7 @@ pub fn content_hash(dir: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Scratch, checked, content_hash, parse, renamed, stage};
+    use super::*;
 
     #[test]
     fn every_string_a_lockfile_holds_is_inert() {
@@ -264,16 +269,16 @@ mod tests {
     fn stage_refuses_an_entry_swapped_for_a_symlink_after_the_listing() {
         let tmp = tempfile::tempdir().unwrap();
         let (src, outside) = (tmp.path().join("src"), tmp.path().join("outside"));
-        std::fs::create_dir_all(src.join("refs")).unwrap();
-        std::fs::create_dir(&outside).unwrap();
-        std::fs::write(src.join("SKILL.md"), "a").unwrap();
-        std::fs::write(outside.join("x.md"), "secret").unwrap();
+        fs::create_dir_all(src.join("refs")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(src.join("SKILL.md"), "a").unwrap();
+        fs::write(outside.join("x.md"), "secret").unwrap();
         for (files, link, target) in [
             (vec!["SKILL.md", "x.md"], "x.md", outside.join("x.md")),
             (vec!["SKILL.md", "refs", "refs/x.md"], "refs", outside.clone()),
         ] {
-            let _ = std::fs::remove_file(src.join(link));
-            let _ = std::fs::remove_dir(src.join(link));
+            let _ = fs::remove_file(src.join(link));
+            let _ = fs::remove_dir(src.join(link));
             std::os::unix::fs::symlink(&target, src.join(link)).unwrap();
             let files: Vec<_> = files.into_iter().map(std::path::PathBuf::from).collect();
             let staged = Scratch::new(tmp.path(), "staged");
@@ -289,13 +294,13 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("src");
-        std::fs::create_dir(&src).unwrap();
-        std::fs::write(src.join("SKILL.md"), "a").unwrap();
-        std::fs::write(src.join("run.sh"), "b").unwrap();
-        std::fs::set_permissions(src.join("run.sh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("SKILL.md"), "a").unwrap();
+        fs::write(src.join("run.sh"), "b").unwrap();
+        fs::set_permissions(src.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
         let files = ["SKILL.md", "run.sh"].map(std::path::PathBuf::from);
         let (staged, _) = stage(&src, &files, "a", Scratch::new(tmp.path(), "staged")).unwrap();
-        let mode = std::fs::metadata(staged.0.join("run.sh")).unwrap().permissions().mode();
+        let mode = fs::metadata(staged.0.join("run.sh")).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755);
     }
 
@@ -310,18 +315,18 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        std::fs::create_dir(dir.join("refs")).unwrap();
-        std::fs::write(dir.join("SKILL.md"), "a").unwrap();
-        std::fs::write(dir.join("refs/x.md"), "b").unwrap();
+        fs::create_dir(dir.join("refs")).unwrap();
+        fs::write(dir.join("SKILL.md"), "a").unwrap();
+        fs::write(dir.join("refs/x.md"), "b").unwrap();
         let first = content_hash(dir).unwrap();
         let mut sha = sha1_smol::Sha1::new();
         sha.update(b"SKILL.md\x001\x00a");
         sha.update(b"refs/x.md\x001\x00b");
         assert_eq!(first, sha.digest().to_string());
-        std::fs::rename(dir.join("refs/x.md"), dir.join("refs/y.md")).unwrap();
+        fs::rename(dir.join("refs/x.md"), dir.join("refs/y.md")).unwrap();
         let renamed = content_hash(dir).unwrap();
         assert_ne!(renamed, first, "a renamed file changes the hash");
-        std::fs::set_permissions(dir.join("refs/y.md"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(dir.join("refs/y.md"), fs::Permissions::from_mode(0o755)).unwrap();
         let mut sha = sha1_smol::Sha1::new();
         sha.update(b"SKILL.md\x001\x00a");
         sha.update(b"refs/y.md\x00x\x001\x00b");

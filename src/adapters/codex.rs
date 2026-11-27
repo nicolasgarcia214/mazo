@@ -15,14 +15,14 @@ impl Adapter for Codex {
     fn parse(&self, roots: &SkillRoots, _path: &Path, header: Option<&[u8]>, chunk: &Chunk) -> Parsed {
         let mut out = Parsed::default();
         let Some(Header { session, guardian }) = header.and_then(parse_header) else {
+            super::values(chunk, &mut out.malformed).for_each(drop);
             return out;
         };
         if guardian {
             out.skipped = true;
             return out;
         }
-        for (line, bytes) in &chunk.lines {
-            let Ok(rec) = serde_json::from_slice::<Value>(bytes) else { continue };
+        for (line, rec) in super::values(chunk, &mut out.malformed) {
             if rec["type"] != "response_item" {
                 continue;
             }
@@ -63,7 +63,7 @@ impl Adapter for Codex {
                     channel: f.channel,
                     path: Some(f.path),
                     cwd: f.cwd,
-                    line: *line,
+                    line,
                     session: session.clone(),
                     name_origin: false,
                 });

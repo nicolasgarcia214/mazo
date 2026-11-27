@@ -3,6 +3,7 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use mazo::adapters::{Adapter, Key, Parent, Parsed, SkillRoots, Transcripts, pi};
@@ -95,7 +96,7 @@ fn placeholders_fail_the_location_check_even_in_a_user_message() {
         user(r#"<skill name="x" location="x/SKILL.md">"#),
         user(r#"see <skill name="x" location="/s/x/SKILL.md">"#),
     ];
-    std::fs::write(&f, format!("{header}\n{}\n", lines.join("\n"))).unwrap();
+    fs::write(&f, format!("{header}\n{}\n", lines.join("\n"))).unwrap();
     assert!(parse(&f).raws.is_empty());
 }
 
@@ -220,7 +221,7 @@ fn bare_skill_block_prompt_is_the_message_before_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s.jsonl");
     let text = [String::from_utf8(header).unwrap(), user("a", "Plan the scrubbed work."), user("b", block)].join("\n");
-    std::fs::write(&path, text).unwrap();
+    fs::write(&path, text).unwrap();
     assert_eq!(
         pi::Pi.prompt_at(&mut Transcripts::default(), &format!("{}:3", path.display())).as_deref(),
         Some("Plan the scrubbed work.")
@@ -250,6 +251,6 @@ fn child_keeps_its_ids_and_root_after_the_middle_session_is_deleted() {
     let before = chain.child(&chain.scan(false));
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].1, chain.ids[0]);
-    std::fs::remove_file(&chain.files[1]).unwrap();
+    fs::remove_file(&chain.files[1]).unwrap();
     assert_eq!(chain.child(&chain.scan(true)), before);
 }
