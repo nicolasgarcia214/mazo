@@ -70,7 +70,7 @@ prints how to add one.
 
 Optional. It names a directory of skills you write yourself, and
 `mazo init --source <skills dir>` sets it. A relative `source` resolves against
-the config's directory.
+the config's directory, and a leading `~` is your home directory.
 
 Without it your own skill set is empty, and `usage`, `unused`, `status`,
 `sync`, `scan`, `add` and retiring a store skill work on store skills alone.

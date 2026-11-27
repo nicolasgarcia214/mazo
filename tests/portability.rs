@@ -401,6 +401,19 @@ fn init_with_no_agent_home_says_so_and_status_and_sync_then_exit_1() {
 }
 
 #[test]
+fn a_tilde_source_resolves_against_home_like_the_other_paths() {
+    let f = Fresh::new();
+    let source = f.plain_skill();
+    fs::create_dir(f.home.join(".codex")).unwrap();
+    common::write(
+        &f.home.join(".config/mazo/config.toml"),
+        "source = \"~/skills\"\n[[home]]\nname = \"codex\"\nagent = \"codex\"\npath = \"~/.codex\"\n",
+    );
+    assert_ok(&f.mazo(&[], &["sync"]));
+    assert_eq!(fs::read_link(f.home.join(".codex/skills/plain")).unwrap(), source.join("plain"));
+}
+
+#[test]
 fn relative_home_paths_resolve_against_the_config_file_not_the_cwd() {
     let f = Fresh::new();
     let source = f.plain_skill();

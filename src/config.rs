@@ -281,9 +281,12 @@ pub fn load(path: &Path) -> Result<Option<Config>> {
     let raw: RawConfig = toml::from_str(&text).map_err(|e| usage(e.to_string()))?;
     raw.check().map_err(usage)?;
     let base = path.parent().unwrap_or(Path::new("/"));
-    let source = raw.source.as_ref().map(|s| source_dir(&base.join(s)).map_err(|e| usage(format!("source {e}"))));
-    let source = source.transpose()?;
     let home = home_dir()?;
+    let source = raw
+        .source
+        .as_ref()
+        .map(|s| source_dir(&base.join(expand_tilde(s, &home))).map_err(|e| usage(format!("source {e}"))));
+    let source = source.transpose()?;
     let mut homes: Vec<Home> = Vec::new();
     for h in raw.homes {
         let path = match (h.agent, std::env::var("PI_CODING_AGENT_DIR").ok().filter(|v| !v.is_empty())) {
