@@ -29,7 +29,7 @@ fn lock_file(dir: &Path, name: &str) -> Result<(File, PathBuf)> {
 
 pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {
     let err = crate::at(path);
-    let mut f = OpenOptions::new().create(true).read(true).append(true).open(path).map_err(err)?;
+    let mut f = OpenOptions::new().create(true).read(true).append(true).mode(0o600).open(path).map_err(err)?;
     if f.metadata().map_err(err)?.len() > 0 {
         let mut last = [0u8];
         f.seek(SeekFrom::End(-1)).map_err(err)?;

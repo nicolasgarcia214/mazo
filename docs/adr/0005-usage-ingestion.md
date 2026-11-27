@@ -88,6 +88,7 @@ Usage ingestion turns Claude, Codex and Pi transcripts into ledger events: adapt
 - `append_lines` starts the new lines on their own line when the log ends in a torn line, so a crash mid-append costs only that line and later runs read past it.
 - `jsonl` splits lines as bytes, so a torn write that cuts a UTF-8 character costs that line, not the file.
 - `write_atomic` writes a fresh `<path>.new`, fsyncs it, renames it over the path and fsyncs the parent. A crash leaves the old or the new file, and a symlink at either path is replaced, never followed.
+- The ledger, its derived state and `audits.jsonl` are created with mode 0600, like the HTML report, because they copy cwds and session ids out of owner-only transcripts. `mazo.lock` keeps 0666 because projects commit it. A file written before this rule tightens on its next atomic rewrite; an append-only log keeps its mode.
 - Cursors, roots and coverage are derived state. `read_derived` returns `None` for a missing file, and `None` with a warning for an unparseable one, and the scan rebuilds it: roots from every session on disk, coverage from the transcripts still on disk (so a home whose oldest transcripts are gone reports a later start).
 - `Coverage::first_at` treats an unparseable first timestamp as absent, so the next scan fills it again.
 

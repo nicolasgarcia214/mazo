@@ -192,6 +192,19 @@ fn second_scan_and_cursorless_or_corrupt_cursor_rescan_append_nothing() {
 }
 
 #[test]
+fn ledger_and_state_files_are_owner_only() {
+    let env = Env::new(&TRANSCRIPTS, &[]);
+    let mode = |name: &str| fs::metadata(env.data.join(name)).unwrap().permissions().mode() & 0o777;
+    env.scan();
+    for name in ["events.jsonl", "cursors.json", "coverage.json", "roots.json"] {
+        assert_eq!(mode(name), 0o600, "{name}");
+    }
+    fs::set_permissions(env.data.join("events.jsonl"), fs::Permissions::from_mode(0o644)).unwrap();
+    env.reparse();
+    assert_eq!(mode("events.jsonl"), 0o600, "a rewrite replaces the file");
+}
+
+#[test]
 fn appended_record_is_one_event_read_from_the_stored_offset() {
     let env = Env::new(&[("slash.jsonl", "slash.jsonl")], &[]);
     env.append("slash.jsonl", format!("{}\n", "x".repeat(4 << 10)).as_bytes());

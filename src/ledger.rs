@@ -187,7 +187,7 @@ impl Ledger {
     }
 
     pub fn replace(&self, lines: &[Event]) -> Result<()> {
-        write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes(), 0o666)
+        write_atomic(&self.dir.join("events.jsonl"), to_lines(lines).as_bytes(), 0o600)
     }
 }
 
@@ -218,7 +218,7 @@ fn to_lines<'a>(events: impl IntoIterator<Item = &'a Event>) -> String {
 }
 
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    write_atomic(path, &serde_json::to_vec(value).expect("state serialises"), 0o666)
+    write_atomic(path, &serde_json::to_vec(value).expect("state serialises"), 0o600)
 }
 
 #[cfg(test)]
