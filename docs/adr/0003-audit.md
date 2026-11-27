@@ -22,7 +22,7 @@ tests, so the code no longer has to carry them.
 - `judge` is the call-and-validate step both stages and `vet` share. Each call is capped at the limit minus what was spent, and starts only with a cap of at least `CENT` and an uncancelled run.
 - `retry` appends the rejection reason to the input after an invalid answer, and resends the input unchanged after a call that gave no answer. An answer is retried once, then dropped.
 - `NoAnswer::Retry` covers answers that are over the cap, past `JUDGE_TIMEOUT` or unparseable. `NoAnswer::Stop` covers login, key and network failures and signals mazo did not send, and stops the run. `exited` reads a subprocess judge that gave no answer as a stop after a nonzero exit and as a retry after a zero one. `stop` cuts the judge's stderr to `STDERR_LINES` lines of `STDERR_CHARS` characters.
-- Setting `Pane::cancel` kills the judge call in flight and fails the run with `CANCELLED`.
+- Setting `Pane::cancel` kills the judge call in flight and fails the run with `Error::Cancelled`.
 - `Caller` carries only what a judge call needs (data directory, `[judge]` config, backend, pane), so audit and vet share one call path.
 
 ### Login check (`Caller::login`, `Backend::login`)

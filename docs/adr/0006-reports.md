@@ -80,8 +80,8 @@ the way they are.
 - `html::write` writes the page atomically with mode 0600, replacing any previous file, because the page shows cwds and prompt excerpts and is the one place prompt text is written.
 
 ### render
-- `status_colour` paints `unused`, `ERROR:` and the audit security mark `!` red, and `held`, `new`, `warning:`, `named by` notes and a grade's `stale` mark yellow. `NO_COLOR` turns all colour off.
-- `unprefixed` strips `ERROR:` or `warning:` for JSON output, whose key already says which.
+- `status_colour` paints `unused` and the audit security mark `!` red, and `held`, `new`, `named by` notes and a grade's `stale` mark yellow. `NO_COLOR` turns all colour off.
+- `Diag` carries an error or warning's `Level` apart from its text. `Diag::paint` prefixes `ERROR:` in red or `warning:` in yellow for the terminal, and `status --json` emits the bare text, since its key (`policy`, `conflicts` or `warnings`) already says which.
 - `table` measures cells with `width`, which counts display columns minus `ESC [ … m` colour sequences, so painted and wide cells stay aligned. It trims trailing spaces from every line.
 - `inert` replaces C0, DEL and C1 controls (except newline and tab), bidi controls, the zero-width space, the BOM and the line and paragraph separators with U+FFFD, so skill or judge text cannot drive or reorder the terminal. Zero-width joiners stay because scripts and emoji need them. A skill description's controls print as U+FFFD in the card and in `--json`.
 - `inert_line` also replaces newline and tab, so a name cannot forge a line of output.
