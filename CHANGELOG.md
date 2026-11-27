@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.2.0](https://github.com/nicolasgarcia214/mazo/compare/v0.1.0...v0.2.0) (2026-11-27)
+
+
+### Features
+
+* **evals:** ✨ add evals trace to print a skill's last run in a session ([c7f8266](https://github.com/nicolasgarcia214/mazo/commit/c7f826608e571927a516cddd50e75d2325b7f6b9))
+* **skills:** ✨ fix the grade weights for skills and discount stale retros ([2cbf417](https://github.com/nicolasgarcia214/mazo/commit/2cbf417391df681248bc34fd3a56c61da36669d0))
+* **skills:** ✨ gate retro recommendations on a cost the trace shows ([585e15c](https://github.com/nicolasgarcia214/mazo/commit/585e15c8de61427f503f0e9eaac44d7b476539ae))
+* **skills:** ✨ give retro a focus argument and review in-context reports ([e06ef8e](https://github.com/nicolasgarcia214/mazo/commit/e06ef8eb53b471260c37357b9ea0506625670463))
+* **skills:** ✨ hand the retro to a fresh evaluator that reads the trace ([d50bd70](https://github.com/nicolasgarcia214/mazo/commit/d50bd7061a29d628a3b013ae5619b01a494b4d51))
+* **skills:** ✨ let grade average several graders and take a skill directory ([e3bde0b](https://github.com/nicolasgarcia214/mazo/commit/e3bde0bef1982501103d25173a55c779f1768041))
+* **skills:** ✨ make retro recommendations name the step they rewrite ([f8c5906](https://github.com/nicolasgarcia214/mazo/commit/f8c5906ca3bb12a529917a526dd33f68df33f04d))
+
+
+### Bug Fixes
+
+* 🔒️ harden the vet judge and give each Codex call its own home ([#209](https://github.com/nicolasgarcia214/mazo/issues/209)) ([ea46321](https://github.com/nicolasgarcia214/mazo/commit/ea463211bafd0b612bd459b934f31f0973f9f5e5))
+* **adapters:** 🐛 guard and memoise transcript reads ([#215](https://github.com/nicolasgarcia214/mazo/issues/215)) ([338d92f](https://github.com/nicolasgarcia214/mazo/commit/338d92fe966dd0be765cfba0a13c539e2dd1a902))
+* **audit:** 🐛 refuse a second concurrent audit of one skill ([82c392e](https://github.com/nicolasgarcia214/mazo/commit/82c392eaf1b49086cca4ead5dd6a10cfddf0838c))
+* **config:** 🐛 expand a leading ~ in source ([891077a](https://github.com/nicolasgarcia214/mazo/commit/891077ae0767762559d240458a6545c0ff96f46a))
+* **ledger:** 🔒 create ledger, state and audit files owner-only ([f8ad0ce](https://github.com/nicolasgarcia214/mazo/commit/f8ad0ced301e688f4fe0b3800d77bd2537d7a83a))
+* **scan:** 🐛 label the malformed-line count by what it counts ([2662b9f](https://github.com/nicolasgarcia214/mazo/commit/2662b9fcc55d630f0982737a72a431f79ac4f24e))
+* **tui:** 🐛 derive STOP_WAIT from KILL_GRACE ([#219](https://github.com/nicolasgarcia214/mazo/issues/219)) ([f01ea37](https://github.com/nicolasgarcia214/mazo/commit/f01ea378803272754c29452ce3256283eb842220))
+
+
+### Performance
+
+* ⚡ index report queries per skill and parse each line once ([2231adc](https://github.com/nicolasgarcia214/mazo/commit/2231adca84834d83c14e8cd885bb7c0472fe4094))
+
+
+### Refactoring
+
+* 🔥 delete code comments and ban them with a ratcheting lint ([#211](https://github.com/nicolasgarcia214/mazo/issues/211)) ([dea6fb6](https://github.com/nicolasgarcia214/mazo/commit/dea6fb6f1dcbe5bb89535688468f3792ce2aa714))
+* **agents:** ♻️ derive per-agent lists from the Agent enum ([#217](https://github.com/nicolasgarcia214/mazo/issues/217)) ([5c0e006](https://github.com/nicolasgarcia214/mazo/commit/5c0e0063edf596ed0c87dfa344e90933dbe0c8e1)), closes [#191](https://github.com/nicolasgarcia214/mazo/issues/191)
+* **durable:** ♻️ move data-dir file helpers to src/durable.rs and rename the lock to data.lock ([#213](https://github.com/nicolasgarcia214/mazo/issues/213)) ([9924a04](https://github.com/nicolasgarcia214/mazo/commit/9924a0452a08bf1f219428918227ed6e70349e37))
+* **errors:** ♻️ represent cancellation as Error::Cancelled ([#218](https://github.com/nicolasgarcia214/mazo/issues/218)) ([9cc7448](https://github.com/nicolasgarcia214/mazo/commit/9cc74482730758bd0a70319975ed5ca73aa60649)), closes [#187](https://github.com/nicolasgarcia214/mazo/issues/187)
+* **render:** ♻️ carry error and warning severity as a Diag type ([#216](https://github.com/nicolasgarcia214/mazo/issues/216)) ([f3eccc5](https://github.com/nicolasgarcia214/mazo/commit/f3eccc58d71c082e9e4d682cd0907feb7f846983)), closes [#186](https://github.com/nicolasgarcia214/mazo/issues/186)
+
+
+### Documentation
+
+* **adr:** 📝 name current symbols in the audit and render records ([16959c2](https://github.com/nicolasgarcia214/mazo/commit/16959c2ef890f3f6fd8dbd421c587373116ebbe0))
+* **explainer:** 🍱 add an animated explainer drawn on Canvas 2D ([b56817c](https://github.com/nicolasgarcia214/mazo/commit/b56817cb79cd57ae21c548e0f0e505abdad54f58))
+
 ## 0.1.0 (2026-11-01)
 
 
