@@ -486,7 +486,7 @@ fn cmd_scan(
             let counts: Vec<String> = counts.iter().map(|(c, n)| format!("{}={n}", ledger::name(c))).collect();
             outln!("{name}: {}; ledger {}", render::count(h.files, "file"), counts.join(" "));
             outln!("  unparsed skill commands in this scan: {}", h.unparsed);
-            outln!("  lines that are not JSON in this scan: {}", h.malformed);
+            outln!("  unreadable lines that may hold a skill load in this scan: {}", h.malformed);
             outln!("  skill loads with a bad timestamp in this scan: {}", h.bad_timestamps);
             for s in &h.unparsed_samples {
                 outln!("    {}", render::inert_line(s));

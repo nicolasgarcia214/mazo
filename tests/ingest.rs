@@ -252,7 +252,8 @@ fn a_line_that_is_not_json_is_counted_once_and_its_neighbours_still_count() {
     assert_eq!(env.scan().homes["claude"].malformed, 0, "a line is read once");
     let out = env.cli(&env.tmp.path().join("xdg")).arg("scan").output().unwrap();
     assert!(out.status.success());
-    let warning = "warning: claude: transcript lines that are not JSON: 1; a load in one is not counted";
+    let warning =
+        "warning: claude: unreadable transcript lines that may hold a skill load: 1; a load in one is not counted";
     assert!(stderr(&out).contains(warning), "{}", stderr(&out));
 }
 

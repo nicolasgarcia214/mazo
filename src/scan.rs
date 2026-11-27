@@ -40,7 +40,7 @@ impl ScanReport {
             out.extend(h.io_errors.iter().map(|e| Diag::warning(format!("{home}: {e}"))));
             if h.malformed > 0 {
                 out.push(Diag::warning(format!(
-                    "{home}: transcript lines that are not JSON: {}; a load in one is not counted",
+                    "{home}: unreadable transcript lines that may hold a skill load: {}; a load in one is not counted",
                     h.malformed
                 )));
             }
