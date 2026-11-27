@@ -4,7 +4,7 @@ use super::{Audit, Backend, DEFAULT_BUDGET, Pane, audited, backend, dry_run, run
 use crate::config::{Config, Judge};
 use crate::inventory::Inventory;
 use crate::report::{self, Input};
-use crate::{Error, Result, evals, ledger};
+use crate::{Error, Result, durable, evals, ledger};
 
 pub const LIMIT: usize = 20;
 
@@ -57,6 +57,9 @@ pub fn command(
     tty: bool,
     pane: Option<&Pane>,
 ) -> Result<(String, bool)> {
+    let Some(_running) = durable::try_lock(data, &format!("audit-{}.lock", p.skill))? else {
+        return Err(format!("an audit of {} is already running", p.skill).into());
+    };
     let candidates = select(input.events, p.skill, &audited(data, p.skill)?, args.limit);
     let a = Audit {
         skill: p.skill,

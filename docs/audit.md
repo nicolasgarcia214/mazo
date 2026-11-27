@@ -103,12 +103,14 @@ also prints:
 - for Pi and http, the model;
 - an input-token estimate and, once records exist, a dollar estimate.
 
-It starts no judge.
+It starts no judge. Like a run, it exits 1 while another audit of the same
+skill is running, because that run's sessions would list as still to judge.
 
 ## Audit exit codes
 
 A run exits 1 when any of these happens:
 
+- another audit of the same skill is running, from the CLI or the TUI;
 - it drops every session it judged;
 - it drops or skips the skill report;
 - it meets a judge that fails without an answer, from a login, key or network

@@ -6,11 +6,25 @@ use std::path::{Path, PathBuf};
 use crate::Result;
 
 pub fn lock(dir: &Path) -> Result<File> {
-    fs::create_dir_all(dir).map_err(crate::at(dir))?;
-    let path = dir.join("data.lock");
-    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(&path).map_err(crate::at(&path))?;
+    let (lock, path) = lock_file(dir, "data.lock")?;
     lock.lock().map_err(crate::at(&path))?;
     Ok(lock)
+}
+
+pub fn try_lock(dir: &Path, name: &str) -> Result<Option<File>> {
+    let (lock, path) = lock_file(dir, name)?;
+    match lock.try_lock() {
+        Ok(()) => Ok(Some(lock)),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(e)) => Err(crate::at(&path)(e).into()),
+    }
+}
+
+fn lock_file(dir: &Path, name: &str) -> Result<(File, PathBuf)> {
+    fs::create_dir_all(dir).map_err(crate::at(dir))?;
+    let path = dir.join(name);
+    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(&path).map_err(crate::at(&path))?;
+    Ok((lock, path))
 }
 
 pub(crate) fn append_lines(path: &Path, mut out: String) -> Result<()> {

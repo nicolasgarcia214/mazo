@@ -81,6 +81,7 @@ tests, so the code no longer has to carry them.
 
 ### Records (`append`, `JudgeRecord`, `latest`)
 - `append` writes audit records under the data-dir lock, `data.lock`, taken by `durable::lock`.
+- `command` holds `audit-<skill>.lock` through `durable::try_lock` for the whole run and refuses when another run holds it, so two runs of one skill cannot judge, bill and record the same sessions. A dry run takes it too, because the sessions a live run is judging would show as still to judge. It is a separate file from `data.lock`, so a running audit never blocks a scan.
 - `audits.jsonl` is append-only. `latest` keeps the last skill record per skill in file order, and older skill records stay in the file.
 - `JudgeRecord::billing` is optional with a serde default because records written before mazo recorded billing lack it. `None` means unknown.
 

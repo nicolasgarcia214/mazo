@@ -1934,3 +1934,26 @@ fn a_store_skill_is_judged_from_the_store() {
     assert_eq!(calls.len(), 4, "three sessions, then the skill report");
     assert!(calls.iter().all(|c| c.stdin.contains("From the store.")), "every stage reads the store's SKILL.md");
 }
+
+#[test]
+fn an_audit_of_a_skill_already_being_audited_refuses_before_any_judge_call() {
+    let fx = Fixture::new(CLAUDE, three_agents);
+    let held = fs::File::create(fx.data().join("audit-unslop.lock")).unwrap();
+    held.lock().unwrap();
+    let probe = format!(
+        "perl -MFcntl=:flock -e 'open my $f, \">>\", shift; exit !flock($f, LOCK_EX | LOCK_NB)' {} || touch {}\n",
+        fx.data().join("audit-unslop.lock").display(),
+        fx.root.join("held").display()
+    );
+    fx.script("1", &probe);
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(stderr(&out).contains("an audit of unslop is already running"), "{}", stderr(&out));
+    assert!(fx.calls().is_empty());
+    assert!(fx.records().is_empty());
+    drop(held);
+    let out = fx.mazo(&["audit", "unslop"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(!fx.records().is_empty());
+    assert!(fx.root.join("held").exists(), "the lock was released before the first judge call");
+}
